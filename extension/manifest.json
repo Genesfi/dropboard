@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "DropBoard Web Capture",
+  "version": "1.0.0",
+  "description": "Send Pinterest pins, ArtStation art, and web images directly to your DropBoard desktop reference board.",
+  "permissions": [
+    "contextMenus",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:28888/*",
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.pinterest.com/*",
+        "https://*.pinterest.co.uk/*",
+        "https://*.pinterest.id/*",
+        "https://*.artstation.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "DropBoard Web Capture",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  }
+}

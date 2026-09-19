@@ -1,0 +1,43 @@
+/* DropBoard Injected Styles on Pinterest */
+.dropboard-pin-btn {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(15, 17, 23, 0.88);
+  color: #60a5fa;
+  border: 1px solid rgba(96, 165, 250, 0.4);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-test-id="pin"]:hover .dropboard-pin-btn,
+.pin:hover .dropboard-pin-btn {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.dropboard-pin-btn:hover {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #3b82f6;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.45);
+}
+
+.dropboard-pin-btn.success {
+  background: #10b981 !important;
+  color: #ffffff !important;
+  border-color: #10b981 !important;
+}

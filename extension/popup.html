@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      width: 260px;
+      font-family: system-ui, -apple-system, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background: #0f1117;
+      color: #f3f4f6;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .title {
+      font-weight: 700;
+      font-size: 14px;
+      background: linear-gradient(135deg, #ffffff, #93c5fd);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .status-card {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #1a1e28;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 12px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #6b7280;
+    }
+    .status-dot.connected {
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+    }
+    .btn {
+      width: 100%;
+      background: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 8px;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .btn:hover {
+      background: #1d4ed8;
+    }
+    .tips {
+      font-size: 11px;
+      color: #9ca3af;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="title">DropBoard Web Capture</span>
+  </div>
+  <div class="status-card">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text">Checking Desktop App...</span>
+  </div>
+  <button class="btn" id="btn-capture-page">
+    <span>📌 Send Current Tab to Board</span>
+  </button>
+  <div class="tips">
+    <strong>Tips:</strong> Klik kanan foto apa saja di web &rarr; pilih <em>"Add Image to DropBoard"</em>. Di Pinterest, tombol hover <strong>Board</strong> otomatis muncul di setiap Pin!
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
