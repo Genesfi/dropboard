@@ -1,3 +1,0 @@
-F:/Native Win/DropBoard/build/CMakeFiles/DropBoard.dir
-F:/Native Win/DropBoard/build/CMakeFiles/ALL_BUILD.dir
-F:/Native Win/DropBoard/build/CMakeFiles/ZERO_CHECK.dir

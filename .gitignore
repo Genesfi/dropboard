@@ -7,6 +7,11 @@
 *.VC.db
 *.VC.opendb
 
+# Build output directory
+build/
+bin/
+out/
+
 # Intermediate build artifacts (if building outside tracked build dir)
 x64/
 Debug/
