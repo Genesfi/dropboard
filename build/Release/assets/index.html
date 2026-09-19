@@ -149,7 +149,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 5v14m-7-7h14"/>
         </svg>
-        <span>+ File</span>
+        <span>File</span>
       </button>
       <input type="file" id="file-input" multiple accept="image/*" style="display:none;" />
 
@@ -159,7 +159,7 @@
           <line x1="2" y1="12" x2="22" y2="12"/>
           <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
         </svg>
-        <span>+ URL</span>
+        <span>URL</span>
       </button>
 
       <button class="dock-btn" id="btn-add-group" title="Add Section / Scene Group Frame with Notes">
@@ -167,7 +167,7 @@
           <rect x="3" y="3" width="18" height="18" rx="3" stroke-dasharray="3 2"/>
           <path d="M8 8h8v3H8z"/>
         </svg>
-        <span>+ Group</span>
+        <span>Group</span>
       </button>
 
       <div class="dock-dropdown-container" id="node-dropdown-container">
@@ -177,7 +177,7 @@
             <rect x="14" y="14" width="7" height="7" rx="1.5"/>
             <path d="M10 6.5h4a2 2 0 0 1 2 2v5.5"/>
           </svg>
-          <span>+ Node</span>
+          <span>Node</span>
         </button>
         <div class="dock-dropdown-menu" id="node-dropdown-menu">
           <div class="node-menu-item" data-node-type="note">
@@ -453,7 +453,7 @@
       </svg>
       <div class="cm-text">
         <strong>Crop / Mask Reference</strong>
-        <small>Fokus pada detail tertentu</small>
+        <small>Focus on specific area</small>
       </div>
     </button>
     <button class="cm-item cm-yt-item" id="cm-open-yt" style="display: none;">
@@ -520,8 +520,8 @@
         <line x1="8" y1="11" x2="14" y2="11"/>
       </svg>
       <div class="cm-text">
-        <strong>Zoom to Group / Scene</strong>
-        <small>Focus canvas on this scene</small>
+        <strong>Zoom to Group</strong>
+        <small>Focus canvas view on this scene</small>
       </div>
     </button>
     <button class="cm-item" id="cm-grp-tidy">
@@ -530,7 +530,7 @@
       </svg>
       <div class="cm-text">
         <strong>Auto-Tidy References</strong>
-        <small>Arrange cards in neat columns</small>
+        <small>Pack and align items neatly</small>
       </div>
     </button>
     <button class="cm-item" id="cm-grp-rename">
@@ -556,16 +556,16 @@
         <h3>Add Reference from Web / YouTube / Pinterest</h3>
         <button class="modal-close-btn" id="btn-close-modal">✕</button>
       </div>
-      <p class="modal-desc">Paste link YouTube video/shorts, Pin Pinterest, atau link gambar web:<br><span style="color:var(--accent-blue);font-size:11px;font-weight:600;display:inline-block;margin-top:4px;">Tip: Untuk membuka file project (.dropboard), klik tombol Open atau tekan Ctrl + O.</span></p>
+      <p class="modal-desc">Paste link to YouTube video/shorts, Pinterest Pin, or web image URL:<br><span style="color:var(--accent-blue);font-size:11px;font-weight:600;display:inline-block;margin-top:4px;">Tip: To open a project file (.dropboard), click Open in the topbar or press Ctrl + O.</span></p>
       <div class="modal-input-row">
-        <input type="text" id="url-input" placeholder="Contoh: https://youtube.com/watch?v=... atau pinterest.com/pin/..." />
+        <input type="text" id="url-input" placeholder="e.g., https://youtube.com/watch?v=... or https://pin.it/..." />
         <button class="primary-action-btn" id="btn-submit-url">Add</button>
       </div>
       <div class="modal-tip">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#fbbf24" stroke-width="2" style="flex-shrink:0;vertical-align:middle;margin-right:4px;">
           <path d="M9 18h6m-4 4h2a6 6 0 0 0 6-6c0-2.4-1.4-4.5-3.5-5.5a6 6 0 1 0-7 0C4.4 7.5 3 9.6 3 12a6 6 0 0 0 6 6z"/>
         </svg>
-        <strong>YouTube & Pinterest:</strong> Link YouTube otomatis memuat thumbnail resolusi tinggi dan dapat langsung ditonton dari DropBoard!
+        <strong>YouTube & Pinterest:</strong> URLs automatically fetch high-resolution previews and videos can be played directly inside DropBoard!
       </div>
     </div>
   </div>
@@ -640,7 +640,7 @@
     </button>
   </div>
 
-  <!-- Blender-Style Quick Add Search Popup (Ctrl+Space / Shift+A) -->
+  <!-- Quick Node Palette Search Popup (Ctrl+Space / Shift+A) -->
   <div class="blender-popup" id="blender-search-popup">
     <div class="blender-popup-header">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#38bdf8" stroke-width="2">
@@ -746,30 +746,107 @@
         <!-- Tab: Toolbar & Layout -->
         <div class="settings-tab-pane" id="tab-toolbar">
           <div class="settings-section">
-            <div class="settings-row">
-              <div class="settings-info">
-                <strong>Toolbar Position</strong>
-                <span>Set where the action dock floats on screen. Left Sidebar is ideal for vertical / portrait screens!</span>
-              </div>
-              <select id="settings-select-dock-pos" class="settings-select">
-                <option value="top">Top Bar (Horizontal)</option>
-                <option value="left">Left Sidebar (Vertical - Best for Vertical Monitors)</option>
-                <option value="bottom">Bottom Bar (Horizontal)</option>
-              </select>
+            <div class="settings-info" style="margin-bottom: 12px;">
+              <strong>Toolbar Position</strong>
+              <span>Choose where the floating action dock appears on screen.</span>
             </div>
-            <div class="settings-row">
-              <div class="settings-info">
-                <strong>Button Labels Mode</strong>
-                <span>Compact icon-only mode saves screen width and avoids truncation on small windows</span>
+
+            <div class="visual-select-grid" id="grid-dock-pos">
+              <div class="visual-select-card active" data-value="top">
+                <div class="v-preview-box">
+                  <div class="v-screen-mock">
+                    <div class="v-dock-indicator v-pos-top"></div>
+                  </div>
+                </div>
+                <div class="v-card-text">
+                  <strong>Top Bar</strong>
+                  <small>Default Horizontal</small>
+                </div>
               </div>
-              <select id="settings-select-dock-style" class="settings-select">
-                <option value="auto">Auto-Compact (Icons only when narrow)</option>
-                <option value="icon">Icon-Only (Ultra-clean pureref style)</option>
-                <option value="full">Full (Always show text labels)</option>
-              </select>
+
+              <div class="visual-select-card" data-value="left">
+                <div class="v-preview-box">
+                  <div class="v-screen-mock">
+                    <div class="v-dock-indicator v-pos-left"></div>
+                  </div>
+                </div>
+                <div class="v-card-text">
+                  <strong>Left Sidebar</strong>
+                  <small>Vertical Monitors</small>
+                </div>
+              </div>
+
+              <div class="visual-select-card" data-value="bottom">
+                <div class="v-preview-box">
+                  <div class="v-screen-mock">
+                    <div class="v-dock-indicator v-pos-bottom"></div>
+                  </div>
+                </div>
+                <div class="v-card-text">
+                  <strong>Bottom Bar</strong>
+                  <small>Dock Style</small>
+                </div>
+              </div>
             </div>
+
+            <!-- Hidden input for state sync -->
+            <input type="hidden" id="settings-select-dock-pos" value="top" />
+
+            <div class="settings-info" style="margin-top: 18px; margin-bottom: 12px;">
+              <strong>Button Labels Mode</strong>
+              <span>Control whether tool buttons display text labels or sleek compact icons.</span>
+            </div>
+
+            <div class="visual-select-grid" id="grid-dock-style">
+              <div class="visual-select-card active" data-value="auto">
+                <div class="v-preview-box">
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#38bdf8" stroke-width="2">
+                    <rect x="2" y="6" width="20" height="12" rx="3"/>
+                    <line x1="6" y1="12" x2="8" y2="12"/>
+                    <line x1="11" y1="12" x2="18" y2="12"/>
+                  </svg>
+                </div>
+                <div class="v-card-text">
+                  <strong>Auto-Compact</strong>
+                  <small>Icons on narrow screens</small>
+                </div>
+              </div>
+
+              <div class="visual-select-card" data-value="icon">
+                <div class="v-preview-box">
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#a855f7" stroke-width="2">
+                    <rect x="3" y="4" width="7" height="7" rx="1.5"/>
+                    <rect x="14" y="4" width="7" height="7" rx="1.5"/>
+                    <rect x="3" y="13" width="7" height="7" rx="1.5"/>
+                    <rect x="14" y="13" width="7" height="7" rx="1.5"/>
+                  </svg>
+                </div>
+                <div class="v-card-text">
+                  <strong>Pure Icons</strong>
+                  <small>Clean minimalist mode</small>
+                </div>
+              </div>
+
+              <div class="visual-select-card" data-value="full">
+                <div class="v-preview-box">
+                  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#10b981" stroke-width="2">
+                    <rect x="2" y="4" width="20" height="16" rx="3"/>
+                    <line x1="6" y1="9" x2="18" y2="9"/>
+                    <line x1="6" y1="15" x2="14" y2="15"/>
+                  </svg>
+                </div>
+                <div class="v-card-text">
+                  <strong>Always Full</strong>
+                  <small>Always show labels</small>
+                </div>
+              </div>
+            </div>
+
+            <!-- Hidden input for state sync -->
+            <input type="hidden" id="settings-select-dock-style" value="auto" />
           </div>
         </div>
+
         <!-- Tab 2: Keyboard Shortcuts -->
         <div class="settings-tab-pane" id="tab-shortcuts">
           <div class="shortcuts-grid">
@@ -779,7 +856,7 @@
             <div class="shortcut-item"><span class="shortcut-desc">Open Project</span><span class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>O</kbd></span></div>
             <div class="shortcut-item"><span class="shortcut-desc">Select All</span><span class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>A</kbd></span></div>
             <div class="shortcut-item"><span class="shortcut-desc">Delete Selected</span><span class="shortcut-keys"><kbd>Delete</kbd> / <kbd>Backspace</kbd></span></div>
-            <div class="shortcut-item"><span class="shortcut-desc">Blender Quick Add Node</span><span class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>Space</kbd> or <kbd>Shift</kbd> + <kbd>A</kbd></span></div>
+            <div class="shortcut-item"><span class="shortcut-desc">Quick Node Palette</span><span class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>Space</kbd> or <kbd>Shift</kbd> + <kbd>A</kbd></span></div>
             <div class="shortcut-item"><span class="shortcut-desc">Undo / Redo</span><span class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Ctrl</kbd> + <kbd>Y</kbd></span></div>
             <div class="shortcut-item"><span class="shortcut-desc">Pan Canvas</span><span class="shortcut-keys"><kbd>Space</kbd> + Drag or Middle-Click</span></div>
             <div class="shortcut-item"><span class="shortcut-desc">Zoom View</span><span class="shortcut-keys">Scroll Wheel</span></div>
@@ -787,6 +864,7 @@
             <div class="shortcut-item"><span class="shortcut-desc">Clear Selection</span><span class="shortcut-keys"><kbd>Esc</kbd></span></div>
           </div>
         </div>
+
         <!-- Tab 3: Storage & Cache -->
         <div class="settings-tab-pane" id="tab-storage">
           <div class="settings-section">
@@ -807,6 +885,18 @@
                 <span class="stat-num" id="stat-nodes-count">0</span>
                 <span class="stat-label">Production Nodes</span>
               </div>
+            </div>
+            <div class="settings-row" style="margin-top: 14px;">
+              <div class="settings-info">
+                <strong>Open Image Cache Folder in Explorer</strong>
+                <span>Open the native disk cache folder containing high-resolution offline images.</span>
+              </div>
+              <button class="modal-btn btn-outline btn-sm" id="btn-open-cache-folder">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:5px;vertical-align:middle;">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+                Open Cache Folder
+              </button>
             </div>
             <div class="settings-row" style="margin-top: 14px;">
               <div class="settings-info">

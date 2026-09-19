@@ -38,16 +38,18 @@ const NativeBridge = {
   setAlwaysOnTop(enabled) { this.post('set_always_on_top', { value: enabled }); },
   setOpacity(val) { this.post('set_opacity', { value: val }); },
   downloadImage(url, id) { this.post('download_image', { url, id }); },
-  copyFileToClipboard(filePath) { this.post('copy_file_to_clipboard', { filePath }); },
-  revealInExplorer(filePath) { this.post('reveal_in_explorer', { filePath }); },
-  sendToAE(filePath) { this.post('send_to_ae', { filePath }); },
-  sendToPhotoshop(filePath) { this.post('send_to_photoshop', { filePath }); },
-  sendToCustom(exePath, filePath) { this.post('send_to_custom', { exePath, filePath }); },
-  openDefault(filePath) { this.post('open_default', { filePath }); },
+  copyFileToClipboard(filePath, imageData = '') { this.post('copy_file_to_clipboard', { filePath, imageData }); },
+  revealInExplorer(filePath, imageData = '') { this.post('reveal_in_explorer', { filePath, imageData }); },
+  sendToAE(filePath, imageData = '') { this.post('send_to_ae', { filePath, imageData }); },
+  sendToPhotoshop(filePath, imageData = '') { this.post('send_to_photoshop', { filePath, imageData }); },
+  sendToCustom(exePath, filePath, imageData = '') { this.post('send_to_custom', { exePath, filePath, imageData }); },
+  openDefault(filePath, imageData = '') { this.post('open_default', { filePath, imageData }); },
   saveBoardDirect(data, filePath) { this.post('save_board_direct', { data, filePath }); },
   saveBoardDialog(data, name = '') { this.post('save_board_dialog', { data, name }); },
+  loadBoardDirect(filePath) { this.post('load_board_direct', { filePath }); },
   loadBoardDialog() { this.post('load_board_dialog'); },
   clearImageCache() { this.post('clear_image_cache'); },
+  openCacheFolder() { this.post('open_cache_folder'); },
   getSystemFonts() { this.post('get_system_fonts'); }
 };
 
@@ -321,6 +323,9 @@ class DropBoardManager {
         const card = this.cards.find(c => c.id === msg.id);
         if (card && msg.success) {
           card.localPath = msg.localPath;
+          if (msg.imageData) {
+            card.imageData = msg.imageData;
+          }
           if (msg.resolvedUrl) {
             card.url = msg.resolvedUrl;
           }
@@ -328,6 +333,7 @@ class DropBoardManager {
             card.localWebUrl = msg.localWebUrl;
             const img = card.element ? card.element.querySelector('img') : null;
             if (img) {
+              img.crossOrigin = 'anonymous';
               img.onload = () => {
                 if (img.naturalWidth && img.naturalHeight) {
                   const maxInitialSize = 420;
@@ -345,9 +351,18 @@ class DropBoardManager {
                     card.element.style.width = `${w}px`;
                     card.element.style.height = `${h}px`;
                   }
+                  try {
+                    const cvs = document.createElement('canvas');
+                    cvs.width = w;
+                    cvs.height = h;
+                    const ctx = cvs.getContext('2d');
+                    ctx.drawImage(img, 0, 0);
+                    const isPng = msg.localPath && msg.localPath.toLowerCase().endsWith('.png');
+                    card.imageData = cvs.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.90);
+                  } catch(e) {}
                 }
               };
-              img.src = msg.localWebUrl;
+              img.src = (msg.imageData && msg.imageData.startsWith('data:image/')) ? msg.imageData : msg.localWebUrl;
             }
           }
           if (card.tagEl) card.tagEl.textContent = 'Cached (HD)';
@@ -363,16 +378,31 @@ class DropBoardManager {
       } else if (msg.type === 'board_saved') {
         if (msg.filePath) {
           this.currentFilePath = msg.filePath;
+          try { localStorage.setItem('dropboard_last_file_path', msg.filePath); } catch(e) {}
           const fileName = msg.filePath.replace(/^.*[\\\/]/, '').replace(/\.dropboard$/i, '');
           this.setProjectName(fileName, false);
         }
         Toast.show(msg.direct ? `Saved changes to "${this.projectName}"` : `Project saved: "${this.projectName}"`, 'success');
       } else if (msg.type === 'board_loaded') {
+        if (!msg.success) {
+          console.warn('board_loaded failed:', msg.error);
+          const saved = localStorage.getItem('dropboard_autosave_state');
+          if (saved) {
+            try {
+              const parsed = JSON.parse(saved);
+              this.deserialize(parsed);
+            } catch(e) {}
+          }
+          return;
+        }
         if (msg.filePath) {
           this.currentFilePath = msg.filePath;
+          try { localStorage.setItem('dropboard_last_file_path', msg.filePath); } catch(e) {}
+          const fileName = msg.filePath.replace(/^.*[\\\/]/, '').replace(/\.dropboard$/i, '');
+          this.setProjectName(fileName, false);
         }
         this.deserialize(msg.content, msg.filePath);
-        Toast.show(`Loaded: ${this.projectName}`, 'success');
+        Toast.show(msg.direct ? `Restored: ${this.projectName}` : `Loaded: ${this.projectName}`, 'success');
       } else if (msg.type === 'system_fonts_list' && Array.isArray(msg.fonts)) {
         this.systemFonts = msg.fonts;
       } else if (msg.type === 'cache_cleared') {
@@ -597,6 +627,7 @@ class DropBoardManager {
     const btnAddGroup = document.getElementById('btn-add-group');
     if (btnAddGroup) {
       btnAddGroup.addEventListener('click', () => {
+        this.recordPreState('Create Group');
         const next = this.getNextSceneInfo();
         const center = this.canvas.screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
         const bounds = { x: center.x - 230, y: center.y - 190, w: 460, h: 380 };
@@ -732,16 +763,18 @@ class DropBoardManager {
     });
 
     document.getElementById('btn-quick-ps').addEventListener('click', () => {
-      if (this.selectedCard && this.selectedCard.localPath) {
-        NativeBridge.sendToPhotoshop(this.selectedCard.localPath);
+      const c = this.selectedCard;
+      if (c && (c.localPath || c.imageData)) {
+        NativeBridge.sendToPhotoshop(c.localPath || '', c.imageData || '');
       } else {
         Toast.show('Select a reference card first', 'error');
       }
     });
 
     document.getElementById('btn-quick-copy').addEventListener('click', () => {
-      if (this.selectedCard && this.selectedCard.localPath) {
-        NativeBridge.copyFileToClipboard(this.selectedCard.localPath);
+      const c = this.selectedCard;
+      if (c && (c.localPath || c.imageData)) {
+        NativeBridge.copyFileToClipboard(c.localPath || '', c.imageData || '');
       } else {
         Toast.show('Select a reference card first', 'error');
       }
@@ -997,10 +1030,13 @@ class DropBoardManager {
   handleLocalFile(file, worldX = 0, worldY = 0) {
     if (!file.type.startsWith('image/')) return;
 
+    const nativePath = file.path || '';
     const reader = new FileReader();
     reader.onload = (e) => {
       const dataUrl = e.target.result;
-      this.addReferenceFromUrl(dataUrl, worldX, worldY, file.name || 'Local File');
+      this.addReferenceFromUrl(dataUrl, worldX, worldY, file.name || 'Local File', {
+        localPath: nativePath
+      });
     };
     reader.readAsDataURL(file);
   }
@@ -1061,7 +1097,9 @@ class DropBoardManager {
     }
 
     const img = new Image();
-    // Do NOT set crossOrigin = 'anonymous' to avoid CORS blocking by Pinterest and CDNs
+    if (targetImgUrl.includes('dropboard-cache.local')) {
+      img.crossOrigin = 'anonymous';
+    }
     img.src = targetImgUrl;
 
     img.onload = () => {
@@ -1079,6 +1117,7 @@ class DropBoardManager {
       const card = {
         id,
         url: targetImgUrl,
+        imageData: targetImgUrl.startsWith('data:image/') ? targetImgUrl : (extraMeta.imageData || null),
         localPath: extraMeta.localPath || '',
         localWebUrl: extraMeta.localWebUrl || '',
         isYouTube,
@@ -1100,6 +1139,19 @@ class DropBoardManager {
       this.cards.push(card);
       this.selectCard(card);
       this.updateCardCount();
+
+      // Pre-extract Base64 imageData immediately when image loads so saving is instant
+      if (!card.imageData && !card.isYouTube) {
+        try {
+          const cvs = document.createElement('canvas');
+          cvs.width = width;
+          cvs.height = height;
+          const ctx = cvs.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          const isPng = (targetImgUrl && targetImgUrl.toLowerCase().endsWith('.png')) || (card.localPath && card.localPath.toLowerCase().endsWith('.png'));
+          card.imageData = cvs.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.90);
+        } catch(e) {}
+      }
 
       // Trigger native download to cache folder if not already cached
       if (!card.localPath && (targetImgUrl.startsWith('http://') || targetImgUrl.startsWith('https://')) && !targetImgUrl.includes('dropboard-cache.local')) {
@@ -1802,6 +1854,7 @@ class DropBoardManager {
 
     this.recordPreState('Duplicate Selection');
 
+    const idMap = new Map();
     const newSelectedCards = [];
     const newSelectedGroups = [];
     const newSelectedNodes = [];
@@ -1811,7 +1864,15 @@ class DropBoardManager {
     if (hasGroups) {
       this.selectedGroups.forEach(grp => {
         duplicatedGroupIds.add(grp.id);
+        const origMemberCards = this.cards.filter(c => c.groupId === grp.id);
         const res = this.cloneGroup(grp);
+        idMap.set(grp.id, res.group.id);
+
+        res.cards.forEach((clonedC, idx) => {
+          if (origMemberCards[idx]) {
+            idMap.set(origMemberCards[idx].id, clonedC.id);
+          }
+        });
         newSelectedGroups.push(res.group);
       });
     }
@@ -1823,6 +1884,7 @@ class DropBoardManager {
           return;
         }
         const clonedCard = this.cloneCard(card);
+        idMap.set(card.id, clonedCard.id);
         newSelectedCards.push(clonedCard);
       });
     }
@@ -1831,11 +1893,26 @@ class DropBoardManager {
     if (hasNodes) {
       this.selectedNodes.forEach(node => {
         const clonedNode = this.cloneNode(node);
+        idMap.set(node.id, clonedNode.id);
         newSelectedNodes.push(clonedNode);
       });
     }
 
-    // 4. Select newly created duplicates
+    // 4. Replicate cable connections between any duplicated items!
+    this.connections.forEach(conn => {
+      const newFrom = idMap.get(conn.fromNodeId);
+      const newTo = idMap.get(conn.toTargetId);
+      if (newFrom && newTo) {
+        this.connections.push({
+          fromNodeId: newFrom,
+          toTargetId: newTo,
+          targetType: conn.targetType,
+          side: conn.side
+        });
+      }
+    });
+
+    // 5. Select newly created duplicates
     this.clearSelection();
     newSelectedCards.forEach(c => {
       this.selectedCards.add(c);
@@ -1850,13 +1927,15 @@ class DropBoardManager {
       if (n.element) n.element.classList.add('selected');
     });
 
+    this.updateConnectedFontEffects();
     this.updateCardCount();
     this.updateGroupCounts();
     this.renderConnections();
     this.commitHistory('Duplicate Selection');
+    this.scheduleAutoSave();
 
     const total = newSelectedCards.length + newSelectedGroups.length + newSelectedNodes.length;
-    Toast.show(`Duplicated ${total} item(s) (Ctrl+D)`, 'success');
+    Toast.show(`Duplicated ${total} item(s) with cable connections (Ctrl+D)`, 'success');
   }
 
   initMarqueeSelection() {
@@ -1885,20 +1964,19 @@ class DropBoardManager {
         return;
       }
 
-      // Check if starting inside a group frame's content area
-      const insideGroupContent = e.target.closest('.group-content-area');
+      // Check if starting inside a group frame
+      const insideGroup = e.target.closest('.mv-group-frame');
       const insideGroupHeader = e.target.closest('.group-header');
 
       // If clicking directly on group header, that's group dragging/selecting (handled in groupEl)
       if (insideGroupHeader) return;
 
-      if (insideGroupContent) {
-        // Mode 1: Started inside a group -> ONLY select cards in this group!
-        // User can freely box-select multiple photos in the group without fear of selecting the group!
+      if (insideGroup) {
+        // Inside a group frame: ONLY allow marquee selection if Shift key is held!
+        // Otherwise, allow standard click/drag to move the group directly from the middle!
+        if (!e.shiftKey) return;
         marqueeMode = 'cards_only';
-        targetGroup = this.groups.find(g => g.element && g.element.contains(insideGroupContent));
-      } else if (e.target.closest('.mv-group-frame')) {
-        return;
+        targetGroup = this.groups.find(g => g.element && g.element.contains(insideGroup));
       } else {
         // Mode 2: Started on empty canvas -> Universal Selection (Cards, Groups, Nodes)!
         marqueeMode = 'all';
@@ -2041,68 +2119,337 @@ class DropBoardManager {
     Toast.show('Canvas cleared', 'info');
   }
 
+  getNodeGroupId(nodeId) {
+    if (!nodeId) return null;
+    // Direct connection to group
+    for (const c of this.connections) {
+      if (c.fromNodeId === nodeId) {
+        if (this.groups.some(g => g.id === c.toTargetId)) return c.toTargetId;
+        const cd = this.cards.find(x => x.id === c.toTargetId);
+        if (cd && cd.groupId) return cd.groupId;
+      }
+    }
+    // BFS for chained nodes (e.g. Font -> Note -> Note -> Scene)
+    const visited = new Set([nodeId]);
+    const queue = [nodeId];
+    while (queue.length > 0) {
+      const curr = queue.shift();
+      for (const c of this.connections) {
+        if (c.fromNodeId === curr && !visited.has(c.toTargetId)) {
+          if (this.groups.some(g => g.id === c.toTargetId)) return c.toTargetId;
+          const cd = this.cards.find(x => x.id === c.toTargetId);
+          if (cd && cd.groupId) return cd.groupId;
+          visited.add(c.toTargetId);
+          queue.push(c.toTargetId);
+        }
+        if (c.toTargetId === curr && !visited.has(c.fromNodeId)) {
+          if (this.groups.some(g => g.id === c.fromNodeId)) return c.fromNodeId;
+          visited.add(c.fromNodeId);
+          queue.push(c.fromNodeId);
+        }
+      }
+    }
+    return null;
+  }
+
+  getAccurateNodeHeight(node) {
+    if (node.element) {
+      if (node.element.offsetHeight > 50) return node.element.offsetHeight;
+      const rect = node.element.getBoundingClientRect();
+      const zoom = (this.canvas && this.canvas.zoom > 0) ? this.canvas.zoom : 1;
+      if (rect && rect.height > 50) return Math.round(rect.height / zoom);
+    }
+    let h = 220;
+    if (node.type === 'font') {
+      const tagCount = (node.items && Array.isArray(node.items)) ? node.items.length : 0;
+      h = 280 + tagCount * 26;
+    } else if (node.type === 'schedule' || node.type === 'plan') {
+      h = 220;
+    } else if (node.type === 'vfx') {
+      h = 240;
+    } else if (node.type === 'note') {
+      const tagCount = (node.tags && Array.isArray(node.tags)) ? node.tags.length : 0;
+      h = 230 + Math.ceil(tagCount / 3) * 26;
+    }
+    return Math.max(h, 180);
+  }
+
+  getAccurateNodeWidth(node) {
+    if (node.element) {
+      if (node.element.offsetWidth > 60) return node.element.offsetWidth;
+      const rect = node.element.getBoundingClientRect();
+      const zoom = (this.canvas && this.canvas.zoom > 0) ? this.canvas.zoom : 1;
+      if (rect && rect.width > 60) return Math.round(rect.width / zoom);
+    }
+    if (node.width && node.width > 60) return Math.max(node.width, node.type === 'font' ? 295 : 60);
+    if (node.type === 'font') return 295;
+    if (node.type === 'schedule' || node.type === 'plan') return 285;
+    return 270;
+  }
+
+  assignNodeLayers(nodes, connections, targetGroupId = null) {
+    const layers = new Map();
+    const directNodes = new Set();
+
+    if (targetGroupId) {
+      nodes.forEach(n => {
+        for (const c of connections) {
+          if (c.fromNodeId === n.id) {
+            if (c.toTargetId === targetGroupId) directNodes.add(n.id);
+            const card = this.cards.find(cd => cd.id === c.toTargetId);
+            if (card && card.groupId === targetGroupId) directNodes.add(n.id);
+          }
+        }
+      });
+    }
+
+    if (directNodes.size === 0 && nodes.length > 0) {
+      // For standalone clusters, pick sink nodes (nodes with 0 outgoing connections inside this cluster)
+      const outgoingCount = new Map();
+      nodes.forEach(n => outgoingCount.set(n.id, 0));
+      for (const c of connections) {
+        if (outgoingCount.has(c.fromNodeId) && nodes.some(n => n.id === c.toTargetId)) {
+          outgoingCount.set(c.fromNodeId, outgoingCount.get(c.fromNodeId) + 1);
+        }
+      }
+      nodes.forEach(n => {
+        if (outgoingCount.get(n.id) === 0) directNodes.add(n.id);
+      });
+      if (directNodes.size === 0) directNodes.add(nodes[0].id);
+    }
+
+    directNodes.forEach(id => layers.set(id, 1));
+
+    // Propagate backwards: fromNode -> toNode: fromNode is upstream, so layer = toNode.layer + 1
+    let changed = true;
+    let iterations = 0;
+    while (changed && iterations < 12) {
+      changed = false;
+      iterations++;
+      for (const c of connections) {
+        const fromNode = nodes.find(n => n.id === c.fromNodeId);
+        const toNode = nodes.find(n => n.id === c.toTargetId);
+
+        if (fromNode && toNode && layers.has(toNode.id)) {
+          const desired = layers.get(toNode.id) + 1;
+          if (!layers.has(fromNode.id) || layers.get(fromNode.id) < desired) {
+            layers.set(fromNode.id, desired);
+            changed = true;
+          }
+        }
+      }
+      for (const c of connections) {
+        const fromNode = nodes.find(n => n.id === c.fromNodeId);
+        const toNode = nodes.find(n => n.id === c.toTargetId);
+        if (fromNode && toNode && layers.has(fromNode.id) && !layers.has(toNode.id)) {
+          layers.set(toNode.id, Math.max(1, layers.get(fromNode.id) - 1));
+          changed = true;
+        }
+      }
+    }
+
+    nodes.forEach(n => {
+      if (!layers.has(n.id)) layers.set(n.id, 1);
+    });
+
+    return layers;
+  }
+
   autoArrangeGrid() {
     if (this.cards.length === 0 && this.groups.length === 0 && this.nodes.length === 0) return;
     this.recordPreState('Auto-Arrange Grid');
 
     const gap = this.arrangeGap !== undefined ? this.arrangeGap : 32;
+    const nodeGapY = Math.max(16, gap);
+    const colGapX = Math.max(24, gap + 14);
+    const groupGapX = Math.max(36, gap + 24);
+    const groupGapY = Math.max(48, gap + 28);
 
-    // 1. Tidy all groups first so member cards are neatly organized inside their frames
+    // 1. Tidy all groups first
     this.groups.forEach(group => {
       this.tidyGroup(group, true);
     });
 
     const positionedNodeIds = new Set();
-    const naturalMinHeights = { note: 200, font: 195, vfx: 185, plan: 175 };
-    const nodeWidth = 270;
-    let curX = 0;
-    let curY = 0;
 
-    // 2. Position Groups in a neat canvas grid with reserved space for their connected nodes
+    // Map which nodes belong to which group
+    const groupNodeMap = new Map();
+    this.groups.forEach(g => groupNodeMap.set(g.id, []));
+
+    this.nodes.forEach(n => {
+      const gid = this.getNodeGroupId(n.id);
+      if (gid && groupNodeMap.has(gid)) {
+        groupNodeMap.get(gid).push(n);
+      }
+    });
+
+    // Standalone nodes (nodes not connected to any Scene group)
+    const standaloneNodes = this.nodes.filter(n => {
+      const gid = this.getNodeGroupId(n.id);
+      return !gid || !groupNodeMap.has(gid);
+    });
+
+    let currentY = 0;
+
+    // 2. Position Standalone / Overview Nodes at the top in a clean horizontal dashboard row
+    if (standaloneNodes.length > 0) {
+      const visitedStandalone = new Set();
+      let sX = 0;
+      let sRowMaxH = 0;
+      const maxHeaderWidth = 3200;
+
+      standaloneNodes.forEach(node => {
+        if (visitedStandalone.has(node.id)) return;
+
+        const cluster = [];
+        const queue = [node.id];
+        visitedStandalone.add(node.id);
+
+        while (queue.length > 0) {
+          const currId = queue.shift();
+          const currNode = standaloneNodes.find(n => n.id === currId);
+          if (currNode) cluster.push(currNode);
+
+          for (const c of this.connections) {
+            if (c.fromNodeId === currId && !visitedStandalone.has(c.toTargetId)) {
+              if (standaloneNodes.some(n => n.id === c.toTargetId)) {
+                visitedStandalone.add(c.toTargetId);
+                queue.push(c.toTargetId);
+              }
+            }
+            if (c.toTargetId === currId && !visitedStandalone.has(c.fromNodeId)) {
+              if (standaloneNodes.some(n => n.id === c.fromNodeId)) {
+                visitedStandalone.add(c.fromNodeId);
+                queue.push(c.fromNodeId);
+              }
+            }
+          }
+        }
+
+        if (cluster.length > 1) {
+          const clusterLayers = this.assignNodeLayers(cluster, this.connections, null);
+          const layerBuckets = new Map();
+          cluster.forEach(n => {
+            const l = clusterLayers.get(n.id) || 1;
+            if (!layerBuckets.has(l)) layerBuckets.set(l, []);
+            layerBuckets.get(l).push(n);
+          });
+          const sortedLayers = Array.from(layerBuckets.keys()).sort((a, b) => b - a);
+          let clusterH = 0;
+
+          sortedLayers.forEach(l => {
+            const nodesInLayer = layerBuckets.get(l);
+            let layerMaxW = 0;
+            let nY = currentY;
+
+            nodesInLayer.forEach(n => {
+              n.x = sX;
+              n.y = nY;
+              if (n.element) n.element.style.transform = `translate(${n.x}px, ${n.y}px)`;
+              positionedNodeIds.add(n.id);
+              const nW = this.getAccurateNodeWidth(n);
+              const nH = this.getAccurateNodeHeight(n);
+              layerMaxW = Math.max(layerMaxW, nW);
+              nY += nH + nodeGapY;
+            });
+
+            clusterH = Math.max(clusterH, nY - currentY);
+            sX += layerMaxW + colGapX;
+          });
+
+          sRowMaxH = Math.max(sRowMaxH, clusterH);
+          if (sX > maxHeaderWidth) {
+            sX = 0;
+            currentY += sRowMaxH + groupGapY;
+            sRowMaxH = 0;
+          }
+        } else {
+          const n = cluster[0];
+          const nW = this.getAccurateNodeWidth(n);
+          const nH = this.getAccurateNodeHeight(n);
+          if (sX > 0 && sX + nW > maxHeaderWidth) {
+            sX = 0;
+            currentY += sRowMaxH + groupGapY;
+            sRowMaxH = 0;
+          }
+          n.x = sX;
+          n.y = currentY;
+          if (n.element) n.element.style.transform = `translate(${n.x}px, ${n.y}px)`;
+          positionedNodeIds.add(n.id);
+          sX += nW + colGapX;
+          sRowMaxH = Math.max(sRowMaxH, nH);
+        }
+      });
+
+      currentY += sRowMaxH + groupGapY * 1.5;
+    }
+
+    // 3. Position Groups in an Expansive Widescreen Grid (Up to 4 columns across)
     if (this.groups.length > 0) {
-      const maxGroupCols = Math.min(this.groups.length, Math.max(1, Math.floor((window.innerWidth * 1.5) / 600)));
-      const groupCols = Math.min(this.groups.length, Math.max(1, maxGroupCols));
+      const sortedGroups = [...this.groups].sort((a, b) => {
+        return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
+      });
 
+      const numGroups = sortedGroups.length;
+      let groupCols = 4;
+      if (numGroups <= 2) groupCols = numGroups;
+      else if (numGroups <= 4) groupCols = numGroups;
+      else if (numGroups <= 6) groupCols = 3;
+      else if (numGroups <= 8) groupCols = 4;
+      else if (numGroups <= 12) groupCols = 4;
+      else if (numGroups <= 16) groupCols = 5;
+      else groupCols = Math.min(6, Math.ceil(Math.sqrt(numGroups * 2.2)));
+
+      let curX = 0;
+      let rowStartY = currentY;
       let groupRowMaxH = 0;
       let groupColIdx = 0;
 
-      this.groups.forEach((group) => {
-        const memberCards = this.cards.filter(c => c.groupId === group.id);
-        const memberCardIds = new Set(memberCards.map(c => c.id));
+      sortedGroups.forEach((group) => {
+        const connectedNodes = groupNodeMap.get(group.id) || [];
+        let nodeAreaH = 0;
 
-        // Find connected nodes for this specific group
-        const connectedNodes = this.nodes.filter(n => {
-          if (positionedNodeIds.has(n.id)) return false;
-          return this.connections.some(c => 
-            c.fromNodeId === n.id && (c.toTargetId === group.id || memberCardIds.has(c.toTargetId))
-          );
-        });
-
-        // Reserve space: if group has nodes, place nodes on the left first
-        let nodeStackH = 0;
+        // Lay out connected nodes in layer columns to the left of the scene
         if (connectedNodes.length > 0) {
-          let nodeY = curY;
+          const layers = this.assignNodeLayers(connectedNodes, this.connections, group.id);
+          const layerBuckets = new Map();
           connectedNodes.forEach(n => {
-            n.x = curX;
-            n.y = nodeY;
-            if (n.element) n.element.style.transform = `translate(${n.x}px, ${n.y}px)`;
-            positionedNodeIds.add(n.id);
-            const domH = n.element ? n.element.offsetHeight : 0;
-            const nH = Math.max(domH, naturalMinHeights[n.type] || 190);
-            nodeY += nH + (gap === 0 ? 0 : 14);
+            const l = layers.get(n.id) || 1;
+            if (!layerBuckets.has(l)) layerBuckets.set(l, []);
+            layerBuckets.get(l).push(n);
           });
-          nodeStackH = nodeY - curY;
-          curX += nodeWidth + (gap === 0 ? 0 : 24); // Advance past nodes
+
+          const sortedLayers = Array.from(layerBuckets.keys()).sort((a, b) => b - a);
+
+          sortedLayers.forEach(l => {
+            const nodesInLayer = layerBuckets.get(l);
+            let layerMaxW = 0;
+            let nY = rowStartY;
+
+            nodesInLayer.forEach(n => {
+              n.x = curX;
+              n.y = nY;
+              if (n.element) n.element.style.transform = `translate(${n.x}px, ${n.y}px)`;
+              positionedNodeIds.add(n.id);
+              const nW = this.getAccurateNodeWidth(n);
+              const nH = this.getAccurateNodeHeight(n);
+              layerMaxW = Math.max(layerMaxW, nW);
+              nY += nH + nodeGapY;
+            });
+
+            nodeAreaH = Math.max(nodeAreaH, nY - rowStartY);
+            curX += layerMaxW + colGapX;
+          });
         }
 
         // Place group to the right of its nodes
+        const memberCards = this.cards.filter(c => c.groupId === group.id);
         const dx = curX - group.x;
-        const dy = curY - group.y;
+        const dy = rowStartY - group.y;
         group.x = curX;
-        group.y = curY;
+        group.y = rowStartY;
         group.element.style.transform = `translate(${group.x}px, ${group.y}px)`;
 
-        // Move member cards along with the group
         memberCards.forEach(card => {
           card.x += dx;
           card.y += dy;
@@ -2111,73 +2458,56 @@ class DropBoardManager {
           card.element.style.transform = `translate(${card.x}px, ${card.y}px)`;
         });
 
-        groupRowMaxH = Math.max(groupRowMaxH, group.height, nodeStackH);
-        curX += group.width + gap;
+        const thisUnitH = Math.max(group.height, nodeAreaH);
+        groupRowMaxH = Math.max(groupRowMaxH, thisUnitH);
+
+        curX += group.width + groupGapX;
         groupColIdx++;
 
         if (groupColIdx >= groupCols) {
           groupColIdx = 0;
           curX = 0;
-          curY += groupRowMaxH + gap;
+          rowStartY += groupRowMaxH + groupGapY;
           groupRowMaxH = 0;
         }
       });
 
       if (groupColIdx > 0) {
-        curY += groupRowMaxH + gap;
+        rowStartY += groupRowMaxH + groupGapY;
         curX = 0;
       }
+      currentY = rowStartY;
     }
 
-    // 3. Standalone Nodes
-    const standaloneNodes = this.nodes.filter(n => !positionedNodeIds.has(n.id));
-    if (standaloneNodes.length > 0) {
-      standaloneNodes.forEach(node => {
-        node.x = curX;
-        node.y = curY;
-        if (node.element) node.element.style.transform = `translate(${node.x}px, ${node.y}px)`;
-        curX += (node.width || nodeWidth) + (gap === 0 ? 0 : 24);
-        if (curX > 1200) {
-          curX = 0;
-          curY += 210 + gap;
-        }
-      });
-      curY += 220 + gap;
-      curX = 0;
-    }
-
-    // 4. Position Ungrouped Cards in a neat grid below/alongside groups
+    // 4. Position Ungrouped Loose Cards
     const ungroupedCards = this.cards.filter(c => !c.groupId);
     if (ungroupedCards.length > 0) {
-      const cardCols = Math.ceil(Math.sqrt(ungroupedCards.length * 1.5));
+      let cardX = 0;
       let cardRowMaxH = 0;
-      let cardColIdx = 0;
-      const cardGap = gap;
+      const maxCardsWidth = 3200;
 
       ungroupedCards.forEach(card => {
-        card.x = curX;
-        card.y = curY;
-        if (card.baseX !== undefined) card.baseX = curX;
-        if (card.baseY !== undefined) card.baseY = curY;
-        card.element.style.transform = `translate(${card.x}px, ${card.y}px)`;
-
-        cardRowMaxH = Math.max(cardRowMaxH, card.height);
-        curX += card.width + cardGap;
-        cardColIdx++;
-
-        if (cardColIdx >= cardCols) {
-          cardColIdx = 0;
-          curX = 0;
-          curY += cardRowMaxH + cardGap;
+        if (cardX > 0 && cardX + card.width > maxCardsWidth) {
+          cardX = 0;
+          currentY += cardRowMaxH + gap;
           cardRowMaxH = 0;
         }
+        card.x = cardX;
+        card.y = currentY;
+        if (card.baseX !== undefined) card.baseX = cardX;
+        if (card.baseY !== undefined) card.baseY = currentY;
+        if (card.element) card.element.style.transform = `translate(${card.x}px, ${card.y}px)`;
+
+        cardRowMaxH = Math.max(cardRowMaxH, card.height);
+        cardX += card.width + gap;
       });
+      currentY += cardRowMaxH + gap;
     }
 
     this.renderConnections();
     this.commitHistory('Auto-Arrange Grid');
     setTimeout(() => this.fitAllToView(), 120);
-    Toast.show(`Auto-arranged grid (Gap: ${gap === 0 ? 'No Gap' : gap + 'px'})`, 'success');
+    Toast.show(`Auto-arranged widescreen grid (Gap: ${gap === 0 ? 'No Gap' : gap + 'px'})`, 'success');
   }
 
   autoArrangePipeline() {
@@ -2185,109 +2515,166 @@ class DropBoardManager {
     this.recordPreState('Storyboard Pipeline Layout');
 
     const gap = this.arrangeGap !== undefined ? this.arrangeGap : 32;
+    const nodeGapY = Math.max(16, gap);
+    const colGapX = Math.max(24, gap + 14);
+    const sceneGapX = Math.max(48, gap + 32);
+    const sceneGapY = Math.max(48, gap + 32);
 
     // 1. Tidy all groups first
     this.groups.forEach(group => {
       this.tidyGroup(group, true);
     });
 
-    // 2. Sort groups by natural alphanumeric title (Scene 1, Scene 2...)
+    // 2. Sort groups naturally (Scene 01, Scene 02, etc.)
     const sortedGroups = [...this.groups].sort((a, b) => {
       return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
     });
 
-    const sceneColumnX = 360;
-    let currentY = 0;
-    const sceneGapY = gap;
     const positionedNodeIds = new Set();
-    const naturalMinHeights = { note: 200, font: 195, vfx: 185, plan: 175 };
+    const groupNodeMap = new Map();
+    sortedGroups.forEach(g => groupNodeMap.set(g.id, []));
 
-    // 3. Position each scene frame vertically with its connected nodes neatly stacked on the left
-    sortedGroups.forEach(group => {
-      const dx = sceneColumnX - group.x;
-      const dy = currentY - group.y;
-
-      group.x = sceneColumnX;
-      group.y = currentY;
-      group.element.style.transform = `translate(${group.x}px, ${group.y}px)`;
-
-      // Move member cards with the group
-      const memberCards = this.cards.filter(c => c.groupId === group.id);
-      memberCards.forEach(card => {
-        card.x += dx;
-        card.y += dy;
-        if (card.baseX !== undefined) card.baseX += dx;
-        if (card.baseY !== undefined) card.baseY += dy;
-        card.element.style.transform = `translate(${card.x}px, ${card.y}px)`;
-      });
-
-      // Find nodes connected to this group or to any card inside this group
-      const memberCardIds = new Set(memberCards.map(c => c.id));
-      const connectedNodes = this.nodes.filter(n => {
-        if (positionedNodeIds.has(n.id)) return false;
-        return this.connections.some(c => 
-          c.fromNodeId === n.id && (c.toTargetId === group.id || memberCardIds.has(c.toTargetId))
-        );
-      });
-
-      // Stack connected nodes vertically to the left of the scene
-      let nodeStackY = group.y;
-      const nodeX = group.x - 300 - (gap === 0 ? 0 : 20);
-      connectedNodes.forEach(node => {
-        node.x = nodeX;
-        node.y = nodeStackY;
-        if (node.element) {
-          node.element.style.transform = `translate(${node.x}px, ${node.y}px)`;
-        }
-        positionedNodeIds.add(node.id);
-        const domH = node.element ? node.element.offsetHeight : 0;
-        const nodeH = Math.max(domH, naturalMinHeights[node.type] || 190);
-        nodeStackY += nodeH + (gap === 0 ? 0 : 16);
-      });
-
-      const totalH = Math.max(group.height, nodeStackY - currentY);
-      currentY += totalH + sceneGapY;
+    this.nodes.forEach(n => {
+      const gid = this.getNodeGroupId(n.id);
+      if (gid && groupNodeMap.has(gid)) {
+        groupNodeMap.get(gid).push(n);
+      }
     });
 
-    // 4. Standalone Nodes (Global production specs)
-    const standaloneNodes = this.nodes.filter(n => !positionedNodeIds.has(n.id));
+    const standaloneNodes = this.nodes.filter(n => {
+      const gid = this.getNodeGroupId(n.id);
+      return !gid || !groupNodeMap.has(gid);
+    });
+
+    let currentY = 0;
+
+    // 3. Standalone / Global Overview Header (placed strictly at top, never overlapping scenes)
     if (standaloneNodes.length > 0) {
-      let standaloneY = 0;
-      const standaloneX = 20;
+      let sX = 0;
+      let sRowMaxH = 0;
+      const maxHeaderWidth = 3200;
+
       standaloneNodes.forEach(node => {
-        node.x = standaloneX;
-        node.y = standaloneY;
-        if (node.element) {
-          node.element.style.transform = `translate(${node.x}px, ${node.y}px)`;
+        const w = this.getAccurateNodeWidth(node);
+        const h = this.getAccurateNodeHeight(node);
+        if (sX > 0 && sX + w > maxHeaderWidth) {
+          sX = 0;
+          currentY += sRowMaxH + nodeGapY;
+          sRowMaxH = 0;
         }
-        const domH = node.element ? node.element.offsetHeight : 0;
-        const nodeH = Math.max(domH, naturalMinHeights[node.type] || 190);
-        standaloneY += nodeH + (gap === 0 ? 0 : 16);
+        node.x = sX;
+        node.y = currentY;
+        if (node.element) node.element.style.transform = `translate(${node.x}px, ${node.y}px)`;
+        positionedNodeIds.add(node.id);
+        sX += w + colGapX;
+        sRowMaxH = Math.max(sRowMaxH, h);
       });
-      currentY = Math.max(currentY, standaloneY + sceneGapY);
+
+      currentY += sRowMaxH + sceneGapY * 1.5;
     }
 
-    // 5. Standalone Cards (not in any group)
+    // 4. Sequential Pipeline Flow (Widescreen 3-Scene stage rows, wrapping cleanly)
+    if (sortedGroups.length > 0) {
+      const pipelineCols = Math.min(sortedGroups.length, 3);
+      let curX = 0;
+      let rowStartY = currentY;
+      let stageRowMaxH = 0;
+      let stageColIdx = 0;
+
+      sortedGroups.forEach(group => {
+        const connectedNodes = groupNodeMap.get(group.id) || [];
+        let nodeAreaH = 0;
+
+        if (connectedNodes.length > 0) {
+          const layers = this.assignNodeLayers(connectedNodes, this.connections, group.id);
+          const layerBuckets = new Map();
+          connectedNodes.forEach(n => {
+            const l = layers.get(n.id) || 1;
+            if (!layerBuckets.has(l)) layerBuckets.set(l, []);
+            layerBuckets.get(l).push(n);
+          });
+
+          const sortedLayers = Array.from(layerBuckets.keys()).sort((a, b) => b - a);
+
+          sortedLayers.forEach(l => {
+            const nodesInLayer = layerBuckets.get(l);
+            let layerMaxW = 0;
+            let nY = rowStartY;
+
+            nodesInLayer.forEach(node => {
+              node.x = curX;
+              node.y = nY;
+              if (node.element) node.element.style.transform = `translate(${node.x}px, ${node.y}px)`;
+              positionedNodeIds.add(node.id);
+              const nodeW = this.getAccurateNodeWidth(node);
+              const nodeH = this.getAccurateNodeHeight(node);
+              layerMaxW = Math.max(layerMaxW, nodeW);
+              nY += nodeH + nodeGapY;
+            });
+
+            nodeAreaH = Math.max(nodeAreaH, nY - rowStartY);
+            curX += layerMaxW + colGapX;
+          });
+        }
+
+        // Group placed to the right of its nodes
+        const dx = curX - group.x;
+        const dy = rowStartY - group.y;
+        group.x = curX;
+        group.y = rowStartY;
+        group.element.style.transform = `translate(${group.x}px, ${group.y}px)`;
+
+        const memberCards = this.cards.filter(c => c.groupId === group.id);
+        memberCards.forEach(card => {
+          card.x += dx;
+          card.y += dy;
+          if (card.baseX !== undefined) card.baseX += dx;
+          if (card.baseY !== undefined) card.baseY += dy;
+          card.element.style.transform = `translate(${card.x}px, ${card.y}px)`;
+        });
+
+        const thisStageH = Math.max(group.height, nodeAreaH);
+        stageRowMaxH = Math.max(stageRowMaxH, thisStageH);
+
+        curX += group.width + sceneGapX;
+        stageColIdx++;
+
+        if (stageColIdx >= pipelineCols) {
+          stageColIdx = 0;
+          curX = 0;
+          rowStartY += stageRowMaxH + sceneGapY;
+          stageRowMaxH = 0;
+        }
+      });
+
+      if (stageColIdx > 0) {
+        rowStartY += stageRowMaxH + sceneGapY;
+        curX = 0;
+      }
+      currentY = rowStartY;
+    }
+
+    // 5. Standalone Loose Cards
     const looseCards = this.cards.filter(c => !c.groupId);
     if (looseCards.length > 0) {
-      let looseX = sceneColumnX;
+      let looseX = 0;
       let looseRowH = 0;
+      const maxCardsW = 3200;
       looseCards.forEach(c => {
+        if (looseX > 0 && looseX + c.width > maxCardsW) {
+          looseX = 0;
+          currentY += looseRowH + 24;
+          looseRowH = 0;
+        }
         c.x = looseX;
         c.y = currentY;
         if (c.baseX !== undefined) c.baseX = c.x;
         if (c.baseY !== undefined) c.baseY = c.y;
-        if (c.element) {
-          c.element.style.transform = `translate(${c.x}px, ${c.y}px)`;
-        }
+        if (c.element) c.element.style.transform = `translate(${c.x}px, ${c.y}px)`;
         looseRowH = Math.max(looseRowH, c.height);
         looseX += c.width + 24;
-        if (looseX > sceneColumnX + 1100) {
-          looseX = sceneColumnX;
-          currentY += looseRowH + 24;
-          looseRowH = 0;
-        }
       });
+      currentY += looseRowH + 24;
     }
 
     this.renderConnections();
@@ -2343,7 +2730,8 @@ class DropBoardManager {
     document.getElementById('ref-counter').textContent = `${count} Reference${count === 1 ? '' : 's'}`;
     const emptyState = document.getElementById('empty-state');
     if (emptyState) {
-      emptyState.classList.toggle('hidden', count > 0);
+      const hasContent = this.cards.length > 0 || this.groups.length > 0 || this.nodes.length > 0;
+      emptyState.classList.toggle('hidden', hasContent);
     }
   }
 
@@ -2441,22 +2829,25 @@ class DropBoardManager {
     }
 
     document.getElementById('cm-send-ae').addEventListener('click', () => {
-      if (this.activeContextMenuCard && this.activeContextMenuCard.localPath) {
-        NativeBridge.sendToAE(this.activeContextMenuCard.localPath);
+      const c = this.activeContextMenuCard;
+      if (c && (c.localPath || c.imageData)) {
+        NativeBridge.sendToAE(c.localPath || '', c.imageData || '');
       } else {
-        Toast.show('High-res image is still downloading...', 'info');
+        Toast.show('Select a reference card first', 'info');
       }
     });
 
     document.getElementById('cm-send-ps').addEventListener('click', () => {
-      if (this.activeContextMenuCard && this.activeContextMenuCard.localPath) {
-        NativeBridge.sendToPhotoshop(this.activeContextMenuCard.localPath);
+      const c = this.activeContextMenuCard;
+      if (c && (c.localPath || c.imageData)) {
+        NativeBridge.sendToPhotoshop(c.localPath || '', c.imageData || '');
       }
     });
 
     document.getElementById('cm-copy-file').addEventListener('click', () => {
-      if (this.activeContextMenuCard && this.activeContextMenuCard.localPath) {
-        NativeBridge.copyFileToClipboard(this.activeContextMenuCard.localPath);
+      const c = this.activeContextMenuCard;
+      if (c && (c.localPath || c.imageData)) {
+        NativeBridge.copyFileToClipboard(c.localPath || '', c.imageData || '');
       }
     });
 
@@ -2487,17 +2878,17 @@ class DropBoardManager {
           const group = this.groups.find(g => g.id === this.activeContextMenuCard.groupId);
           this.activeContextMenuCard.groupId = null;
           this.updateCardGroupBadge(this.activeContextMenuCard);
-          this.updateGroupCounts();
-          if (group) this.tidyGroup(group, true);
-          this.commitHistory('Detach from Group');
-          Toast.show(`Unlocked from ${group ? group.title : 'group'}`, 'info');
         }
       });
     }
 
     document.getElementById('cm-reveal-explorer').addEventListener('click', () => {
-      if (this.activeContextMenuCard && this.activeContextMenuCard.localPath) {
-        NativeBridge.revealInExplorer(this.activeContextMenuCard.localPath);
+      const c = this.activeContextMenuCard;
+      if (c && (c.localPath || c.imageData)) {
+        NativeBridge.revealInExplorer(c.localPath || '', c.imageData || '');
+      } else {
+        NativeBridge.openCacheFolder();
+        Toast.show('Opened Image Cache folder', 'info');
       }
     });
 
@@ -2553,9 +2944,30 @@ class DropBoardManager {
       }
     }
 
-    cm.style.left = `${Math.min(screenX, window.innerWidth - 220)}px`;
-    cm.style.top = `${Math.min(screenY, window.innerHeight - 300)}px`;
+    // Show first to measure actual rendered height
     cm.classList.add('show');
+    const menuW = cm.offsetWidth || 230;
+    const menuH = cm.offsetHeight || 420;
+
+    let posX = screenX;
+    let posY = screenY;
+
+    // Flip or clamp horizontally
+    if (posX + menuW > window.innerWidth - 12) {
+      posX = Math.max(12, window.innerWidth - menuW - 12);
+    }
+
+    // Flip or clamp vertically: If cursor is near bottom, position menu ABOVE cursor
+    if (posY + menuH > window.innerHeight - 12) {
+      if (screenY - menuH >= 12) {
+        posY = screenY - menuH;
+      } else {
+        posY = Math.max(12, window.innerHeight - menuH - 12);
+      }
+    }
+
+    cm.style.left = `${Math.round(posX)}px`;
+    cm.style.top = `${Math.round(posY)}px`;
   }
 
   showGroupContextMenu(screenX, screenY, group) {
@@ -2568,9 +2980,26 @@ class DropBoardManager {
     const grpCm = document.getElementById('group-context-menu');
     if (grpCm) {
       document.getElementById('cm-grp-title').textContent = group.title || 'Scene Group';
-      grpCm.style.left = `${Math.min(screenX, window.innerWidth - 220)}px`;
-      grpCm.style.top = `${Math.min(screenY, window.innerHeight - 240)}px`;
       grpCm.classList.add('show');
+      const menuW = grpCm.offsetWidth || 220;
+      const menuH = grpCm.offsetHeight || 200;
+
+      let posX = screenX;
+      let posY = screenY;
+
+      if (posX + menuW > window.innerWidth - 12) {
+        posX = Math.max(12, window.innerWidth - menuW - 12);
+      }
+      if (posY + menuH > window.innerHeight - 12) {
+        if (screenY - menuH >= 12) {
+          posY = screenY - menuH;
+        } else {
+          posY = Math.max(12, window.innerHeight - menuH - 12);
+        }
+      }
+
+      grpCm.style.left = `${Math.round(posX)}px`;
+      grpCm.style.top = `${Math.round(posY)}px`;
     }
   }
 
@@ -2583,9 +3012,26 @@ class DropBoardManager {
     this.lastCanvasClickWorldPos = this.canvas.screenToWorld(screenX, screenY);
     const canvasCm = document.getElementById('canvas-context-menu');
     if (canvasCm) {
-      canvasCm.style.left = `${Math.min(screenX, window.innerWidth - 220)}px`;
-      canvasCm.style.top = `${Math.min(screenY, window.innerHeight - 260)}px`;
       canvasCm.classList.add('show');
+      const menuW = canvasCm.offsetWidth || 220;
+      const menuH = canvasCm.offsetHeight || 250;
+
+      let posX = screenX;
+      let posY = screenY;
+
+      if (posX + menuW > window.innerWidth - 12) {
+        posX = Math.max(12, window.innerWidth - menuW - 12);
+      }
+      if (posY + menuH > window.innerHeight - 12) {
+        if (screenY - menuH >= 12) {
+          posY = screenY - menuH;
+        } else {
+          posY = Math.max(12, window.innerHeight - menuH - 12);
+        }
+      }
+
+      canvasCm.style.left = `${Math.round(posX)}px`;
+      canvasCm.style.top = `${Math.round(posY)}px`;
     }
   }
 
@@ -2767,7 +3213,7 @@ class DropBoardManager {
       }
     });
 
-    this.openBlenderSearch = (screenX, screenY) => {
+    this.openNodePalette = (screenX, screenY) => {
       this.blenderSpawnScreenX = screenX || (window.innerWidth / 2);
       this.blenderSpawnScreenY = screenY || (window.innerHeight / 2);
       popup.style.left = `${Math.min(this.blenderSpawnScreenX, window.innerWidth - 290)}px`;
@@ -2779,6 +3225,7 @@ class DropBoardManager {
       renderList();
       setTimeout(() => input.focus(), 50);
     };
+    this.openBlenderSearch = this.openNodePalette;
   }
 
   zoomToElement(x, y, width, height, padding = 100) {
@@ -3505,6 +3952,8 @@ class DropBoardManager {
       });
       groupEl.remove();
       this.groups = this.groups.filter(g => g.id !== group.id);
+      this.updateGroupCounts();
+      this.updateCardCount();
       this.commitHistory('Delete Group');
       Toast.show('Removed Group Frame', 'info');
     });
@@ -3596,9 +4045,8 @@ class DropBoardManager {
         return;
       }
 
-      // If user clicks inside the content area (empty space around photos inside group),
-      // do NOT stop propagation! Let it bubble to viewport so user can marquee-select photos inside!
-      if (e.target.closest('.group-content-area') && !e.target.closest('.group-header')) {
+      // If user holds Shift inside group, let it bubble to viewport for Shift-Marquee photo selection!
+      if (e.shiftKey) {
         return;
       }
 
@@ -3714,6 +4162,7 @@ class DropBoardManager {
     // Prepend to world so group frames stay beneath reference cards
     this.world.insertBefore(groupEl, this.world.firstChild);
     this.updateGroupCounts();
+    this.updateCardCount();
     return group;
   }
 
@@ -3787,7 +4236,7 @@ class DropBoardManager {
       type,
       x,
       y,
-      width: customData.width || (type === 'note' ? 280 : 260),
+      width: customData.width && customData.width >= 295 ? customData.width : (type === 'font' ? 295 : (type === 'note' || type === 'plan' ? 285 : 260)),
       title: customData.title || meta.defaultTitle,
       color: customData.color || meta.color,
       content: customData.content !== undefined ? customData.content : (type === 'note' ? 'Write notes, ideas, story beat, or camera details...' : ''),
@@ -3807,6 +4256,7 @@ class DropBoardManager {
     const nodeEl = document.createElement('div');
     nodeEl.className = 'prod-node';
     nodeEl.id = id;
+    nodeEl.dataset.type = type;
     nodeEl.style.transform = `translate(${x}px, ${y}px)`;
     nodeEl.style.width = `${node.width}px`;
     nodeEl.style.setProperty('--node-color', node.color);
@@ -4099,11 +4549,13 @@ class DropBoardManager {
       fontInput.type = 'text';
       fontInput.value = node.fontFamily;
       fontInput.placeholder = 'Search fonts...';
+      fontInput.setAttribute('autocomplete', 'off');
+      fontInput.setAttribute('spellcheck', 'false');
 
       const btnDropdown = document.createElement('button');
       btnDropdown.className = 'node-font-btn-dropdown';
       btnDropdown.textContent = '▼';
-      btnDropdown.title = 'Browse installed system fonts';
+      btnDropdown.title = 'Browse installed system fonts (Use ↑ / ↓ to cycle)';
 
       inputWrap.appendChild(fontInput);
       inputWrap.appendChild(btnDropdown);
@@ -4111,6 +4563,9 @@ class DropBoardManager {
 
       const dropdownList = document.createElement('div');
       dropdownList.className = 'node-font-dropdown';
+      dropdownList.addEventListener('wheel', (e) => {
+        e.stopPropagation();
+      }, { passive: false });
       picker.appendChild(dropdownList);
 
       row1.appendChild(picker);
@@ -4122,22 +4577,65 @@ class DropBoardManager {
       preview.textContent = 'DropBoard Studio 2026';
       body.appendChild(preview);
 
-      const updateFont = (fontName) => {
+      let currentFilteredFonts = [];
+      let renderedCount = 0;
+      const BATCH_SIZE = 35;
+
+      const updateFont = (fontName, closeDropdown = false) => {
         node.fontFamily = fontName;
         fontInput.value = fontName;
         preview.style.fontFamily = `"${fontName}", sans-serif`;
-        dropdownList.classList.remove('show');
+        if (closeDropdown) {
+          dropdownList.classList.remove('show');
+        }
+        // Update active highlight on rendered items
+        const items = dropdownList.querySelectorAll('.node-font-dropdown-item');
+        items.forEach(it => {
+          it.classList.toggle('active', it.dataset.font === fontName);
+        });
+        this.updateConnectedFontEffects();
         this.scheduleAutoSave();
+      };
+
+      const appendFontBatch = () => {
+        if (!currentFilteredFonts || currentFilteredFonts.length === 0) return;
+        const nextBatch = currentFilteredFonts.slice(renderedCount, renderedCount + BATCH_SIZE);
+        if (nextBatch.length === 0) return;
+
+        const frag = document.createDocumentFragment();
+        nextBatch.forEach((font, i) => {
+          const itemIdx = renderedCount + i;
+          const item = document.createElement('div');
+          item.className = `node-font-dropdown-item ${font === node.fontFamily ? 'active' : ''}`;
+          item.dataset.index = itemIdx;
+          item.dataset.font = font;
+          const isSys = this.systemFonts && this.systemFonts.includes(font);
+          item.innerHTML = `
+            <span class="node-font-item-name" style="font-family: '${font}', sans-serif;">${font}</span>
+            <span class="node-font-item-badge">${isSys ? 'System' : 'Standard'}</span>
+          `;
+          item.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            this.recordPreState('Change Font');
+            updateFont(font, true);
+            this.commitHistory('Change Font');
+          });
+          frag.appendChild(item);
+        });
+        dropdownList.appendChild(frag);
+        renderedCount += nextBatch.length;
       };
 
       const renderDropdown = (query = '') => {
         dropdownList.innerHTML = '';
+        renderedCount = 0;
         const allFonts = this.getAvailableFonts();
-        const filtered = query
+        currentFilteredFonts = query
           ? allFonts.filter(f => f.toLowerCase().includes(query.toLowerCase()))
-          : allFonts.slice(0, 60);
+          : allFonts;
 
-        if (filtered.length === 0) {
+        if (currentFilteredFonts.length === 0) {
           const empty = document.createElement('div');
           empty.style.padding = '8px';
           empty.style.fontSize = '10px';
@@ -4146,27 +4644,65 @@ class DropBoardManager {
           empty.textContent = `No font found matching "${query}". Hit Enter to use anyway.`;
           dropdownList.appendChild(empty);
         } else {
-          filtered.forEach(font => {
-            const item = document.createElement('div');
-            item.className = `node-font-dropdown-item ${font === node.fontFamily ? 'active' : ''}`;
-            const isSys = this.systemFonts && this.systemFonts.includes(font);
-            item.innerHTML = `
-              <span class="node-font-item-name" style="font-family: '${font}', sans-serif;">${font}</span>
-              <span class="node-font-item-badge">${isSys ? 'System' : 'Standard'}</span>
-            `;
-            item.addEventListener('mousedown', (e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              updateFont(font);
-            });
-            dropdownList.appendChild(item);
-          });
+          // Render initial lightweight batch for 0ms instantaneous load
+          appendFontBatch();
+        }
+      };
+
+      // Infinite scroll listener for progressive loading
+      dropdownList.addEventListener('scroll', () => {
+        if (dropdownList.scrollTop + dropdownList.clientHeight >= dropdownList.scrollHeight - 60) {
+          appendFontBatch();
+        }
+      });
+
+      const stepFont = (direction) => {
+        if (!currentFilteredFonts || currentFilteredFonts.length === 0) {
+          currentFilteredFonts = this.getAvailableFonts();
+        }
+        if (currentFilteredFonts.length === 0) return;
+
+        let curIdx = currentFilteredFonts.indexOf(node.fontFamily);
+        let nextIdx = curIdx + direction;
+        if (curIdx === -1) {
+          nextIdx = direction > 0 ? 0 : currentFilteredFonts.length - 1;
+        } else if (nextIdx >= currentFilteredFonts.length) {
+          nextIdx = 0;
+        } else if (nextIdx < 0) {
+          nextIdx = currentFilteredFonts.length - 1;
+        }
+
+        const nextFont = currentFilteredFonts[nextIdx];
+
+        // Ensure item batch is rendered so scroll into view works
+        while (renderedCount <= nextIdx && renderedCount < currentFilteredFonts.length) {
+          appendFontBatch();
+        }
+
+        if (!dropdownList.classList.contains('show')) {
+          dropdownList.classList.add('show');
+        }
+
+        updateFont(nextFont, false);
+
+        const targetEl = dropdownList.querySelector(`.node-font-dropdown-item[data-index="${nextIdx}"]`);
+        if (targetEl) {
+          targetEl.scrollIntoView({ block: 'nearest' });
         }
       };
 
       fontInput.addEventListener('focus', () => {
+        fontInput.select();
         renderDropdown(fontInput.value);
         dropdownList.classList.add('show');
+        const curIdx = currentFilteredFonts.indexOf(node.fontFamily);
+        if (curIdx >= 0) {
+          while (renderedCount <= curIdx && renderedCount < currentFilteredFonts.length) {
+            appendFontBatch();
+          }
+          const activeEl = dropdownList.querySelector(`.node-font-dropdown-item[data-index="${curIdx}"]`);
+          if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+        }
       });
 
       fontInput.addEventListener('input', () => {
@@ -4174,14 +4710,22 @@ class DropBoardManager {
         preview.style.fontFamily = `"${node.fontFamily}", sans-serif`;
         renderDropdown(fontInput.value);
         dropdownList.classList.add('show');
+        this.updateConnectedFontEffects();
         this.scheduleAutoSave();
       });
 
       fontInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          stepFont(1);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          stepFont(-1);
+        } else if (e.key === 'Enter') {
           e.preventDefault();
           dropdownList.classList.remove('show');
           fontInput.blur();
+          this.commitHistory('Change Font');
         } else if (e.key === 'Escape') {
           dropdownList.classList.remove('show');
         }
@@ -4195,6 +4739,14 @@ class DropBoardManager {
           renderDropdown('');
           dropdownList.classList.add('show');
           fontInput.focus();
+          const curIdx = currentFilteredFonts.indexOf(node.fontFamily);
+          if (curIdx >= 0) {
+            while (renderedCount <= curIdx && renderedCount < currentFilteredFonts.length) {
+              appendFontBatch();
+            }
+            const activeEl = dropdownList.querySelector(`.node-font-dropdown-item[data-index="${curIdx}"]`);
+            if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+          }
         }
       });
 
@@ -4257,7 +4809,17 @@ class DropBoardManager {
           daysBadge.textContent = '';
           return;
         }
-        const target = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+
+        if (isNaN(year) || isNaN(month) || isNaN(day) || year < 1900 || year > 2150) {
+          daysBadge.className = 'node-days-left-badge status-urgent';
+          daysBadge.textContent = 'Set Year';
+          return;
+        }
+
+        const target = new Date(year, month, day);
         target.setHours(0, 0, 0, 0);
         
         const diffTime = target.getTime() - today.getTime();
@@ -4306,12 +4868,20 @@ class DropBoardManager {
       body.appendChild(statusRow);
 
       const dateRow = document.createElement('div');
-      dateRow.className = 'node-field-row';
+      dateRow.className = 'node-field-row node-deadline-row';
       dateRow.innerHTML = `<span class="node-field-label">Target</span>`;
       const dateInput = document.createElement('input');
       dateInput.type = 'date';
       dateInput.className = 'node-deadline-input';
       dateInput.value = node.deadline;
+
+      dateInput.addEventListener('click', () => {
+        try {
+          if (typeof dateInput.showPicker === 'function') {
+            dateInput.showPicker();
+          }
+        } catch(e) {}
+      });
 
       updateDaysLeft();
 
@@ -4323,6 +4893,66 @@ class DropBoardManager {
       dateRow.appendChild(dateInput);
       dateRow.appendChild(daysBadge);
       body.appendChild(dateRow);
+
+      // Quick Date Presets Row (+3d, +1w, +2w, Calendar)
+      const presetsRow = document.createElement('div');
+      presetsRow.className = 'node-deadline-presets';
+
+      const setDateByDays = (days) => {
+        const d = new Date();
+        d.setDate(d.getDate() + days);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const dt = String(d.getDate()).padStart(2, '0');
+        const formatted = `${y}-${m}-${dt}`;
+        node.deadline = formatted;
+        dateInput.value = formatted;
+        updateDaysLeft();
+        this.scheduleAutoSave();
+        Toast.show(`Target set to ${d.toLocaleDateString()}`, 'info', 1600);
+      };
+
+      const btnPlus3 = document.createElement('button');
+      btnPlus3.className = 'node-date-preset-btn';
+      btnPlus3.textContent = '+3d';
+      btnPlus3.title = 'Set deadline 3 days from today';
+      btnPlus3.addEventListener('click', (e) => { e.stopPropagation(); setDateByDays(3); });
+
+      const btnPlus7 = document.createElement('button');
+      btnPlus7.className = 'node-date-preset-btn';
+      btnPlus7.textContent = '+1w';
+      btnPlus7.title = 'Set deadline 1 week from today';
+      btnPlus7.addEventListener('click', (e) => { e.stopPropagation(); setDateByDays(7); });
+
+      const btnPlus14 = document.createElement('button');
+      btnPlus14.className = 'node-date-preset-btn';
+      btnPlus14.textContent = '+2w';
+      btnPlus14.title = 'Set deadline 2 weeks from today';
+      btnPlus14.addEventListener('click', (e) => { e.stopPropagation(); setDateByDays(14); });
+
+      const btnCalendar = document.createElement('button');
+      btnCalendar.className = 'node-date-preset-btn btn-picker';
+      btnCalendar.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg><span>Pick</span>';
+      btnCalendar.title = 'Open Visual Calendar Picker';
+      btnCalendar.addEventListener('click', (e) => {
+        e.stopPropagation();
+        try {
+          if (typeof dateInput.showPicker === 'function') {
+            dateInput.showPicker();
+          } else {
+            dateInput.focus();
+          }
+        } catch(e) {
+          dateInput.focus();
+        }
+      });
+
+      presetsRow.appendChild(btnPlus3);
+      presetsRow.appendChild(btnPlus7);
+      presetsRow.appendChild(btnPlus14);
+      presetsRow.appendChild(btnCalendar);
+
+      body.appendChild(presetsRow);
     }
 
     nodeEl.appendChild(body);
@@ -4341,6 +4971,7 @@ class DropBoardManager {
     this.nodes.push(node);
     this.world.appendChild(nodeEl);
     this.renderConnections();
+    this.updateCardCount();
     return node;
   }
 
@@ -4462,11 +5093,13 @@ class DropBoardManager {
   }
 
   removeNode(node) {
+    this.recordPreState('Delete Node');
     if (node.element) node.element.remove();
     this.nodes = this.nodes.filter(n => n.id !== node.id);
     this.connections = this.connections.filter(c => c.fromNodeId !== node.id && c.toTargetId !== node.id);
     this.renderConnections();
-    this.scheduleAutoSave();
+    this.updateCardCount();
+    this.commitHistory('Delete Node');
     Toast.show(`Removed ${node.title}`, 'info');
   }
 
@@ -4774,6 +5407,58 @@ class DropBoardManager {
         pill.remove();
       }
     });
+
+    // Live update dynamic typography on any connected note nodes!
+    this.updateConnectedFontEffects();
+  }
+
+  updateConnectedFontEffects() {
+    const fontNodes = this.nodes.filter(n => n.type === 'font');
+    const noteNodes = this.nodes.filter(n => n.type === 'note');
+
+    noteNodes.forEach(note => {
+      const fontConn = this.connections.find(c => {
+        return (fontNodes.some(fn => fn.id === c.fromNodeId) && c.toTargetId === note.id) ||
+               (c.fromNodeId === note.id && fontNodes.some(fn => fn.id === c.toTargetId));
+      });
+
+      let appliedFont = '';
+      let sourceFontNode = null;
+      if (fontConn) {
+        sourceFontNode = fontNodes.find(fn => fn.id === fontConn.fromNodeId || fn.id === fontConn.toTargetId);
+        if (sourceFontNode && sourceFontNode.fontFamily) {
+          appliedFont = sourceFontNode.fontFamily;
+        }
+      }
+
+      if (note.element) {
+        const textarea = note.element.querySelector('.node-textarea');
+        if (textarea) {
+          textarea.style.fontFamily = appliedFont ? `"${appliedFont}", sans-serif` : '';
+        }
+        const chkLabels = note.element.querySelectorAll('.node-chk-label');
+        chkLabels.forEach(lbl => {
+          lbl.style.fontFamily = appliedFont ? `"${appliedFont}", sans-serif` : '';
+        });
+
+        let badge = note.element.querySelector('.node-active-font-badge');
+        if (sourceFontNode && appliedFont) {
+          if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'node-active-font-badge';
+            const typeBadge = note.element.querySelector('.prod-node-type-badge');
+            if (typeBadge) {
+              typeBadge.insertAdjacentElement('afterend', badge);
+            }
+          }
+          badge.textContent = appliedFont;
+          badge.title = `Font driven by: ${sourceFontNode.title} (${appliedFont})`;
+          badge.style.display = 'inline-block';
+        } else if (badge) {
+          badge.style.display = 'none';
+        }
+      }
+    });
   }
 
   // ===========================================================================
@@ -4965,6 +5650,9 @@ class DropBoardManager {
 
         if (c.element) {
           c.element.style.zIndex = c.zIndex;
+          c.element.style.transform = `translate(${c.x}px, ${c.y}px)`;
+          c.element.style.width = `${c.width}px`;
+          c.element.style.height = `${c.height}px`;
           this.applyCropTransform(c);
           this.updateCardGroupBadge(c);
         }
@@ -5083,7 +5771,32 @@ class DropBoardManager {
   // ===========================================================================
   // Serialization (Save & Load Board)
   // ===========================================================================
-  serialize() {
+  getCardImageData(card) {
+    if (card.isYouTube) return null;
+    if (card.imageData && typeof card.imageData === 'string' && card.imageData.startsWith('data:image/')) {
+      return card.imageData;
+    }
+    const img = card.element ? card.element.querySelector('img') : null;
+    if (img && img.complete && img.naturalWidth > 0) {
+      try {
+        const cvs = document.createElement('canvas');
+        cvs.width = img.naturalWidth;
+        cvs.height = img.naturalHeight;
+        const ctx = cvs.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const isPng = (card.url && card.url.toLowerCase().endsWith('.png')) || (card.localPath && card.localPath.toLowerCase().endsWith('.png'));
+        const format = isPng ? 'image/png' : 'image/jpeg';
+        const dataUrl = cvs.toDataURL(format, 0.90);
+        card.imageData = dataUrl;
+        return dataUrl;
+      } catch (e) {
+        console.warn('Canvas export skipped for card:', card.id, e);
+      }
+    }
+    return card.imageData || null;
+  }
+
+  serialize(embedImages = true) {
     return {
       version: 3,
       name: this.projectName || 'Untitled Project',
@@ -5092,6 +5805,7 @@ class DropBoardManager {
       cards: this.cards.map(c => ({
         id: c.id,
         url: c.url,
+        imageData: embedImages ? this.getCardImageData(c) : undefined,
         localPath: c.localPath,
         isYouTube: !!c.isYouTube,
         youtubeId: c.youtubeId || null,
@@ -5224,18 +5938,24 @@ class DropBoardManager {
       } else {
         data.cards.forEach(c => {
           const img = new Image();
-          let src = c.url;
-          if (c.localPath) {
+          let src = null;
+          // 1. If embedded imageData is present, use it directly (100% portable across computers / wiped cache)
+          if (c.imageData && typeof c.imageData === 'string' && c.imageData.startsWith('data:image/')) {
+            src = c.imageData;
+          } else if (c.localPath) {
             const slash = c.localPath.lastIndexOf('\\');
             const fname = slash >= 0 ? c.localPath.substring(slash + 1) : c.localPath;
             src = 'https://dropboard-cache.local/' + fname;
+            img.crossOrigin = 'anonymous';
+          } else {
+            src = c.url;
           }
-          img.src = src || c.url;
-
+          // Attach load and error listeners BEFORE setting src to guarantee no events are missed on fast data URLs
           img.onload = () => {
             const card = {
               id: c.id,
               url: c.url,
+              imageData: c.imageData || (src && src.startsWith('data:image/') ? src : null),
               localPath: c.localPath || '',
               localWebUrl: c.localWebUrl || '',
               isYouTube: !!c.isYouTube,
@@ -5261,17 +5981,77 @@ class DropBoardManager {
             this.cards.push(card);
             this.updateCardCount();
             this.updateGroupCounts();
+
+            // Pre-cache base64 imageData if not already set
+            if (!card.imageData && !card.isYouTube) {
+              try {
+                const cvs = document.createElement('canvas');
+                cvs.width = img.naturalWidth;
+                cvs.height = img.naturalHeight;
+                const ctx = cvs.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                const isPng = (card.url && card.url.toLowerCase().endsWith('.png')) || (card.localPath && card.localPath.toLowerCase().endsWith('.png'));
+                card.imageData = cvs.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.90);
+              } catch(e) {}
+            }
+
             onCardFinished();
           };
 
           img.onerror = () => {
+            // Fallback 1: If local path or url failed, but embedded imageData exists
+            if (c.imageData && img.src !== c.imageData) {
+              img.src = c.imageData;
+              return;
+            }
+            // Fallback 2: YouTube thumbnail fallback
             if (c.isYouTube && c.youtubeId && !img.dataset.fallbackTried) {
               img.dataset.fallbackTried = 'true';
               img.src = `https://img.youtube.com/vi/${c.youtubeId}/hqdefault.jpg`;
-            } else {
-              onCardFinished();
+              return;
             }
+            // Fallback 3: Even if image file was deleted from disk and no imageData exists,
+            // keep the card on board with a placeholder so groups, notes, and connections are preserved!
+            const fallbackCard = {
+              id: c.id,
+              url: c.url,
+              imageData: null,
+              localPath: c.localPath || '',
+              localWebUrl: c.localWebUrl || '',
+              isYouTube: !!c.isYouTube,
+              youtubeId: c.youtubeId || null,
+              youtubeUrl: c.youtubeUrl || null,
+              originalUrl: c.originalUrl || null,
+              crop: c.crop || { top: 0, right: 0, bottom: 0, left: 0 },
+              baseWidth: c.baseWidth || c.width || 320,
+              baseHeight: c.baseHeight || c.height || 240,
+              baseX: c.baseX !== undefined ? c.baseX : c.x,
+              baseY: c.baseY !== undefined ? c.baseY : c.y,
+              x: c.x,
+              y: c.y,
+              width: c.width || 320,
+              height: c.height || 240,
+              aspectRatio: c.aspectRatio || ((c.width || 320) / (c.height || 240)),
+              zIndex: ++this.highestZ,
+              sourceLabel: c.sourceLabel || (c.isYouTube ? 'YouTube Ref' : 'Reference'),
+              groupId: c.groupId || null,
+              element: null
+            };
+            const placeholderImg = new Image();
+            placeholderImg.src = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="${fallbackCard.width}" height="${fallbackCard.height}" viewBox="0 0 ${fallbackCard.width} ${fallbackCard.height}"><rect width="100%" height="100%" rx="8" fill="%23171b24" stroke="%23334155"/><text x="50%" y="45%" fill="%23ef4444" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle">Image File Missing</text><text x="50%" y="60%" fill="%2364748b" font-family="sans-serif" font-size="11" text-anchor="middle">(Cache was removed)</text></svg>`;
+            placeholderImg.onload = () => {
+              this.createCardDOM(fallbackCard, placeholderImg);
+              this.cards.push(fallbackCard);
+              this.updateCardCount();
+              this.updateGroupCounts();
+              onCardFinished();
+            };
           };
+
+          img.src = src || c.url;
+          if (img.complete && img.naturalWidth > 0) {
+            img.onload();
+          }
         });
       }
     } catch (err) {
@@ -5313,6 +6093,10 @@ class DropBoardManager {
 
   createNewProject(title = 'Untitled Project') {
     this.currentFilePath = null;
+    try {
+      localStorage.removeItem('dropboard_last_file_path');
+      localStorage.removeItem('dropboard_autosave_state');
+    } catch(e) {}
     this.clearAll(false);
     this.undoStack = [];
     this.redoStack = [];
@@ -5322,15 +6106,11 @@ class DropBoardManager {
     this.canvas.panY = window.innerHeight / 2;
     this.canvas.zoom = 1.0;
     this.canvas.updateTransform();
-    // Clear auto-saved crash cache so fresh project starts pristine
-    try {
-      localStorage.removeItem('dropboard_autosave_state');
-    } catch(e) {}
     Toast.show(`Created new project: "${this.projectName}"`, 'success');
   }
 
   saveProject(saveAs = false) {
-    const data = JSON.stringify(this.serialize(), null, 2);
+    const data = JSON.stringify(this.serialize(true), null, 2);
     if (!saveAs && this.currentFilePath) {
       // Direct fast save (overwrites existing file without prompt)
       NativeBridge.saveBoardDirect(data, this.currentFilePath);
@@ -5390,7 +6170,7 @@ class DropBoardManager {
 
     if (btnSaveFirst) {
       btnSaveFirst.addEventListener('click', () => {
-        const currentData = JSON.stringify(this.serialize(), null, 2);
+        const currentData = JSON.stringify(this.serialize(true), null, 2);
         NativeBridge.saveBoardDialog(currentData, this.projectName);
         const val = nameInput ? nameInput.value.trim() : '';
         this.createNewProject(val || 'Untitled Project');
@@ -5422,8 +6202,25 @@ class DropBoardManager {
     const selectDockPos = document.getElementById('settings-select-dock-pos');
     const selectDockStyle = document.getElementById('settings-select-dock-style');
 
+    const gridDockPos = document.getElementById('grid-dock-pos');
+    const gridDockStyle = document.getElementById('grid-dock-style');
+    const btnOpenCacheFolder = document.getElementById('btn-open-cache-folder');
+
     const tabBtns = modal ? modal.querySelectorAll('.settings-tab-btn') : [];
     const tabPanes = modal ? modal.querySelectorAll('.settings-tab-pane') : [];
+
+    const syncVisualSelectors = () => {
+      if (gridDockPos) {
+        gridDockPos.querySelectorAll('.visual-select-card').forEach(card => {
+          card.classList.toggle('active', card.dataset.value === this.dockPosition);
+        });
+      }
+      if (gridDockStyle) {
+        gridDockStyle.querySelectorAll('.visual-select-card').forEach(card => {
+          card.classList.toggle('active', card.dataset.value === this.dockStyle);
+        });
+      }
+    };
 
     const updateStats = () => {
       const statRefs = document.getElementById('stat-cards-count');
@@ -5448,6 +6245,7 @@ class DropBoardManager {
       if (selectDockStyle) {
         selectDockStyle.value = this.dockStyle;
       }
+      syncVisualSelectors();
       updateStats();
       if (modal) {
         modal.classList.add('show');
@@ -5473,25 +6271,60 @@ class DropBoardManager {
     }
 
     tabBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
         const targetTab = btn.getAttribute('data-tab');
         tabBtns.forEach(b => b.classList.remove('active'));
         tabPanes.forEach(p => p.classList.remove('active'));
         btn.classList.add('active');
         const targetPane = document.getElementById(targetTab);
-        if (targetPane) targetPane.classList.add('active');
+        if (targetPane) {
+          targetPane.classList.add('active');
+        }
       });
     });
+
+    if (gridDockPos) {
+      gridDockPos.querySelectorAll('.visual-select-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const val = card.dataset.value;
+          this.setDockPosition(val);
+          syncVisualSelectors();
+          Toast.show(`Toolbar: ${card.querySelector('strong').textContent}`, 'info');
+        });
+      });
+    }
+
+    if (gridDockStyle) {
+      gridDockStyle.querySelectorAll('.visual-select-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const val = card.dataset.value;
+          this.setDockStyle(val);
+          syncVisualSelectors();
+          Toast.show(`Mode: ${card.querySelector('strong').textContent}`, 'info');
+        });
+      });
+    }
+
+    if (btnOpenCacheFolder) {
+      btnOpenCacheFolder.addEventListener('click', () => {
+        NativeBridge.openCacheFolder();
+        Toast.show('Opened Image Cache folder in Explorer', 'info');
+      });
+    }
 
     if (selectDockPos) {
       selectDockPos.addEventListener('change', (e) => {
         this.setDockPosition(e.target.value);
+        syncVisualSelectors();
       });
     }
 
     if (selectDockStyle) {
       selectDockStyle.addEventListener('change', (e) => {
         this.setDockStyle(e.target.value);
+        syncVisualSelectors();
       });
     }
 
@@ -5517,7 +6350,7 @@ class DropBoardManager {
 
     if (btnSaveNow) {
       btnSaveNow.addEventListener('click', () => {
-        const currentData = JSON.stringify(this.serialize(), null, 2);
+        const currentData = JSON.stringify(this.serialize(true), null, 2);
         NativeBridge.saveBoardDialog(currentData, this.projectName);
       });
     }
@@ -5567,7 +6400,15 @@ class DropBoardManager {
         localStorage.removeItem('dropboard_autosave_state');
         return;
       }
-      const data = this.serialize();
+      const data = this.serialize(false);
+      if (this.currentFilePath) {
+        data.currentFilePath = this.currentFilePath;
+        try { localStorage.setItem('dropboard_last_file_path', this.currentFilePath); } catch(e) {}
+        try {
+          const fullData = JSON.stringify(this.serialize(true), null, 2);
+          NativeBridge.saveBoardDirect(fullData, this.currentFilePath);
+        } catch(e) {}
+      }
       localStorage.setItem('dropboard_autosave_state', JSON.stringify(data));
       const counter = document.getElementById('ref-counter');
       if (counter && !counter.textContent.includes('• Saved')) {
@@ -5584,9 +6425,19 @@ class DropBoardManager {
 
   loadAutoSave() {
     try {
+      const lastPath = localStorage.getItem('dropboard_last_file_path');
+      if (lastPath) {
+        NativeBridge.loadBoardDirect(lastPath);
+        return;
+      }
       const saved = localStorage.getItem('dropboard_autosave_state');
       if (saved) {
-        this.deserialize(saved, true);
+        const parsed = typeof saved === 'string' ? JSON.parse(saved) : saved;
+        const filePath = (parsed && parsed.currentFilePath) || null;
+        this.deserialize(parsed, filePath);
+        if (filePath) {
+          this.currentFilePath = filePath;
+        }
         Toast.show('Restored previous board session', 'info', 2200);
       }
     } catch (e) {

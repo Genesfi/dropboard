@@ -1,0 +1,42 @@
+# Visual Studio / MSBuild
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.opendb
+
+# Intermediate build artifacts (if building outside tracked build dir)
+x64/
+Debug/
+Release/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.idb
+
+# C++ Test & Coverage
+*.coverage
+*.coveragexml
+
+# CMake user files
+CMakeUserPresets.json
+CMakeSettings.json
+
+# Local App & Cache Data
+*.log
+*.tmp
+*.dropboard.backup
+AppData/
+
+# OS specific files
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# Editor / IDE directories
+.vscode/
+.idea/

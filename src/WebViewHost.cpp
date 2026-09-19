@@ -13,30 +13,51 @@
 #include <chrono>
 
 #include <winhttp.h>
+#include <wincrypt.h>
 #include <regex>
 
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "crypt32.lib")
 
 using namespace Microsoft::WRL;
 
 // Simple JSON string parser helper for safe extraction
 namespace JsonUtil {
     std::wstring EscapeString(const std::wstring& str) {
-        std::wstringstream ss;
+        std::wstring res;
+        res.reserve(str.length() + str.length() / 8);
         for (wchar_t c : str) {
             switch (c) {
-                case L'\"': ss << L"\\\""; break;
-                case L'\\': ss << L"\\\\"; break;
-                case L'\b': ss << L"\\b"; break;
-                case L'\f': ss << L"\\f"; break;
-                case L'\n': ss << L"\\n"; break;
-                case L'\r': ss << L"\\r"; break;
-                case L'\t': ss << L"\\t"; break;
-                default: ss << c; break;
+                case L'\"': res += L"\\\""; break;
+                case L'\\': res += L"\\\\"; break;
+                case L'\b': res += L"\\b"; break;
+                case L'\f': res += L"\\f"; break;
+                case L'\n': res += L"\\n"; break;
+                case L'\r': res += L"\\r"; break;
+                case L'\t': res += L"\\t"; break;
+                default: res += c; break;
             }
         }
-        return ss.str();
+        return res;
+    }
+
+    std::string WideToUtf8(const std::wstring& wstr) {
+        if (wstr.empty()) return std::string();
+        int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.length(), nullptr, 0, nullptr, nullptr);
+        if (sizeNeeded <= 0) return std::string();
+        std::string strTo(sizeNeeded, 0);
+        WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.length(), &strTo[0], sizeNeeded, nullptr, nullptr);
+        return strTo;
+    }
+
+    std::wstring Utf8ToWide(const std::string& str) {
+        if (str.empty()) return std::wstring();
+        int sizeNeeded = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), nullptr, 0);
+        if (sizeNeeded <= 0) return std::wstring();
+        std::wstring wstrTo(sizeNeeded, 0);
+        MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.length(), &wstrTo[0], sizeNeeded);
+        return wstrTo;
     }
 
     std::wstring ExtractString(const std::wstring& json, const std::wstring& key) {
@@ -51,6 +72,9 @@ namespace JsonUtil {
         if (quoteStart == std::wstring::npos) return L"";
 
         std::wstring result;
+        if (json.length() > quoteStart + 1) {
+            result.reserve(json.length() - quoteStart);
+        }
         bool inEscape = false;
         for (size_t i = quoteStart + 1; i < json.length(); ++i) {
             wchar_t c = json[i];
@@ -360,6 +384,183 @@ static std::wstring ExtractYouTubeVideoId(const std::wstring& url) {
     return L"";
 }
 
+static std::string Base64Encode(const std::vector<BYTE>& data) {
+    static const char s_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string ret;
+    int i = 0;
+    BYTE a3[3], a4[4];
+    for (BYTE b : data) {
+        a3[i++] = b;
+        if (i == 3) {
+            a4[0] = (a3[0] & 0xfc) >> 2;
+            a4[1] = ((a3[0] & 0x03) << 4) + ((a3[1] & 0xf0) >> 4);
+            a4[2] = ((a3[1] & 0x0f) << 2) + ((a3[2] & 0xc0) >> 6);
+            a4[3] = a3[2] & 0x3f;
+            for (i = 0; i < 4; i++) ret += s_chars[a4[i]];
+            i = 0;
+        }
+    }
+    if (i) {
+        for (int j = i; j < 3; j++) a3[j] = '\0';
+        a4[0] = (a3[0] & 0xfc) >> 2;
+        a4[1] = ((a3[0] & 0x03) << 4) + ((a3[1] & 0xf0) >> 4);
+        a4[2] = ((a3[1] & 0x0f) << 2) + ((a3[2] & 0xc0) >> 6);
+        for (int j = 0; j < i + 1; j++) ret += s_chars[a4[j]];
+        while (i++ < 3) ret += '=';
+    }
+    return ret;
+}
+
+static std::wstring FileToBase64DataUrl(const std::wstring& filePath) {
+    if (filePath.empty()) return L"";
+    HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return L"";
+    DWORD fileSize = GetFileSize(hFile, nullptr);
+    if (fileSize == 0 || fileSize == INVALID_FILE_SIZE) {
+        CloseHandle(hFile);
+        return L"";
+    }
+    std::vector<BYTE> buffer(fileSize);
+    DWORD bytesRead = 0;
+    ReadFile(hFile, buffer.data(), fileSize, &bytesRead, nullptr);
+    CloseHandle(hFile);
+    if (bytesRead == 0) return L"";
+    std::string b64 = Base64Encode(buffer);
+    std::wstring mime = L"image/jpeg";
+    if (filePath.length() >= 4) {
+        std::wstring ext = filePath.substr(filePath.length() - 4);
+        for (auto& c : ext) c = towlower(c);
+        if (ext == L".png") mime = L"image/png";
+        else if (ext == L".gif") mime = L"image/gif";
+        else if (ext == L"webp") mime = L"image/webp";
+    }
+    return L"data:" + mime + L";base64," + std::wstring(b64.begin(), b64.end());
+}
+
+static std::wstring EnsureEmbeddedImagesInBoardJson(const std::wstring& json) {
+    std::wstring result = json;
+    size_t cardPos = 0;
+    while ((cardPos = result.find(L"\"localPath\":", cardPos)) != std::wstring::npos) {
+        size_t valStart = result.find(L'\"', cardPos + 12);
+        if (valStart == std::wstring::npos) break;
+        size_t valEnd = result.find(L'\"', valStart + 1);
+        if (valEnd == std::wstring::npos) break;
+        std::wstring rawPath = result.substr(valStart + 1, valEnd - valStart - 1);
+        
+        std::wstring unescapedPath;
+        for (size_t i = 0; i < rawPath.length(); ++i) {
+            if (rawPath[i] == L'\\' && i + 1 < rawPath.length() && rawPath[i+1] == L'\\') {
+                unescapedPath += L'\\';
+                ++i;
+            } else {
+                unescapedPath += rawPath[i];
+            }
+        }
+        
+        size_t objStart = result.rfind(L'{', cardPos);
+        if (objStart != std::wstring::npos) {
+            size_t depth = 0;
+            size_t objEnd = std::wstring::npos;
+            for (size_t i = objStart; i < result.length(); ++i) {
+                if (result[i] == L'{') depth++;
+                else if (result[i] == L'}') {
+                    depth--;
+                    if (depth == 0) {
+                        objEnd = i + 1;
+                        break;
+                    }
+                }
+            }
+            if (objEnd != std::wstring::npos) {
+                std::wstring cardObj = result.substr(objStart, objEnd - objStart);
+                bool hasImageData = (cardObj.find(L"data:image/") != std::wstring::npos);
+                if (!hasImageData && !unescapedPath.empty()) {
+                    std::wstring b64 = FileToBase64DataUrl(unescapedPath);
+                    if (!b64.empty()) {
+                        size_t imgDataPos = cardObj.find(L"\"imageData\":");
+                        if (imgDataPos != std::wstring::npos) {
+                            size_t colon = cardObj.find(L':', imgDataPos);
+                            size_t valStart = cardObj.find_first_not_of(L" \t\r\n", colon + 1);
+                            if (valStart != std::wstring::npos) {
+                                size_t valEnd = std::wstring::npos;
+                                if (cardObj[valStart] == L'\"') {
+                                    for (size_t k = valStart + 1; k < cardObj.length(); ++k) {
+                                        if (cardObj[k] == L'\\' && k + 1 < cardObj.length()) {
+                                            ++k;
+                                        } else if (cardObj[k] == L'\"') {
+                                            valEnd = k + 1;
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    valEnd = cardObj.find_first_of(L",}\r\n", valStart);
+                                }
+                                if (valEnd != std::wstring::npos) {
+                                    cardObj.replace(valStart, valEnd - valStart, L"\"" + JsonUtil::EscapeString(b64) + L"\"");
+                                }
+                            }
+                        } else {
+                            cardObj.insert(1, L"\n      \"imageData\": \"" + JsonUtil::EscapeString(b64) + L"\",");
+                        }
+                        result.replace(objStart, objEnd - objStart, cardObj);
+                        cardPos = objStart + cardObj.length();
+                        continue;
+                    }
+                }
+            }
+        }
+        cardPos = valEnd + 1;
+    }
+    return result;
+}
+
+static bool DecodeBase64ToFile(const std::string& base64Str, const std::wstring& destFilePath) {
+    DWORD binarySize = 0;
+    if (!CryptStringToBinaryA(base64Str.c_str(), (DWORD)base64Str.length(), CRYPT_STRING_BASE64, nullptr, &binarySize, nullptr, nullptr)) {
+        return false;
+    }
+    if (binarySize == 0) return false;
+    std::vector<BYTE> buffer(binarySize);
+    if (!CryptStringToBinaryA(base64Str.c_str(), (DWORD)base64Str.length(), CRYPT_STRING_BASE64, buffer.data(), &binarySize, nullptr, nullptr)) {
+        return false;
+    }
+    std::ofstream out(destFilePath, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) return false;
+    out.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+    out.close();
+    return true;
+}
+
+static std::wstring EnsureDiskFileForExternalApp(const std::wstring& filePath, const std::wstring& imageData, const std::wstring& cacheDir) {
+    if (!filePath.empty() && GetFileAttributesW(filePath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        return filePath;
+    }
+    if (imageData.empty()) return filePath;
+    size_t comma = imageData.find(L',');
+    if (comma == std::wstring::npos) return filePath;
+    std::wstring mimeHeader = imageData.substr(0, comma);
+    std::wstring b64 = imageData.substr(comma + 1);
+    std::string b64Utf8 = JsonUtil::WideToUtf8(b64);
+    std::wstring ext = L".jpg";
+    if (mimeHeader.find(L"png") != std::wstring::npos) ext = L".png";
+    else if (mimeHeader.find(L"gif") != std::wstring::npos) ext = L".gif";
+    else if (mimeHeader.find(L"webp") != std::wstring::npos) ext = L".webp";
+
+    std::wstring fname;
+    if (!filePath.empty()) {
+        size_t slash = filePath.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) fname = filePath.substr(slash + 1);
+        else fname = filePath;
+    }
+    if (fname.empty()) {
+        static uint64_t s_c = 0;
+        fname = L"export_" + std::to_wstring(GetTickCount64()) + L"_" + std::to_wstring(++s_c) + ext;
+    }
+    std::wstring outPath = cacheDir + L"\\" + fname;
+    DecodeBase64ToFile(b64Utf8, outPath);
+    return outPath;
+}
+
 void WebViewHost::ProcessAddImage(const std::wstring& url, const std::wstring& title) {
     std::wstring ytId = ExtractYouTubeVideoId(url);
     bool isYouTube = !ytId.empty();
@@ -382,6 +583,7 @@ void WebViewHost::ProcessAddImage(const std::wstring& url, const std::wstring& t
     std::wstring localWebUrl = localFileName.empty() ? L"" : (L"https://dropboard-cache.local/" + localFileName);
 
     std::wstring ytVideoUrl = isYouTube ? (L"https://www.youtube.com/watch?v=" + ytId) : L"";
+    std::wstring b64Data = FileToBase64DataUrl(localPath);
 
     std::wstringstream resp;
     resp << L"{\"type\":\"external_image_added\","
@@ -390,6 +592,7 @@ void WebViewHost::ProcessAddImage(const std::wstring& url, const std::wstring& t
          << L"\"title\":\"" << JsonUtil::EscapeString(title) << L"\","
          << L"\"localPath\":\"" << JsonUtil::EscapeString(localPath) << L"\","
          << L"\"localWebUrl\":\"" << JsonUtil::EscapeString(localWebUrl) << L"\","
+         << L"\"imageData\":\"" << JsonUtil::EscapeString(b64Data) << L"\","
          << L"\"isYouTube\":" << (isYouTube ? L"true" : L"false") << L","
          << L"\"youtubeId\":\"" << JsonUtil::EscapeString(ytId) << L"\","
          << L"\"youtubeUrl\":\"" << JsonUtil::EscapeString(ytVideoUrl) << L"\"}";
@@ -681,17 +884,22 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
         }
         std::wstring localWebUrl = localFileName.empty() ? L"" : (L"https://dropboard-cache.local/" + localFileName);
 
+        std::wstring b64Data = FileToBase64DataUrl(localPath);
+
         std::wstringstream resp;
         resp << L"{\"type\":\"download_completed\","
              << L"\"id\":\"" << JsonUtil::EscapeString(id) << L"\","
              << L"\"success\":" << (!localPath.empty() ? L"true" : L"false") << L","
              << L"\"resolvedUrl\":\"" << JsonUtil::EscapeString(resolvedUrl) << L"\","
              << L"\"localPath\":\"" << JsonUtil::EscapeString(localPath) << L"\","
-             << L"\"localWebUrl\":\"" << JsonUtil::EscapeString(localWebUrl) << L"\"}";
+             << L"\"localWebUrl\":\"" << JsonUtil::EscapeString(localWebUrl) << L"\","
+             << L"\"imageData\":\"" << JsonUtil::EscapeString(b64Data) << L"\"}";
         PostMessageToWeb(resp.str());
     }
     else if (action == L"copy_file_to_clipboard") {
         std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
+        std::wstring imageData = JsonUtil::ExtractString(json, L"imageData");
+        filePath = EnsureDiskFileForExternalApp(filePath, imageData, GetCacheDirectory());
         bool ok = ExternalAppIntegration::CopyFileToClipboard(m_hWnd, filePath);
         std::wstringstream resp;
         resp << L"{\"type\":\"clipboard_result\",\"success\":" << (ok ? L"true" : L"false") << L"}";
@@ -699,15 +907,21 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
     }
     else if (action == L"reveal_in_explorer") {
         std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
+        std::wstring imageData = JsonUtil::ExtractString(json, L"imageData");
+        filePath = EnsureDiskFileForExternalApp(filePath, imageData, GetCacheDirectory());
         ExternalAppIntegration::RevealInExplorer(filePath);
     }
     else if (action == L"open_default") {
         std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
+        std::wstring imageData = JsonUtil::ExtractString(json, L"imageData");
+        filePath = EnsureDiskFileForExternalApp(filePath, imageData, GetCacheDirectory());
         std::wstring msg;
         ExternalAppIntegration::OpenWithDefaultApp(filePath, msg);
     }
     else if (action == L"send_to_ae") {
         std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
+        std::wstring imageData = JsonUtil::ExtractString(json, L"imageData");
+        filePath = EnsureDiskFileForExternalApp(filePath, imageData, GetCacheDirectory());
         std::wstring msg;
         bool ok = ExternalAppIntegration::SendToAfterEffects(filePath, msg);
         std::wstringstream resp;
@@ -719,6 +933,8 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
     }
     else if (action == L"send_to_photoshop") {
         std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
+        std::wstring imageData = JsonUtil::ExtractString(json, L"imageData");
+        filePath = EnsureDiskFileForExternalApp(filePath, imageData, GetCacheDirectory());
         std::wstring msg;
         bool ok = ExternalAppIntegration::SendToPhotoshop(filePath, msg);
         std::wstringstream resp;
@@ -731,6 +947,8 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
     else if (action == L"send_to_custom") {
         std::wstring exePath = JsonUtil::ExtractString(json, L"exePath");
         std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
+        std::wstring imageData = JsonUtil::ExtractString(json, L"imageData");
+        filePath = EnsureDiskFileForExternalApp(filePath, imageData, GetCacheDirectory());
         std::wstring msg;
         bool ok = ExternalAppIntegration::SendToCustomApp(exePath, filePath, msg);
         std::wstringstream resp;
@@ -777,9 +995,11 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
         ofn.Flags = OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT;
 
         if (GetSaveFileNameW(&ofn)) {
-            std::wofstream out(ofn.lpstrFile, std::ios::trunc);
+            std::wstring embeddedData = EnsureEmbeddedImagesInBoardJson(data);
+            std::string utf8Data = JsonUtil::WideToUtf8(embeddedData);
+            std::ofstream out(ofn.lpstrFile, std::ios::binary | std::ios::trunc);
             if (out.is_open()) {
-                out << data;
+                out.write(utf8Data.data(), utf8Data.size());
                 out.close();
                 std::wstringstream resp;
                 resp << L"{\"type\":\"board_saved\",\"success\":true,\"filePath\":\""
@@ -792,9 +1012,11 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
         std::wstring data = JsonUtil::ExtractString(json, L"data");
         std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
         if (!filePath.empty()) {
-            std::wofstream out(filePath, std::ios::trunc);
+            std::wstring embeddedData = EnsureEmbeddedImagesInBoardJson(data);
+            std::string utf8Data = JsonUtil::WideToUtf8(embeddedData);
+            std::ofstream out(filePath, std::ios::binary | std::ios::trunc);
             if (out.is_open()) {
-                out << data;
+                out.write(utf8Data.data(), utf8Data.size());
                 out.close();
                 std::wstringstream resp;
                 resp << L"{\"type\":\"board_saved\",\"success\":true,\"direct\":true,\"filePath\":\""
@@ -818,15 +1040,38 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
         ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
 
         if (GetOpenFileNameW(&ofn)) {
-            std::wifstream in(ofn.lpstrFile);
+            std::ifstream in(ofn.lpstrFile, std::ios::binary);
             if (in.is_open()) {
-                std::wstringstream ss;
+                std::stringstream ss;
                 ss << in.rdbuf();
                 in.close();
+                std::wstring wContent = JsonUtil::Utf8ToWide(ss.str());
                 std::wstringstream resp;
                 resp << L"{\"type\":\"board_loaded\",\"success\":true,\"filePath\":\""
                      << JsonUtil::EscapeString(ofn.lpstrFile) << L"\",\"content\":\""
-                     << JsonUtil::EscapeString(ss.str()) << L"\"}";
+                     << JsonUtil::EscapeString(wContent) << L"\"}";
+                PostMessageToWeb(resp.str());
+            }
+        }
+    }
+    else if (action == L"load_board_direct") {
+        std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
+        if (!filePath.empty()) {
+            std::ifstream in(filePath, std::ios::binary);
+            if (in.is_open()) {
+                std::stringstream ss;
+                ss << in.rdbuf();
+                in.close();
+                std::wstring wContent = JsonUtil::Utf8ToWide(ss.str());
+                std::wstringstream resp;
+                resp << L"{\"type\":\"board_loaded\",\"success\":true,\"direct\":true,\"filePath\":\""
+                     << JsonUtil::EscapeString(filePath) << L"\",\"content\":\""
+                     << JsonUtil::EscapeString(wContent) << L"\"}";
+                PostMessageToWeb(resp.str());
+            } else {
+                std::wstringstream resp;
+                resp << L"{\"type\":\"board_loaded\",\"success\":false,\"filePath\":\""
+                     << JsonUtil::EscapeString(filePath) << L"\",\"error\":\"Cannot open file\"}";
                 PostMessageToWeb(resp.str());
             }
         }
