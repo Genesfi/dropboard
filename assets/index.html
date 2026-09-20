@@ -382,9 +382,9 @@
         <h2>Drop Images Here</h2>
         <p>Drag & drop directly from <strong>Pinterest</strong>, web browsers, or your computer.</p>
         <div class="shortcut-pills">
-          <span class="pill"><kbd>Ctrl</kbd> + <kbd>V</kbd> Paste from Clipboard</span>
-          <span class="pill"><kbd>Space</kbd> + Drag Pan Canvas</span>
-          <span class="pill"><kbd>Scroll</kbd> Zoom</span>
+          <span class="pill"><kbd>Ctrl</kbd> + <kbd>V</kbd> Paste</span>
+          <span class="pill"><kbd>2-Finger</kbd> / <kbd>Space</kbd> Pan</span>
+          <span class="pill"><kbd>Pinch</kbd> / <kbd>Scroll</kbd> Zoom</span>
         </div>
       </div>
     </div>
@@ -402,7 +402,7 @@
       <button class="hud-btn hud-reset" id="btn-zoom-reset" title="Reset View">Fit</button>
     </div>
     <div class="hud-pill hud-hint">
-      <span>Middle click or <kbd>Space</kbd> to pan</span>
+      <span>2-Finger swipe, Middle click, or <kbd>Space</kbd> to pan</span>
     </div>
   </footer>
 
@@ -712,6 +712,7 @@
       </div>
       <div class="settings-tabs">
         <button class="settings-tab-btn active" data-tab="tab-general">General & Auto-Save</button>
+        <button class="settings-tab-btn" data-tab="tab-navigation">Navigation & Touchpad</button>
         <button class="settings-tab-btn" data-tab="tab-toolbar">Toolbar & Layout</button>
         <button class="settings-tab-btn" data-tab="tab-shortcuts">Keyboard Shortcuts</button>
         <button class="settings-tab-btn" data-tab="tab-storage">Storage & Cache</button>
@@ -739,6 +740,120 @@
                 <span>Save standalone project file to your disk or cloud drive</span>
               </div>
               <button class="modal-btn btn-outline btn-sm" id="settings-btn-save-now">Save Project (Ctrl+S)</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab: Navigation & Touchpad -->
+        <div class="settings-tab-pane" id="tab-navigation">
+          <div class="settings-section">
+            <div class="settings-info" style="margin-bottom: 12px;">
+              <strong>Input & Navigation Mode</strong>
+              <span>Choose how you prefer to navigate the canvas using a laptop touchpad or mouse.</span>
+            </div>
+
+            <div class="visual-select-grid" id="grid-nav-mode">
+              <!-- Card 1: macOS Style -->
+              <div class="visual-select-card active" data-value="macos">
+                <div class="v-preview-box">
+                  <svg viewBox="0 0 36 26" width="36" height="26" fill="none">
+                    <!-- MacBook Display Lid Open -->
+                    <rect x="5" y="2" width="26" height="15" rx="2" stroke="#a855f7" stroke-width="1.2" fill="rgba(168, 85, 247, 0.08)"/>
+                    <line x1="16" y1="3.5" x2="20" y2="3.5" stroke="#a855f7" stroke-width="1" stroke-linecap="round"/>
+                    <!-- MacBook Aluminium Base -->
+                    <path d="M2 18h32a2 2 0 0 1 2 2v1H0v-1a2 2 0 0 1 2-2z" fill="rgba(168, 85, 247, 0.2)" stroke="#a855f7" stroke-width="1.2"/>
+                    <!-- Magic Trackpad Outline -->
+                    <rect x="13" y="19" width="10" height="2" rx="0.5" fill="#c084fc"/>
+                    <!-- 2-Finger Touch Dots & Natural Gesture -->
+                    <circle cx="15" cy="8.5" r="1.4" fill="#e9d5ff"/>
+                    <circle cx="21" cy="8.5" r="1.4" fill="#e9d5ff"/>
+                    <path d="M12 8.5h-1.5m15 0h1.5" stroke="#c084fc" stroke-width="1" stroke-linecap="round"/>
+                  </svg>
+                </div>
+                <div class="v-card-text">
+                  <strong>macOS Trackpad</strong>
+                  <small>Natural Pan & Pinch Zoom</small>
+                </div>
+              </div>
+
+              <!-- Card 2: Windows PC Style -->
+              <div class="visual-select-card" data-value="windows">
+                <div class="v-preview-box">
+                  <svg viewBox="0 0 36 26" width="36" height="26" fill="none">
+                    <!-- Windows Laptop Screen -->
+                    <rect x="5" y="2" width="26" height="15" rx="1.5" stroke="#38bdf8" stroke-width="1.2" fill="rgba(56, 189, 248, 0.08)"/>
+                    <!-- Windows 4-Tile Logo -->
+                    <rect x="16.5" y="6.5" width="2" height="2" fill="#38bdf8"/>
+                    <rect x="19" y="6.5" width="2" height="2" fill="#38bdf8"/>
+                    <rect x="16.5" y="9" width="2" height="2" fill="#38bdf8"/>
+                    <rect x="19" y="9" width="2" height="2" fill="#38bdf8"/>
+                    <!-- Laptop Keyboard Base -->
+                    <path d="M1 18h34a1.5 1.5 0 0 1 1.5 1.5v1.5H-0.5v-1.5A1.5 1.5 0 0 1 1 18z" fill="rgba(56, 189, 248, 0.2)" stroke="#38bdf8" stroke-width="1.2"/>
+                    <!-- Precision Touchpad with Click Split -->
+                    <rect x="13" y="19" width="10" height="2.5" rx="0.5" stroke="#38bdf8" stroke-width="0.8" fill="rgba(56, 189, 248, 0.3)"/>
+                    <line x1="18" y1="19" x2="18" y2="21.5" stroke="#38bdf8" stroke-width="0.6"/>
+                  </svg>
+                </div>
+                <div class="v-card-text">
+                  <strong>Windows Precision</strong>
+                  <small>Standard PC Pan & Zoom</small>
+                </div>
+              </div>
+
+              <!-- Card 3: Classic Mouse Wheel -->
+              <div class="visual-select-card" data-value="mouse">
+                <div class="v-preview-box">
+                  <svg viewBox="0 0 36 26" width="36" height="26" fill="none">
+                    <!-- Mouse Body Silhouette -->
+                    <rect x="11" y="2" width="14" height="22" rx="7" stroke="#10b981" stroke-width="1.2" fill="rgba(16, 185, 129, 0.08)"/>
+                    <!-- Left/Right Click Divider -->
+                    <line x1="18" y1="2" x2="18" y2="10" stroke="#10b981" stroke-width="1"/>
+                    <!-- Illuminated Scroll Wheel -->
+                    <rect x="16.5" y="5" width="3" height="6" rx="1.5" fill="#10b981"/>
+                    <!-- Scroll Motion Tick Marks -->
+                    <path d="M18 3.5v-1m0 11.5v-1" stroke="#6ee7b7" stroke-width="1" stroke-linecap="round"/>
+                  </svg>
+                </div>
+                <div class="v-card-text">
+                  <strong>Classic Mouse Wheel</strong>
+                  <small>Wheel Zooms (PureRef)</small>
+                </div>
+              </div>
+            </div>
+
+            <input type="hidden" id="settings-select-nav-mode" value="macos" />
+
+            <div class="settings-row" style="margin-top: 18px;">
+              <div class="settings-info">
+                <strong>Touchpad Pan Sensitivity</strong>
+                <span>Adjust movement speed when swiping with 2 fingers</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="range" id="settings-pan-sensitivity" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 130px; accent-color: #38bdf8;" />
+                <span id="pan-sens-label" style="font-size: 11.5px; font-weight: 600; color: #38bdf8; min-width: 32px;">1.0x</span>
+              </div>
+            </div>
+
+            <div class="settings-row">
+              <div class="settings-info">
+                <strong>Touchpad Pinch Zoom Sensitivity</strong>
+                <span>Fine-tune smoothness and speed of pinch-to-zoom</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="range" id="settings-zoom-sensitivity" min="0.5" max="2.0" step="0.1" value="1.0" style="width: 130px; accent-color: #38bdf8;" />
+                <span id="zoom-sens-label" style="font-size: 11.5px; font-weight: 600; color: #38bdf8; min-width: 32px;">1.0x</span>
+              </div>
+            </div>
+
+            <div class="settings-row">
+              <div class="settings-info">
+                <strong>Invert 2-Finger Pan Direction</strong>
+                <span>Reverse canvas scrolling direction for 2-finger touchpad gestures</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settings-toggle-invert-pan">
+                <span class="toggle-slider"></span>
+              </label>
             </div>
           </div>
         </div>
@@ -847,9 +962,13 @@
           </div>
         </div>
 
-        <!-- Tab 2: Keyboard Shortcuts -->
+        <!-- Tab: Keyboard & Touchpad Shortcuts -->
         <div class="settings-tab-pane" id="tab-shortcuts">
           <div class="shortcuts-grid">
+            <div class="shortcut-item"><span class="shortcut-desc">Touchpad Pan Canvas</span><span class="shortcut-keys">2-Finger Swipe</span></div>
+            <div class="shortcut-item"><span class="shortcut-desc">Touchpad Zoom View</span><span class="shortcut-keys">2-Finger Pinch</span></div>
+            <div class="shortcut-item"><span class="shortcut-desc">Mouse Pan Canvas</span><span class="shortcut-keys"><kbd>Space</kbd> + Drag / Middle-Click</span></div>
+            <div class="shortcut-item"><span class="shortcut-desc">Mouse Zoom View</span><span class="shortcut-keys">Scroll Wheel / <kbd>Ctrl</kbd> + Scroll</span></div>
             <div class="shortcut-item"><span class="shortcut-desc">Duplicate Selection</span><span class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>D</kbd></span></div>
             <div class="shortcut-item"><span class="shortcut-desc">New Project</span><span class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>N</kbd></span></div>
             <div class="shortcut-item"><span class="shortcut-desc">Save Project</span><span class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>S</kbd></span></div>
@@ -858,8 +977,6 @@
             <div class="shortcut-item"><span class="shortcut-desc">Delete Selected</span><span class="shortcut-keys"><kbd>Delete</kbd> / <kbd>Backspace</kbd></span></div>
             <div class="shortcut-item"><span class="shortcut-desc">Quick Node Palette</span><span class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>Space</kbd> or <kbd>Shift</kbd> + <kbd>A</kbd></span></div>
             <div class="shortcut-item"><span class="shortcut-desc">Undo / Redo</span><span class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>Z</kbd> / <kbd>Ctrl</kbd> + <kbd>Y</kbd></span></div>
-            <div class="shortcut-item"><span class="shortcut-desc">Pan Canvas</span><span class="shortcut-keys"><kbd>Space</kbd> + Drag or Middle-Click</span></div>
-            <div class="shortcut-item"><span class="shortcut-desc">Zoom View</span><span class="shortcut-keys">Scroll Wheel</span></div>
             <div class="shortcut-item"><span class="shortcut-desc">Reset Opacity 100%</span><span class="shortcut-keys"><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>0</kbd></span></div>
             <div class="shortcut-item"><span class="shortcut-desc">Clear Selection</span><span class="shortcut-keys"><kbd>Esc</kbd></span></div>
           </div>

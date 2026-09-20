@@ -50,8 +50,10 @@ DropBoard is a high-performance, GPU-accelerated reference board and creative pr
 
 | Shortcut | Action |
 | :--- | :--- |
-| <kbd>Space</kbd> + Drag / Middle Click | Pan Canvas |
-| <kbd>Mouse Wheel</kbd> | Smooth Zoom In / Out |
+| **Touchpad 2-Finger Swipe** | Pan Canvas in 2D (Smooth 60/120fps) |
+| **Touchpad 2-Finger Pinch** | Smooth Pinch Zoom In / Out at Cursor |
+| <kbd>Space</kbd> + Drag / Middle Click | Pan Canvas (Mouse) |
+| <kbd>Mouse Wheel</kbd> / <kbd>Ctrl</kbd> + Wheel | Zoom In / Out (Mouse) |
 | <kbd>Ctrl</kbd> + <kbd>V</kbd> | Paste Image or URL from Clipboard |
 | <kbd>Ctrl</kbd> + <kbd>D</kbd> | Duplicate Selected Items (Preserves Cable Connections) |
 | <kbd>Ctrl</kbd> + <kbd>A</kbd> | Select All (Cards, Groups, Nodes) |

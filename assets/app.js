@@ -91,6 +91,29 @@ class CanvasEngine {
     this.panStartY = 0;
     this.spacePressed = false;
 
+    // Navigation & Touchpad Configuration
+    this.navMode = 'macos'; // 'macos' | 'windows' | 'mouse'
+    this.panSensitivity = 1.0;
+    this.zoomSensitivity = 1.0;
+    this.invertPan = false;
+
+    try {
+      const savedMode = localStorage.getItem('dropboard_nav_mode');
+      if (savedMode) {
+        if (savedMode === 'auto' || savedMode === 'touchpad') {
+          this.navMode = 'macos';
+        } else {
+          this.navMode = savedMode;
+        }
+      }
+      const savedPanSens = localStorage.getItem('dropboard_pan_sens');
+      if (savedPanSens) this.panSensitivity = parseFloat(savedPanSens) || 1.0;
+      const savedZoomSens = localStorage.getItem('dropboard_zoom_sens');
+      if (savedZoomSens) this.zoomSensitivity = parseFloat(savedZoomSens) || 1.0;
+      const savedInvert = localStorage.getItem('dropboard_invert_pan');
+      if (savedInvert !== null) this.invertPan = savedInvert === 'true';
+    } catch(e) {}
+
     this.initEvents();
     this.updateTransform();
   }
@@ -164,12 +187,126 @@ class CanvasEngine {
   }
 
   initEvents() {
-    // Zoom via Scroll Wheel
+    let wheelGestureTimeout = null;
+    let isTrackpadGestureActive = false;
+
+    // Trackpad & Mouse Wheel handling
     this.viewport.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
-      this.zoomAt(e.clientX, e.clientY, zoomFactor);
+
+      const navMode = this.navMode || 'macos';
+      const zoomSens = this.zoomSensitivity || 1.0;
+      const panSens = this.panSensitivity || 1.0;
+
+      // 1. Pinch-to-zoom on Precision Touchpad OR Ctrl + Mouse Wheel
+      // In Chromium / WebView2, trackpad pinch fires a WheelEvent with e.ctrlKey === true.
+      if (e.ctrlKey) {
+        let factor;
+        if (Math.abs(e.deltaY) >= 80) {
+          // Discrete mouse wheel tick with Ctrl pressed
+          factor = e.deltaY < 0 ? 1.15 : 0.87;
+        } else {
+          // Continuous trackpad pinch gesture (small continuous delta)
+          factor = Math.exp(-e.deltaY * 0.006 * zoomSens);
+        }
+        this.zoomAt(e.clientX, e.clientY, factor);
+        return;
+      }
+
+      // 2. PureRef / Classic Mouse Wheel Mode
+      if (navMode === 'mouse') {
+        const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
+        this.zoomAt(e.clientX, e.clientY, zoomFactor);
+        return;
+      }
+
+      // 3. Touchpad Navigation Modes (macOS or Windows PC style)
+      // Check if it is a discrete physical mouse wheel (e.g. standard notch with deltaX=0 and large discrete deltaY)
+      const hasHorizontalDelta = Math.abs(e.deltaX) > 0;
+      const isFractionalDelta = (e.deltaY % 1 !== 0);
+      const isSmallDelta = Math.abs(e.deltaY) < 60;
+      const isDiscreteMouseWheel = (e.deltaMode !== 0) || (e.deltaX === 0 && Math.abs(e.deltaY) >= 100 && e.deltaY % 1 === 0);
+
+      // If user is actually rolling a discrete physical mouse wheel while in touchpad mode, let it zoom!
+      if (isDiscreteMouseWheel && !isTrackpadGestureActive && !hasHorizontalDelta && !isFractionalDelta) {
+        const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
+        this.zoomAt(e.clientX, e.clientY, zoomFactor);
+        return;
+      }
+
+      isTrackpadGestureActive = true;
+      clearTimeout(wheelGestureTimeout);
+      wheelGestureTimeout = setTimeout(() => {
+        isTrackpadGestureActive = false;
+      }, 250);
+
+      // Direction calculation:
+      // macOS Style: Natural paper-like dragging (+1)
+      // Windows Style: Traditional PC scroll direction (-1)
+      let directionSign = (navMode === 'macos') ? 1 : -1;
+      if (this.invertPan) {
+        directionSign *= -1;
+      }
+
+      this.panX += directionSign * e.deltaX * panSens;
+      this.panY += directionSign * e.deltaY * panSens;
+      this.updateTransform();
     }, { passive: false });
+
+    // Multi-touch gestures for touchscreen displays / 2-in-1 laptops
+    let initialTouchDist = null;
+    let initialTouchMid = null;
+    let initialPanX = 0;
+    let initialPanY = 0;
+    let initialZoom = 1.0;
+
+    this.viewport.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        initialTouchDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        initialTouchMid = {
+          x: (t1.clientX + t2.clientX) / 2,
+          y: (t1.clientY + t2.clientY) / 2
+        };
+        initialPanX = this.panX;
+        initialPanY = this.panY;
+        initialZoom = this.zoom;
+      }
+    }, { passive: false });
+
+    this.viewport.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 2 && initialTouchDist && initialTouchMid) {
+        e.preventDefault();
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const currentMid = {
+          x: (t1.clientX + t2.clientX) / 2,
+          y: (t1.clientY + t2.clientY) / 2
+        };
+
+        const zoomRatio = currentDist / initialTouchDist;
+        const newZoom = Math.min(Math.max(0.1, initialZoom * zoomRatio), 5.0);
+
+        const rect = this.viewport.getBoundingClientRect();
+        const mouseX = initialTouchMid.x - rect.left;
+        const mouseY = initialTouchMid.y - rect.top;
+
+        this.panX = (currentMid.x - initialTouchMid.x) + (mouseX - (mouseX - initialPanX) * (newZoom / initialZoom));
+        this.panY = (currentMid.y - initialTouchMid.y) + (mouseY - (mouseY - initialPanY) * (newZoom / initialZoom));
+        this.zoom = newZoom;
+        this.updateTransform();
+      }
+    }, { passive: false });
+
+    const endTouch = () => {
+      initialTouchDist = null;
+      initialTouchMid = null;
+    };
+    this.viewport.addEventListener('touchend', endTouch);
+    this.viewport.addEventListener('touchcancel', endTouch);
 
     // Keyboard Spacebar tracking
     window.addEventListener('keydown', (e) => {
@@ -6206,6 +6343,14 @@ class DropBoardManager {
     const gridDockStyle = document.getElementById('grid-dock-style');
     const btnOpenCacheFolder = document.getElementById('btn-open-cache-folder');
 
+    // Navigation & Touchpad Controls
+    const gridNavMode = document.getElementById('grid-nav-mode');
+    const sliderPanSens = document.getElementById('settings-pan-sensitivity');
+    const labelPanSens = document.getElementById('pan-sens-label');
+    const sliderZoomSens = document.getElementById('settings-zoom-sensitivity');
+    const labelZoomSens = document.getElementById('zoom-sens-label');
+    const toggleInvertPan = document.getElementById('settings-toggle-invert-pan');
+
     const tabBtns = modal ? modal.querySelectorAll('.settings-tab-btn') : [];
     const tabPanes = modal ? modal.querySelectorAll('.settings-tab-pane') : [];
 
@@ -6218,6 +6363,11 @@ class DropBoardManager {
       if (gridDockStyle) {
         gridDockStyle.querySelectorAll('.visual-select-card').forEach(card => {
           card.classList.toggle('active', card.dataset.value === this.dockStyle);
+        });
+      }
+      if (gridNavMode) {
+        gridNavMode.querySelectorAll('.visual-select-card').forEach(card => {
+          card.classList.toggle('active', card.dataset.value === this.canvas.navMode);
         });
       }
     };
@@ -6244,6 +6394,17 @@ class DropBoardManager {
       }
       if (selectDockStyle) {
         selectDockStyle.value = this.dockStyle;
+      }
+      if (sliderPanSens) {
+        sliderPanSens.value = this.canvas.panSensitivity;
+        if (labelPanSens) labelPanSens.textContent = `${this.canvas.panSensitivity.toFixed(1)}x`;
+      }
+      if (sliderZoomSens) {
+        sliderZoomSens.value = this.canvas.zoomSensitivity;
+        if (labelZoomSens) labelZoomSens.textContent = `${this.canvas.zoomSensitivity.toFixed(1)}x`;
+      }
+      if (toggleInvertPan) {
+        toggleInvertPan.checked = this.canvas.invertPan;
       }
       syncVisualSelectors();
       updateStats();
@@ -6304,6 +6465,44 @@ class DropBoardManager {
           syncVisualSelectors();
           Toast.show(`Mode: ${card.querySelector('strong').textContent}`, 'info');
         });
+      });
+    }
+
+    if (gridNavMode) {
+      gridNavMode.querySelectorAll('.visual-select-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const val = card.dataset.value;
+          this.canvas.navMode = val;
+          localStorage.setItem('dropboard_nav_mode', val);
+          syncVisualSelectors();
+          Toast.show(`Navigation: ${card.querySelector('strong').textContent}`, 'info');
+        });
+      });
+    }
+
+    if (sliderPanSens) {
+      sliderPanSens.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value) || 1.0;
+        this.canvas.panSensitivity = val;
+        if (labelPanSens) labelPanSens.textContent = `${val.toFixed(1)}x`;
+        localStorage.setItem('dropboard_pan_sens', val.toString());
+      });
+    }
+
+    if (sliderZoomSens) {
+      sliderZoomSens.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value) || 1.0;
+        this.canvas.zoomSensitivity = val;
+        if (labelZoomSens) labelZoomSens.textContent = `${val.toFixed(1)}x`;
+        localStorage.setItem('dropboard_zoom_sens', val.toString());
+      });
+    }
+
+    if (toggleInvertPan) {
+      toggleInvertPan.addEventListener('change', (e) => {
+        this.canvas.invertPan = e.target.checked;
+        localStorage.setItem('dropboard_invert_pan', e.target.checked.toString());
+        Toast.show(e.target.checked ? 'Touchpad Direction Inverted' : 'Touchpad Direction Normal', 'info');
       });
     }
 
