@@ -931,6 +931,59 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
              << L"\"message\":\"" << JsonUtil::EscapeString(msg) << L"\"}";
         PostMessageToWeb(resp.str());
     }
+    else if (action == L"export_to_ae_comp") {
+        AeExportCompPayload payload;
+        payload.mode = JsonUtil::ExtractString(json, L"mode");
+        if (payload.mode.empty()) payload.mode = L"group_comp";
+        payload.compName = JsonUtil::ExtractString(json, L"compName");
+        payload.compWidth = JsonUtil::ExtractNumber(json, L"compWidth", 1920.0);
+        payload.compHeight = JsonUtil::ExtractNumber(json, L"compHeight", 1080.0);
+        payload.notesText = JsonUtil::ExtractString(json, L"notesText");
+        payload.fontText = JsonUtil::ExtractString(json, L"fontText");
+        payload.fontFamily = JsonUtil::ExtractString(json, L"fontFamily");
+        payload.sampleText = JsonUtil::ExtractString(json, L"sampleText");
+        payload.vfxText = JsonUtil::ExtractString(json, L"vfxText");
+
+        // Parse items array: "items": [ { ... }, { ... } ]
+        size_t itemsPos = json.find(L"\"items\"");
+        if (itemsPos != std::wstring::npos) {
+            size_t arrStart = json.find(L'[', itemsPos);
+            size_t arrEnd = (arrStart != std::wstring::npos) ? json.find(L']', arrStart) : std::wstring::npos;
+            if (arrStart != std::wstring::npos && arrEnd != std::wstring::npos) {
+                size_t curr = arrStart + 1;
+                while (curr < arrEnd) {
+                    size_t objStart = json.find(L'{', curr);
+                    if (objStart == std::wstring::npos || objStart >= arrEnd) break;
+                    size_t objEnd = json.find(L'}', objStart);
+                    if (objEnd == std::wstring::npos || objEnd > arrEnd) break;
+
+                    std::wstring itemJson = json.substr(objStart, objEnd - objStart + 1);
+                    std::wstring itemFilePath = JsonUtil::ExtractString(itemJson, L"filePath");
+                    std::wstring itemImageData = JsonUtil::ExtractString(itemJson, L"imageData");
+                    itemFilePath = EnsureDiskFileForExternalApp(itemFilePath, itemImageData, GetCacheDirectory());
+
+                    AeExportItem item;
+                    item.filePath = itemFilePath;
+                    item.relX = JsonUtil::ExtractNumber(itemJson, L"relX", 0.0);
+                    item.relY = JsonUtil::ExtractNumber(itemJson, L"relY", 0.0);
+                    item.width = JsonUtil::ExtractNumber(itemJson, L"width", 0.0);
+                    item.height = JsonUtil::ExtractNumber(itemJson, L"height", 0.0);
+
+                    payload.items.push_back(item);
+                    curr = objEnd + 1;
+                }
+            }
+        }
+
+        std::wstring msg;
+        bool ok = ExternalAppIntegration::ExportToAfterEffectsAdvanced(payload, msg);
+        std::wstringstream resp;
+        resp << L"{\"type\":\"software_result\","
+             << L"\"app\":\"after_effects\","
+             << L"\"success\":" << (ok ? L"true" : L"false") << L","
+             << L"\"message\":\"" << JsonUtil::EscapeString(msg) << L"\"}";
+        PostMessageToWeb(resp.str());
+    }
     else if (action == L"send_to_photoshop") {
         std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
         std::wstring imageData = JsonUtil::ExtractString(json, L"imageData");

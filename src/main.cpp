@@ -85,10 +85,12 @@ std::wstring GetExecutableDir() {
 std::wstring LocateAssetsDir() {
     std::wstring exeDir = GetExecutableDir();
 
-    // Check if assets folder exists alongside exe
-    std::wstring candidate1 = exeDir + L"\\assets";
-    if (GetFileAttributesW(candidate1.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        return candidate1;
+    // Check workspace root first if running from build/Release or build/Debug
+    std::wstring candidate3 = exeDir + L"\\..\\..\\assets";
+    wchar_t resolved3[MAX_PATH] = {0};
+    if (PathCanonicalizeW(resolved3, candidate3.c_str()) &&
+        GetFileAttributesW(resolved3) != INVALID_FILE_ATTRIBUTES) {
+        return std::wstring(resolved3);
     }
 
     // Check parent directory (for build/Release output)
@@ -99,12 +101,10 @@ std::wstring LocateAssetsDir() {
         return std::wstring(resolved2);
     }
 
-    // Check workspace root
-    std::wstring candidate3 = exeDir + L"\\..\\..\\assets";
-    wchar_t resolved3[MAX_PATH] = {0};
-    if (PathCanonicalizeW(resolved3, candidate3.c_str()) &&
-        GetFileAttributesW(resolved3) != INVALID_FILE_ATTRIBUTES) {
-        return std::wstring(resolved3);
+    // Check if assets folder exists alongside exe
+    std::wstring candidate1 = exeDir + L"\\assets";
+    if (GetFileAttributesW(candidate1.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        return candidate1;
     }
 
     return candidate1;

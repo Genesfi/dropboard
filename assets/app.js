@@ -41,6 +41,7 @@ const NativeBridge = {
   copyFileToClipboard(filePath, imageData = '') { this.post('copy_file_to_clipboard', { filePath, imageData }); },
   revealInExplorer(filePath, imageData = '') { this.post('reveal_in_explorer', { filePath, imageData }); },
   sendToAE(filePath, imageData = '') { this.post('send_to_ae', { filePath, imageData }); },
+  exportToAEComp(payload) { this.post('export_to_ae_comp', payload); },
   sendToPhotoshop(filePath, imageData = '') { this.post('send_to_photoshop', { filePath, imageData }); },
   sendToCustom(exePath, filePath, imageData = '') { this.post('send_to_custom', { exePath, filePath, imageData }); },
   openDefault(filePath, imageData = '') { this.post('open_default', { filePath, imageData }); },
@@ -892,11 +893,7 @@ class DropBoardManager {
 
     // Quick Dock Integrations
     document.getElementById('btn-quick-ae').addEventListener('click', () => {
-      if (this.selectedCard && this.selectedCard.localPath) {
-        NativeBridge.sendToAE(this.selectedCard.localPath);
-      } else {
-        Toast.show('Select a reference card first', 'error');
-      }
+      this.exportSelectionToAfterEffects();
     });
 
     document.getElementById('btn-quick-ps').addEventListener('click', () => {
@@ -2108,14 +2105,16 @@ class DropBoardManager {
       // If clicking directly on group header, that's group dragging/selecting (handled in groupEl)
       if (insideGroupHeader) return;
 
-      if (insideGroup) {
-        // Inside a group frame: ONLY allow marquee selection if Shift key is held!
-        // Otherwise, allow standard click/drag to move the group directly from the middle!
-        if (!e.shiftKey) return;
+      const isShift = e.shiftKey;
+      if (isShift) {
+        // Shift + Drag: Marquee to select ONLY photos/cards from ANYWHERE (inside group, outside group, across groups!)
         marqueeMode = 'cards_only';
-        targetGroup = this.groups.find(g => g.element && g.element.contains(insideGroup));
+        targetGroup = null;
+      } else if (insideGroup) {
+        // Inside a group frame WITHOUT Shift: allow standard click/drag to move the group directly from the middle!
+        return;
       } else {
-        // Mode 2: Started on empty canvas -> Universal Selection (Cards, Groups, Nodes)!
+        // Started on empty canvas without Shift -> Universal Selection (Cards, Groups, Nodes)
         marqueeMode = 'all';
         targetGroup = null;
       }
@@ -2123,6 +2122,10 @@ class DropBoardManager {
       startX = e.clientX;
       startY = e.clientY;
       isMarquee = false;
+      const isAdditive = (e.shiftKey || e.ctrlKey || e.metaKey);
+      const initialSelectedCards = isAdditive ? new Set(this.selectedCards) : new Set();
+      const initialSelectedNodes = isAdditive ? new Set(this.selectedNodes) : new Set();
+      const initialSelectedGroups = isAdditive ? new Set(this.selectedGroups) : new Set();
 
       const onMouseMove = (moveEvt) => {
         const dx = moveEvt.clientX - startX;
@@ -2145,19 +2148,27 @@ class DropBoardManager {
           const p1 = this.canvas.screenToWorld(left, top);
           const p2 = this.canvas.screenToWorld(left + width, top + height);
 
-          if (marqueeMode === 'cards_only' && targetGroup) {
-            // ONLY select cards belonging to this group!
-            const groupCards = this.cards.filter(c => c.groupId === targetGroup.id);
-            const matchedCards = groupCards.filter(c => 
+          if (marqueeMode === 'cards_only') {
+            // ONLY select cards (photos) from ANYWHERE intersecting the box, never groups or nodes!
+            const matchedCards = this.cards.filter(c => 
               c.x + c.width >= p1.x && c.x <= p2.x &&
               c.y + c.height >= p1.y && c.y <= p2.y
             );
+
             this.clearSelection();
+            if (isAdditive) {
+              initialSelectedCards.forEach(c => {
+                this.selectedCards.add(c);
+                if (c.element) c.element.classList.add('selected');
+              });
+            }
             matchedCards.forEach(c => {
               this.selectedCards.add(c);
               if (c.element) c.element.classList.add('selected');
             });
-            this.selectedCard = matchedCards[matchedCards.length - 1] || null;
+            this.selectedCard = matchedCards[matchedCards.length - 1] || (isAdditive ? Array.from(initialSelectedCards).pop() : null);
+            this.selectedGroup = null;
+            this.selectedNode = null;
           } else {
             // Universal selection: Cards, Groups, and Nodes!
             const matchedCards = this.cards.filter(c => 
@@ -2181,23 +2192,38 @@ class DropBoardManager {
             });
 
             this.clearSelection();
+            if (isAdditive) {
+              initialSelectedCards.forEach(c => {
+                this.selectedCards.add(c);
+                if (c.element) c.element.classList.add('selected');
+              });
+              initialSelectedNodes.forEach(n => {
+                this.selectedNodes.add(n);
+                if (n.element) n.element.classList.add('selected');
+              });
+              initialSelectedGroups.forEach(g => {
+                this.selectedGroups.add(g);
+                if (g.element) g.element.classList.add('selected');
+              });
+            }
+
             matchedCards.forEach(c => {
               this.selectedCards.add(c);
               if (c.element) c.element.classList.add('selected');
             });
-            this.selectedCard = matchedCards[matchedCards.length - 1] || null;
+            this.selectedCard = matchedCards[matchedCards.length - 1] || (isAdditive ? Array.from(initialSelectedCards).pop() : null);
 
             matchedNodes.forEach(n => {
               this.selectedNodes.add(n);
               if (n.element) n.element.classList.add('selected');
             });
-            this.selectedNode = matchedNodes[matchedNodes.length - 1] || null;
+            this.selectedNode = matchedNodes[matchedNodes.length - 1] || (isAdditive ? Array.from(initialSelectedNodes).pop() : null);
 
             matchedGroups.forEach(g => {
               this.selectedGroups.add(g);
               if (g.element) g.element.classList.add('selected');
             });
-            this.selectedGroup = matchedGroups[matchedGroups.length - 1] || null;
+            this.selectedGroup = matchedGroups[matchedGroups.length - 1] || (isAdditive ? Array.from(initialSelectedGroups).pop() : null);
           }
         }
       };
@@ -2209,9 +2235,15 @@ class DropBoardManager {
         if (isMarquee) {
           selectionBox.style.display = 'none';
           isMarquee = false;
+          if (marqueeMode === 'cards_only') {
+            this.selectedGroups.clear();
+            this.selectedNodes.clear();
+            this.selectedGroup = null;
+            this.selectedNode = null;
+          }
         } else {
           // Simple click on empty canvas deselects all
-          if (!insideGroupContent) {
+          if (!insideGroup) {
             this.clearSelection();
           }
         }
@@ -2394,13 +2426,336 @@ class DropBoardManager {
 
   autoArrangeGrid() {
     if (this.cards.length === 0 && this.groups.length === 0 && this.nodes.length === 0) return;
-    this.recordPreState('Auto-Arrange Grid');
 
     const gap = this.arrangeGap !== undefined ? this.arrangeGap : 32;
     const nodeGapY = Math.max(16, gap);
     const colGapX = Math.max(24, gap + 14);
     const groupGapX = Math.max(36, gap + 24);
     const groupGapY = Math.max(48, gap + 28);
+
+    // Identify selected items
+    const selCards = new Set(this.selectedCards || []);
+    if (this.selectedCard) selCards.add(this.selectedCard);
+
+    const selGroups = new Set(this.selectedGroups || []);
+    if (this.selectedGroup) selGroups.add(this.selectedGroup);
+
+    const selNodes = new Set(this.selectedNodes || []);
+    if (this.selectedNode) selNodes.add(this.selectedNode);
+
+    const totalSelected = selCards.size + selGroups.size + selNodes.size;
+
+    // Single item selection handling
+    if (totalSelected === 1) {
+      if (selGroups.size === 1) {
+        const grp = Array.from(selGroups)[0];
+        this.tidyGroup(grp, true);
+        this.renderConnections();
+        Toast.show(`Tidied group "${grp.title}". Tip: Select 2+ items to arrange selection, or deselect all to arrange entire board.`, 'info');
+        return;
+      }
+      Toast.show('Select 2 or more items to arrange selection, or deselect all to arrange entire board.', 'info');
+      return;
+    }
+
+    const isSelectionMode = totalSelected >= 2;
+
+    if (isSelectionMode) {
+      this.recordPreState('Auto-Arrange Grid (Selection)');
+
+      const targetGroups = this.groups.filter(g => selGroups.has(g));
+      const targetNodes = this.nodes.filter(n => selNodes.has(n));
+      const targetCards = this.cards.filter(c => selCards.has(c));
+      const targetLooseCards = targetCards.filter(c => !c.groupId);
+
+      // Special case: Only member cards inside group(s) were selected
+      if (targetGroups.length === 0 && targetNodes.length === 0 && targetLooseCards.length === 0 && targetCards.length > 0) {
+        const groupsToTidy = new Set();
+        targetCards.forEach(c => {
+          if (c.groupId) {
+            const g = this.groups.find(grp => grp.id === c.groupId);
+            if (g) groupsToTidy.add(g);
+          }
+        });
+        groupsToTidy.forEach(g => this.tidyGroup(g, true));
+        this.renderConnections();
+        this.commitHistory('Auto-Arrange Grid (Selection)');
+        Toast.show(`Tidied cards inside ${groupsToTidy.size} group(s)`, 'success');
+        return;
+      }
+
+      // Calculate anchor bounding box (minX, minY) of selected canvas items
+      let minX = Infinity;
+      let minY = Infinity;
+      targetGroups.forEach(g => {
+        minX = Math.min(minX, g.x);
+        minY = Math.min(minY, g.y);
+      });
+      targetNodes.forEach(n => {
+        minX = Math.min(minX, n.x);
+        minY = Math.min(minY, n.y);
+      });
+      targetLooseCards.forEach(c => {
+        minX = Math.min(minX, c.x);
+        minY = Math.min(minY, c.y);
+      });
+
+      if (!isFinite(minX)) minX = 0;
+      if (!isFinite(minY)) minY = 0;
+
+      // Special case: Only loose cards selected
+      if (targetGroups.length === 0 && targetNodes.length === 0 && targetLooseCards.length >= 2) {
+        const numCards = targetLooseCards.length;
+        const cols = Math.min(numCards, Math.max(2, Math.ceil(Math.sqrt(numCards))));
+        let curX = minX;
+        let curY = minY;
+        let rowMaxH = 0;
+        let colIdx = 0;
+
+        targetLooseCards.forEach(card => {
+          card.x = curX;
+          card.y = curY;
+          if (card.baseX !== undefined) card.baseX = curX;
+          if (card.baseY !== undefined) card.baseY = curY;
+          if (card.element) card.element.style.transform = `translate(${card.x}px, ${card.y}px)`;
+
+          rowMaxH = Math.max(rowMaxH, card.height);
+          curX += card.width + gap;
+          colIdx++;
+
+          if (colIdx >= cols) {
+            colIdx = 0;
+            curX = minX;
+            curY += rowMaxH + gap;
+            rowMaxH = 0;
+          }
+        });
+
+        this.renderConnections();
+        this.commitHistory('Auto-Arrange Grid (Selection)');
+        Toast.show(`Auto-arranged ${numCards} selected references in grid`, 'success');
+        return;
+      }
+
+      // Special case: Only nodes selected
+      if (targetGroups.length === 0 && targetLooseCards.length === 0 && targetNodes.length >= 2) {
+        const layers = this.assignNodeLayers(targetNodes, this.connections, null);
+        const layerBuckets = new Map();
+        targetNodes.forEach(n => {
+          const l = layers.get(n.id) || 1;
+          if (!layerBuckets.has(l)) layerBuckets.set(l, []);
+          layerBuckets.get(l).push(n);
+        });
+
+        const sortedLayers = Array.from(layerBuckets.keys()).sort((a, b) => b - a);
+        let curX = minX;
+
+        sortedLayers.forEach(l => {
+          const nodesInLayer = layerBuckets.get(l);
+          let layerMaxW = 0;
+          let nY = minY;
+
+          nodesInLayer.forEach(n => {
+            n.x = curX;
+            n.y = nY;
+            if (n.element) n.element.style.transform = `translate(${n.x}px, ${n.y}px)`;
+            const nW = this.getAccurateNodeWidth(n);
+            const nH = this.getAccurateNodeHeight(n);
+            layerMaxW = Math.max(layerMaxW, nW);
+            nY += nH + nodeGapY;
+          });
+
+          curX += layerMaxW + colGapX;
+        });
+
+        this.renderConnections();
+        this.commitHistory('Auto-Arrange Grid (Selection)');
+        Toast.show(`Auto-arranged ${targetNodes.length} selected nodes in grid`, 'success');
+        return;
+      }
+
+      // General case: Selected Groups (plus any selected nodes & loose cards)
+      targetGroups.forEach(group => {
+        this.tidyGroup(group, true);
+      });
+
+      const positionedNodeIds = new Set();
+      const groupNodeMap = new Map();
+      targetGroups.forEach(g => groupNodeMap.set(g.id, []));
+
+      targetNodes.forEach(n => {
+        const gid = this.getNodeGroupId(n.id);
+        if (gid && groupNodeMap.has(gid)) {
+          groupNodeMap.get(gid).push(n);
+        }
+      });
+
+      const standaloneNodes = targetNodes.filter(n => {
+        const gid = this.getNodeGroupId(n.id);
+        return !gid || !groupNodeMap.has(gid);
+      });
+
+      let currentY = minY;
+
+      // Standalone selected nodes
+      if (standaloneNodes.length > 0) {
+        const clusterLayers = this.assignNodeLayers(standaloneNodes, this.connections, null);
+        const layerBuckets = new Map();
+        standaloneNodes.forEach(n => {
+          const l = clusterLayers.get(n.id) || 1;
+          if (!layerBuckets.has(l)) layerBuckets.set(l, []);
+          layerBuckets.get(l).push(n);
+        });
+
+        const sortedLayers = Array.from(layerBuckets.keys()).sort((a, b) => b - a);
+        let sX = minX;
+        let sRowMaxH = 0;
+
+        sortedLayers.forEach(l => {
+          const nodesInLayer = layerBuckets.get(l);
+          let layerMaxW = 0;
+          let nY = currentY;
+
+          nodesInLayer.forEach(n => {
+            n.x = sX;
+            n.y = nY;
+            if (n.element) n.element.style.transform = `translate(${n.x}px, ${n.y}px)`;
+            positionedNodeIds.add(n.id);
+            const nW = this.getAccurateNodeWidth(n);
+            const nH = this.getAccurateNodeHeight(n);
+            layerMaxW = Math.max(layerMaxW, nW);
+            nY += nH + nodeGapY;
+          });
+
+          sRowMaxH = Math.max(sRowMaxH, nY - currentY);
+          sX += layerMaxW + colGapX;
+        });
+
+        currentY += sRowMaxH + groupGapY;
+      }
+
+      // Selected groups
+      if (targetGroups.length > 0) {
+        const sortedGroups = [...targetGroups].sort((a, b) => {
+          return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
+        });
+
+        const numGroups = sortedGroups.length;
+        let groupCols = numGroups <= 2 ? numGroups : (numGroups <= 4 ? numGroups : (numGroups <= 6 ? 3 : 4));
+
+        let curX = minX;
+        let rowStartY = currentY;
+        let groupRowMaxH = 0;
+        let groupColIdx = 0;
+
+        sortedGroups.forEach(group => {
+          const connectedNodes = groupNodeMap.get(group.id) || [];
+          let nodeAreaH = 0;
+
+          if (connectedNodes.length > 0) {
+            const layers = this.assignNodeLayers(connectedNodes, this.connections, group.id);
+            const layerBuckets = new Map();
+            connectedNodes.forEach(n => {
+              const l = layers.get(n.id) || 1;
+              if (!layerBuckets.has(l)) layerBuckets.set(l, []);
+              layerBuckets.get(l).push(n);
+            });
+
+            const sortedLayers = Array.from(layerBuckets.keys()).sort((a, b) => b - a);
+
+            sortedLayers.forEach(l => {
+              const nodesInLayer = layerBuckets.get(l);
+              let layerMaxW = 0;
+              let nY = rowStartY;
+
+              nodesInLayer.forEach(n => {
+                n.x = curX;
+                n.y = nY;
+                if (n.element) n.element.style.transform = `translate(${n.x}px, ${n.y}px)`;
+                positionedNodeIds.add(n.id);
+                const nW = this.getAccurateNodeWidth(n);
+                const nH = this.getAccurateNodeHeight(n);
+                layerMaxW = Math.max(layerMaxW, nW);
+                nY += nH + nodeGapY;
+              });
+
+              nodeAreaH = Math.max(nodeAreaH, nY - rowStartY);
+              curX += layerMaxW + colGapX;
+            });
+          }
+
+          // Place group to the right of its nodes
+          const memberCards = this.cards.filter(c => c.groupId === group.id);
+          const dx = curX - group.x;
+          const dy = rowStartY - group.y;
+          group.x = curX;
+          group.y = rowStartY;
+          group.element.style.transform = `translate(${group.x}px, ${group.y}px)`;
+
+          memberCards.forEach(card => {
+            card.x += dx;
+            card.y += dy;
+            if (card.baseX !== undefined) card.baseX += dx;
+            if (card.baseY !== undefined) card.baseY += dy;
+            card.element.style.transform = `translate(${card.x}px, ${card.y}px)`;
+          });
+
+          const thisUnitH = Math.max(group.height, nodeAreaH);
+          groupRowMaxH = Math.max(groupRowMaxH, thisUnitH);
+
+          curX += group.width + groupGapX;
+          groupColIdx++;
+
+          if (groupColIdx >= groupCols) {
+            groupColIdx = 0;
+            curX = minX;
+            rowStartY += groupRowMaxH + groupGapY;
+            groupRowMaxH = 0;
+          }
+        });
+
+        if (groupColIdx > 0) {
+          rowStartY += groupRowMaxH + groupGapY;
+          curX = minX;
+        }
+        currentY = rowStartY;
+      }
+
+      // Position selected loose cards
+      if (targetLooseCards.length > 0) {
+        let cardX = minX;
+        let cardRowMaxH = 0;
+        const maxCardsWidth = minX + 3200;
+
+        targetLooseCards.forEach(card => {
+          if (cardX > minX && cardX + card.width > maxCardsWidth) {
+            cardX = minX;
+            currentY += cardRowMaxH + gap;
+            cardRowMaxH = 0;
+          }
+          card.x = cardX;
+          card.y = currentY;
+          if (card.baseX !== undefined) card.baseX = cardX;
+          if (card.baseY !== undefined) card.baseY = cardY;
+          if (card.element) card.element.style.transform = `translate(${card.x}px, ${card.y}px)`;
+
+          cardRowMaxH = Math.max(cardRowMaxH, card.height);
+          cardX += card.width + gap;
+        });
+        currentY += cardRowMaxH + gap;
+      }
+
+      this.renderConnections();
+      this.commitHistory('Auto-Arrange Grid (Selection)');
+      const totalMoved = targetGroups.length + targetNodes.length + targetLooseCards.length;
+      Toast.show(`Auto-arranged ${totalMoved} selected item(s) in grid`, 'success');
+      return;
+    }
+
+    // ==========================================
+    // ALL MODE: Arrange entire board (default)
+    // ==========================================
+    this.recordPreState('Auto-Arrange Grid');
 
     // 1. Tidy all groups first
     this.groups.forEach(group => {
@@ -2649,13 +3004,313 @@ class DropBoardManager {
 
   autoArrangePipeline() {
     if (this.cards.length === 0 && this.groups.length === 0 && this.nodes.length === 0) return;
-    this.recordPreState('Storyboard Pipeline Layout');
 
     const gap = this.arrangeGap !== undefined ? this.arrangeGap : 32;
     const nodeGapY = Math.max(16, gap);
     const colGapX = Math.max(24, gap + 14);
     const sceneGapX = Math.max(48, gap + 32);
     const sceneGapY = Math.max(48, gap + 32);
+
+    // Identify selected items
+    const selCards = new Set(this.selectedCards || []);
+    if (this.selectedCard) selCards.add(this.selectedCard);
+
+    const selGroups = new Set(this.selectedGroups || []);
+    if (this.selectedGroup) selGroups.add(this.selectedGroup);
+
+    const selNodes = new Set(this.selectedNodes || []);
+    if (this.selectedNode) selNodes.add(this.selectedNode);
+
+    const totalSelected = selCards.size + selGroups.size + selNodes.size;
+
+    // Single item selection handling
+    if (totalSelected === 1) {
+      if (selGroups.size === 1) {
+        const grp = Array.from(selGroups)[0];
+        this.tidyGroup(grp, true);
+        this.renderConnections();
+        Toast.show(`Tidied group "${grp.title}". Tip: Select 2+ items to arrange selection, or deselect all to arrange entire board.`, 'info');
+        return;
+      }
+      Toast.show('Select 2 or more items to arrange selection, or deselect all to arrange entire board.', 'info');
+      return;
+    }
+
+    const isSelectionMode = totalSelected >= 2;
+
+    if (isSelectionMode) {
+      this.recordPreState('Storyboard Pipeline Layout (Selection)');
+
+      const targetGroups = this.groups.filter(g => selGroups.has(g));
+      const targetNodes = this.nodes.filter(n => selNodes.has(n));
+      const targetCards = this.cards.filter(c => selCards.has(c));
+      const targetLooseCards = targetCards.filter(c => !c.groupId);
+
+      // Special case: Only member cards inside group(s) were selected
+      if (targetGroups.length === 0 && targetNodes.length === 0 && targetLooseCards.length === 0 && targetCards.length > 0) {
+        const groupsToTidy = new Set();
+        targetCards.forEach(c => {
+          if (c.groupId) {
+            const g = this.groups.find(grp => grp.id === c.groupId);
+            if (g) groupsToTidy.add(g);
+          }
+        });
+        groupsToTidy.forEach(g => this.tidyGroup(g, true));
+        this.renderConnections();
+        this.commitHistory('Storyboard Pipeline Layout (Selection)');
+        Toast.show(`Tidied cards inside ${groupsToTidy.size} group(s)`, 'success');
+        return;
+      }
+
+      // Calculate anchor bounding box (minX, minY) of selected canvas items
+      let minX = Infinity;
+      let minY = Infinity;
+      targetGroups.forEach(g => {
+        minX = Math.min(minX, g.x);
+        minY = Math.min(minY, g.y);
+      });
+      targetNodes.forEach(n => {
+        minX = Math.min(minX, n.x);
+        minY = Math.min(minY, n.y);
+      });
+      targetLooseCards.forEach(c => {
+        minX = Math.min(minX, c.x);
+        minY = Math.min(minY, c.y);
+      });
+
+      if (!isFinite(minX)) minX = 0;
+      if (!isFinite(minY)) minY = 0;
+
+      // Special case: Only loose cards selected
+      if (targetGroups.length === 0 && targetNodes.length === 0 && targetLooseCards.length >= 2) {
+        let curX = minX;
+        let curY = minY;
+        let rowH = 0;
+        const maxCardsW = minX + 3200;
+
+        targetLooseCards.forEach(c => {
+          if (curX > minX && curX + c.width > maxCardsW) {
+            curX = minX;
+            curY += rowH + 24;
+            rowH = 0;
+          }
+          c.x = curX;
+          c.y = curY;
+          if (c.baseX !== undefined) c.baseX = curX;
+          if (c.baseY !== undefined) c.baseY = curY;
+          if (c.element) c.element.style.transform = `translate(${c.x}px, ${c.y}px)`;
+          rowH = Math.max(rowH, c.height);
+          curX += c.width + 24;
+        });
+
+        this.commitHistory('Storyboard Pipeline Layout (Selection)');
+        Toast.show(`Storyboard Pipeline arranged for ${targetLooseCards.length} selected reference(s)!`, 'success');
+        return;
+      }
+
+      // Special case: Only nodes selected
+      if (targetGroups.length === 0 && targetLooseCards.length === 0 && targetNodes.length >= 2) {
+        const layers = this.assignNodeLayers(targetNodes, this.connections, null);
+        const layerBuckets = new Map();
+        targetNodes.forEach(n => {
+          const l = layers.get(n.id) || 1;
+          if (!layerBuckets.has(l)) layerBuckets.set(l, []);
+          layerBuckets.get(l).push(n);
+        });
+
+        const sortedLayers = Array.from(layerBuckets.keys()).sort((a, b) => b - a);
+        let curX = minX;
+
+        sortedLayers.forEach(l => {
+          const nodesInLayer = layerBuckets.get(l);
+          let layerMaxW = 0;
+          let nY = minY;
+
+          nodesInLayer.forEach(node => {
+            node.x = curX;
+            node.y = nY;
+            if (node.element) node.element.style.transform = `translate(${node.x}px, ${node.y}px)`;
+            const nodeW = this.getAccurateNodeWidth(node);
+            const nodeH = this.getAccurateNodeHeight(node);
+            layerMaxW = Math.max(layerMaxW, nodeW);
+            nY += nodeH + nodeGapY;
+          });
+
+          curX += layerMaxW + colGapX;
+        });
+
+        this.renderConnections();
+        this.commitHistory('Storyboard Pipeline Layout (Selection)');
+        Toast.show(`Storyboard Pipeline arranged for ${targetNodes.length} selected node(s)!`, 'success');
+        return;
+      }
+
+      // General case: Selected groups (plus any selected nodes & loose cards)
+      targetGroups.forEach(group => {
+        this.tidyGroup(group, true);
+      });
+
+      const sortedGroups = [...targetGroups].sort((a, b) => {
+        return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
+      });
+
+      const positionedNodeIds = new Set();
+      const groupNodeMap = new Map();
+      sortedGroups.forEach(g => groupNodeMap.set(g.id, []));
+
+      targetNodes.forEach(n => {
+        const gid = this.getNodeGroupId(n.id);
+        if (gid && groupNodeMap.has(gid)) {
+          groupNodeMap.get(gid).push(n);
+        }
+      });
+
+      const standaloneNodes = targetNodes.filter(n => {
+        const gid = this.getNodeGroupId(n.id);
+        return !gid || !groupNodeMap.has(gid);
+      });
+
+      let currentY = minY;
+
+      // Standalone selected nodes
+      if (standaloneNodes.length > 0) {
+        let sX = minX;
+        let sRowMaxH = 0;
+        const maxHeaderWidth = minX + 3200;
+
+        standaloneNodes.forEach(node => {
+          const w = this.getAccurateNodeWidth(node);
+          const h = this.getAccurateNodeHeight(node);
+          if (sX > minX && sX + w > maxHeaderWidth) {
+            sX = minX;
+            currentY += sRowMaxH + nodeGapY;
+            sRowMaxH = 0;
+          }
+          node.x = sX;
+          node.y = currentY;
+          if (node.element) node.element.style.transform = `translate(${node.x}px, ${node.y}px)`;
+          positionedNodeIds.add(node.id);
+          sX += w + colGapX;
+          sRowMaxH = Math.max(sRowMaxH, h);
+        });
+
+        currentY += sRowMaxH + sceneGapY * 1.5;
+      }
+
+      // Sequential Pipeline Flow for selected groups
+      if (sortedGroups.length > 0) {
+        const pipelineCols = Math.min(sortedGroups.length, 3);
+        let curX = minX;
+        let rowStartY = currentY;
+        let stageRowMaxH = 0;
+        let stageColIdx = 0;
+
+        sortedGroups.forEach(group => {
+          const connectedNodes = groupNodeMap.get(group.id) || [];
+          let nodeAreaH = 0;
+
+          if (connectedNodes.length > 0) {
+            const layers = this.assignNodeLayers(connectedNodes, this.connections, group.id);
+            const layerBuckets = new Map();
+            connectedNodes.forEach(n => {
+              const l = layers.get(n.id) || 1;
+              if (!layerBuckets.has(l)) layerBuckets.set(l, []);
+              layerBuckets.get(l).push(n);
+            });
+
+            const sortedLayers = Array.from(layerBuckets.keys()).sort((a, b) => b - a);
+
+            sortedLayers.forEach(l => {
+              const nodesInLayer = layerBuckets.get(l);
+              let layerMaxW = 0;
+              let nY = rowStartY;
+
+              nodesInLayer.forEach(node => {
+                node.x = curX;
+                node.y = nY;
+                if (node.element) node.element.style.transform = `translate(${node.x}px, ${node.y}px)`;
+                positionedNodeIds.add(node.id);
+                const nodeW = this.getAccurateNodeWidth(node);
+                const nodeH = this.getAccurateNodeHeight(node);
+                layerMaxW = Math.max(layerMaxW, nodeW);
+                nY += nodeH + nodeGapY;
+              });
+
+              nodeAreaH = Math.max(nodeAreaH, nY - rowStartY);
+              curX += layerMaxW + colGapX;
+            });
+          }
+
+          // Group placed to the right of its nodes
+          const dx = curX - group.x;
+          const dy = rowStartY - group.y;
+          group.x = curX;
+          group.y = rowStartY;
+          group.element.style.transform = `translate(${group.x}px, ${group.y}px)`;
+
+          const memberCards = this.cards.filter(c => c.groupId === group.id);
+          memberCards.forEach(card => {
+            card.x += dx;
+            card.y += dy;
+            if (card.baseX !== undefined) card.baseX += dx;
+            if (card.baseY !== undefined) card.baseY += dy;
+            card.element.style.transform = `translate(${card.x}px, ${card.y}px)`;
+          });
+
+          const thisStageH = Math.max(group.height, nodeAreaH);
+          stageRowMaxH = Math.max(stageRowMaxH, thisStageH);
+
+          curX += group.width + sceneGapX;
+          stageColIdx++;
+
+          if (stageColIdx >= pipelineCols) {
+            stageColIdx = 0;
+            curX = minX;
+            rowStartY += stageRowMaxH + sceneGapY;
+            stageRowMaxH = 0;
+          }
+        });
+
+        if (stageColIdx > 0) {
+          rowStartY += stageRowMaxH + sceneGapY;
+          curX = minX;
+        }
+        currentY = rowStartY;
+      }
+
+      // Standalone Loose Cards in selection
+      if (targetLooseCards.length > 0) {
+        let looseX = minX;
+        let looseRowH = 0;
+        const maxCardsW = minX + 3200;
+        targetLooseCards.forEach(c => {
+          if (looseX > minX && looseX + c.width > maxCardsW) {
+            looseX = minX;
+            currentY += looseRowH + 24;
+            looseRowH = 0;
+          }
+          c.x = looseX;
+          c.y = currentY;
+          if (c.baseX !== undefined) c.baseX = c.x;
+          if (c.baseY !== undefined) c.baseY = c.y;
+          if (c.element) c.element.style.transform = `translate(${c.x}px, ${c.y}px)`;
+          looseRowH = Math.max(looseRowH, c.height);
+          looseX += c.width + 24;
+        });
+        currentY += looseRowH + 24;
+      }
+
+      this.renderConnections();
+      this.commitHistory('Storyboard Pipeline Layout (Selection)');
+      const totalMoved = targetGroups.length + targetNodes.length + targetLooseCards.length;
+      Toast.show(`Storyboard Pipeline arranged for ${totalMoved} selected item(s)!`, 'success');
+      return;
+    }
+
+    // ==========================================
+    // ALL MODE: Arrange entire board (default)
+    // ==========================================
+    this.recordPreState('Storyboard Pipeline Layout');
 
     // 1. Tidy all groups first
     this.groups.forEach(group => {
@@ -2872,6 +3527,133 @@ class DropBoardManager {
     }
   }
 
+  extractNodeInfoForExport(nodes) {
+    let fontText = '';
+    let fontFamily = '';
+    let sampleText = '';
+    let notesText = '';
+    let vfxText = '';
+
+    nodes.forEach(n => {
+      if (n.type === 'typography' || n.type === 'font') {
+        const family = (n.fontFamily || 'Sans-Serif').trim();
+        const userContent = (n.content || '').trim();
+        const sample = (userContent && userContent !== 'DropBoard Studio 2026' && userContent !== 'Typography Sample Text') 
+          ? userContent 
+          : ((n.title && n.title !== 'Typography') ? n.title.trim() : family);
+        if (!fontFamily) fontFamily = family;
+        if (!sampleText) sampleText = sample;
+        fontText += `• ${family}: "${sample}"\n`;
+      } else if (n.type === 'note' || n.type === 'script') {
+        const title = n.title ? `[${n.title}]` : '[Note]';
+        if (n.mode === 'checklist' && Array.isArray(n.items) && n.items.length > 0) {
+          const list = n.items
+            .filter(it => it && it.text && it.text.trim())
+            .map(it => `  [${it.done ? 'x' : ' '}] ${it.text.trim()}`)
+            .join('\n');
+          if (list) notesText += `${title}\n${list}\n\n`;
+        } else {
+          const text = (n.content || n.text || '').trim();
+          if (text) notesText += `${title}\n${text}\n\n`;
+        }
+      } else if (n.type === 'vfx') {
+        const title = n.title ? `[${n.title}]: ` : '';
+        const tags = (n.tags && n.tags.length > 0) ? n.tags.join(', ') : (n.content || n.text || '');
+        if (tags) vfxText += `* ${title}${tags}\n`;
+      } else {
+        const title = n.title || n.type;
+        const content = (n.content || n.text || '').trim();
+        if (content) notesText += `[${title}]: ${content}\n\n`;
+      }
+    });
+
+    return {
+      fontFamily: fontFamily.trim(),
+      sampleText: sampleText.trim(),
+      fontText: fontText.trim(),
+      notesText: notesText.trim(),
+      vfxText: vfxText.trim()
+    };
+  }
+
+  exportSelectionToAfterEffects(preferredGroup = null) {
+    const selCards = Array.from(this.selectedCards || []);
+    if (this.selectedCard && !selCards.includes(this.selectedCard)) selCards.push(this.selectedCard);
+
+    const selGroups = Array.from(this.selectedGroups || []);
+    if (preferredGroup && !selGroups.includes(preferredGroup)) selGroups.push(preferredGroup);
+    else if (this.selectedGroup && !selGroups.includes(this.selectedGroup)) selGroups.push(this.selectedGroup);
+
+    const selNodes = Array.from(this.selectedNodes || []);
+    if (this.selectedNode && !selNodes.includes(this.selectedNode)) selNodes.push(this.selectedNode);
+
+    // 1. Group Reference Comp Mode:
+    // If user explicitly chose a group via menu, or selected a group frame:
+    let targetGroup = preferredGroup || (selGroups.length > 0 ? selGroups[0] : null);
+
+    if (targetGroup) {
+      let groupCards = this.cards.filter(c => c.groupId === targetGroup.id);
+
+      if (groupCards.length === 0) {
+        Toast.show(`Group "${targetGroup.title}" has no reference images to export`, 'info');
+        return;
+      }
+
+      const connectedNodes = this.nodes.filter(n => this.getNodeGroupId(n.id) === targetGroup.id);
+      selNodes.forEach(n => {
+        if (!connectedNodes.includes(n)) connectedNodes.push(n);
+      });
+
+      const nodeInfo = this.extractNodeInfoForExport(connectedNodes);
+
+      const items = groupCards.map(c => ({
+        filePath: c.localPath || '',
+        imageData: c.localPath ? '' : (c.imageData || ''),
+        relX: c.x - targetGroup.x,
+        relY: c.y - targetGroup.y,
+        width: c.width || 300,
+        height: c.height || 200
+      }));
+
+      Toast.show(`Exporting "${targetGroup.title}" Reference Comp to After Effects...`, 'info');
+      NativeBridge.exportToAEComp({
+        mode: 'group_comp',
+        compName: targetGroup.title,
+        compWidth: 1920,
+        compHeight: 1080,
+        fontFamily: nodeInfo.fontFamily,
+        sampleText: nodeInfo.sampleText,
+        notesText: nodeInfo.notesText,
+        fontText: nodeInfo.fontText,
+        vfxText: nodeInfo.vfxText,
+        items
+      });
+      return;
+    }
+
+    // 2. Loose Photos Mode (user selected photos only, no group selected):
+    // Send ONLY the selected photos directly into the active comp in After Effects (no new comp created!).
+    if (selCards.length > 0) {
+      const items = selCards.map(c => ({
+        filePath: c.localPath || '',
+        imageData: c.localPath ? '' : (c.imageData || ''),
+        relX: c.x,
+        relY: c.y,
+        width: c.width || 300,
+        height: c.height || 200
+      }));
+
+      Toast.show(`Importing ${items.length} reference photo(s) into active comp...`, 'info');
+      NativeBridge.exportToAEComp({
+        mode: 'loose_photos',
+        items
+      });
+      return;
+    }
+
+    Toast.show('Select reference photos or a Scene Group to export to After Effects', 'info');
+  }
+
   // ===========================================================================
   // Custom Context Menu
   // ===========================================================================
@@ -2937,6 +3719,15 @@ class DropBoardManager {
             this.tidyGroup(this.activeContextMenuGroup, true);
             this.commitHistory('Tidy Group');
             Toast.show(`Tidied references in ${this.activeContextMenuGroup.title}`, 'success');
+          }
+        });
+      }
+
+      const btnGrpExportAe = document.getElementById('cm-grp-export-ae');
+      if (btnGrpExportAe) {
+        btnGrpExportAe.addEventListener('click', () => {
+          if (this.activeContextMenuGroup) {
+            this.exportSelectionToAfterEffects(this.activeContextMenuGroup);
           }
         });
       }
@@ -4182,8 +4973,8 @@ class DropBoardManager {
         return;
       }
 
-      // If user holds Shift inside group, let it bubble to viewport for Shift-Marquee photo selection!
-      if (e.shiftKey) {
+      // If user holds Shift inside group body (not header), let it bubble to viewport for Shift-Marquee photo selection!
+      if (e.shiftKey && !e.target.closest('.group-header')) {
         return;
       }
 
@@ -4710,8 +5501,18 @@ class DropBoardManager {
 
       const preview = document.createElement('div');
       preview.className = 'node-font-preview';
+      preview.contentEditable = 'true';
+      preview.spellcheck = false;
+      preview.title = 'Click to customize sample text';
       preview.style.fontFamily = `"${node.fontFamily}", sans-serif`;
-      preview.textContent = 'DropBoard Studio 2026';
+      preview.textContent = node.content || 'Typography Sample Text';
+      preview.addEventListener('input', () => {
+        node.content = preview.textContent;
+        this.scheduleAutoSave();
+      });
+      preview.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+      });
       body.appendChild(preview);
 
       let currentFilteredFonts = [];

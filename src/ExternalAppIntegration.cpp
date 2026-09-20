@@ -41,6 +41,22 @@ std::wstring ExternalAppIntegration::FindAfterEffectsExe() {
     return L"";
 }
 
+std::wstring ExternalAppIntegration::FindAfterEffectsCmd() {
+    std::wstring aeExe = FindAfterEffectsExe();
+    if (aeExe.empty()) return L"";
+
+    // If AfterFX.com exists in the same Support Files directory, prefer it for CLI execution
+    std::wstring aeCom = aeExe;
+    size_t extPos = aeCom.rfind(L".exe");
+    if (extPos != std::wstring::npos) {
+        aeCom.replace(extPos, 4, L".com");
+        if (GetFileAttributesW(aeCom.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            return aeCom;
+        }
+    }
+    return aeExe;
+}
+
 std::wstring ExternalAppIntegration::FindPhotoshopExe() {
     std::wstring regPath = FindExecutableInRegistry(L"Photoshop.exe");
     if (!regPath.empty() && GetFileAttributesW(regPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
@@ -98,74 +114,352 @@ std::vector<SoftwareTarget> ExternalAppIntegration::DetectInstalledSoftware() {
     return targets;
 }
 
-bool ExternalAppIntegration::SendToAfterEffects(const std::wstring& imagePath, std::wstring& outMessage) {
-    std::wstring aeExe = FindAfterEffectsExe();
+static std::wstring EscapeForJsxString(const std::wstring& s) {
+    std::wstring res;
+    for (wchar_t c : s) {
+        if (c == L'\\') res += L"\\\\";
+        else if (c == L'\"') res += L"\\\"";
+        else if (c == L'\'') res += L"\\\'";
+        else if (c == L'\n') res += L"\\n";
+        else if (c == L'\r') res += L"\\r";
+        else if (c == L'\t') res += L"\\t";
+        else if (c < 32 || c > 126) {
+            wchar_t hexBuf[10];
+            swprintf_s(hexBuf, L"\\u%04x", (unsigned int)c);
+            res += hexBuf;
+        } else {
+            res += c;
+        }
+    }
+    return res;
+}
+
+static std::wstring EscapeJsxFilePath(const std::wstring& path) {
+    std::wstring p = path;
+    for (auto& c : p) {
+        if (c == L'\\') c = L'/';
+    }
+    return EscapeForJsxString(p);
+}
+
+bool ExternalAppIntegration::ExportToAfterEffectsAdvanced(const AeExportCompPayload& payload, std::wstring& outMessage) {
+    std::wstringstream jsx;
+    jsx << L"// DropBoard Smart Export for Adobe After Effects\n";
+    jsx << L"(function() {\n";
+    jsx << L"    try {\n";
+    jsx << L"        if (!app.project) {\n";
+    jsx << L"            app.newProject();\n";
+    jsx << L"        }\n";
+    jsx << L"        app.beginUndoGroup(\"DropBoard Reference Import\");\n\n";
+
+    jsx << L"        function getOrCreateFolder(name) {\n";
+    jsx << L"            for (var i = 1; i <= app.project.items.length; i++) {\n";
+    jsx << L"                var item = app.project.items[i];\n";
+    jsx << L"                if ((item instanceof FolderItem) && item.name === name) {\n";
+    jsx << L"                    return item;\n";
+    jsx << L"                }\n";
+    jsx << L"            }\n";
+    jsx << L"            return app.project.items.addFolder(name);\n";
+    jsx << L"        }\n\n";
+
+    jsx << L"        var refFolder = getOrCreateFolder(\"_References\");\n";
+
+    if (payload.mode == L"group_comp") {
+        std::wstring rawName = payload.compName.empty() ? L"References" : payload.compName;
+        std::wstring compName = L"REF_" + EscapeForJsxString(rawName);
+        double compW = payload.compWidth > 0 ? payload.compWidth : 1920.0;
+        double compH = payload.compHeight > 0 ? payload.compHeight : 1080.0;
+
+        jsx << L"        var compW = " << compW << L";\n";
+        jsx << L"        var compH = " << compH << L";\n";
+        jsx << L"        var comp = app.project.items.addComp(\"" << compName << L"\", compW, compH, 1.0, 10.0, 30.0);\n";
+        jsx << L"        comp.parentFolder = refFolder;\n\n";
+
+        // 1. Dedicated Typography Text Layer with actual font applied
+        bool hasTypo = !payload.fontFamily.empty() || !payload.sampleText.empty();
+        if (hasTypo) {
+            std::wstring fontName = payload.fontFamily.empty() ? L"Sans-Serif" : payload.fontFamily;
+            std::wstring sampleText = payload.sampleText.empty() ? fontName : payload.sampleText;
+
+            jsx << L"        var typoLayer = comp.layers.addText(\"" << EscapeForJsxString(sampleText) << L"\");\n";
+            jsx << L"        typoLayer.name = \"TYPOGRAPHY: " << EscapeForJsxString(fontName) << L" [Guide Layer]\";\n";
+            jsx << L"        typoLayer.guideLayer = true;\n";
+            jsx << L"        typoLayer.property(\"Position\").setValue([80, 130]);\n";
+            jsx << L"        var typoProp = typoLayer.property(\"Source Text\");\n";
+            jsx << L"        var typoDoc = typoProp.value;\n";
+            jsx << L"        typoDoc.justification = ParagraphJustification.LEFT_JUSTIFY;\n";
+            jsx << L"        typoDoc.fontSize = 38;\n";
+            jsx << L"        typoDoc.fillColor = [0.98, 0.90, 0.42];\n";
+            jsx << L"        try { typoDoc.font = \"" << EscapeForJsxString(fontName) << L"\"; } catch(e) {\n";
+            jsx << L"            try {\n";
+            jsx << L"                if (app.fonts && app.fonts.allFonts) {\n";
+            jsx << L"                    for (var fi = 0; fi < app.fonts.allFonts.length; fi++) {\n";
+            jsx << L"                        var fo = app.fonts.allFonts[fi];\n";
+            jsx << L"                        if (fo.familyName.toLowerCase() === \"" << EscapeForJsxString(fontName) << L"\".toLowerCase() || fo.postScriptName.toLowerCase() === \"" << EscapeForJsxString(fontName) << L"\".toLowerCase()) {\n";
+            jsx << L"                            typoDoc.font = fo.postScriptName;\n";
+            jsx << L"                            break;\n";
+            jsx << L"                        }\n";
+            jsx << L"                    }\n";
+            jsx << L"                }\n";
+            jsx << L"            } catch(e2) {}\n";
+            jsx << L"        }\n";
+            jsx << L"        typoProp.setValue(typoDoc);\n\n";
+
+            jsx << L"        var specLayer = comp.layers.addText(\"FONT: " << EscapeForJsxString(fontName) << L"\");\n";
+            jsx << L"        specLayer.name = \"FONT SPEC [Guide Layer]\";\n";
+            jsx << L"        specLayer.guideLayer = true;\n";
+            jsx << L"        specLayer.property(\"Position\").setValue([80, 180]);\n";
+            jsx << L"        var specProp = specLayer.property(\"Source Text\");\n";
+            jsx << L"        var specDoc = specProp.value;\n";
+            jsx << L"        specDoc.justification = ParagraphJustification.LEFT_JUSTIFY;\n";
+            jsx << L"        specDoc.fontSize = 15;\n";
+            jsx << L"        specDoc.fillColor = [0.60, 0.66, 0.76];\n";
+            jsx << L"        specProp.setValue(specDoc);\n\n";
+        }
+
+        // 2. Dedicated Notes & Checklist Guide Layer
+        bool hasNotes = !payload.notesText.empty() || !payload.vfxText.empty();
+        if (hasNotes) {
+            std::wstring fullNotes = L"";
+            if (!payload.notesText.empty()) fullNotes += payload.notesText + L"\\n\\n";
+            if (!payload.vfxText.empty()) fullNotes += L"VFX SPECS:\\n" + payload.vfxText;
+
+            double notesPosY = hasTypo ? 240.0 : 90.0;
+            jsx << L"        var notesLayer = comp.layers.addText(\"" << EscapeForJsxString(fullNotes) << L"\");\n";
+            jsx << L"        notesLayer.name = \"SCENE NOTES & CHECKLIST [Guide Layer]\";\n";
+            jsx << L"        notesLayer.guideLayer = true;\n";
+            jsx << L"        notesLayer.property(\"Position\").setValue([80, " << notesPosY << L"]);\n";
+            jsx << L"        var nProp = notesLayer.property(\"Source Text\");\n";
+            jsx << L"        var nDoc = nProp.value;\n";
+            jsx << L"        nDoc.justification = ParagraphJustification.LEFT_JUSTIFY;\n";
+            jsx << L"        nDoc.fontSize = 18;\n";
+            jsx << L"        nDoc.fillColor = [0.90, 0.93, 0.98];\n";
+            jsx << L"        nProp.setValue(nDoc);\n\n";
+        }
+
+        bool hasInfo = hasTypo || hasNotes;
+
+        // Layout items
+        if (!payload.items.empty()) {
+            // Find layout bounding box
+            double minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+            for (const auto& it : payload.items) {
+                if (it.relX < minX) minX = it.relX;
+                if (it.relY < minY) minY = it.relY;
+                if (it.relX + it.width > maxX) maxX = it.relX + it.width;
+                if (it.relY + it.height > maxY) maxY = it.relY + it.height;
+            }
+
+            double layoutW = (maxX > minX) ? (maxX - minX) : 100.0;
+            double layoutH = (maxY > minY) ? (maxY - minY) : 100.0;
+
+            double leftMargin = hasInfo ? 520.0 : 80.0;
+            double rightMargin = 60.0;
+            double topMargin = 70.0;
+            double bottomMargin = 70.0;
+
+            double availW = compW - leftMargin - rightMargin;
+            double availH = compH - topMargin - bottomMargin;
+            if (availW < 100.0) availW = 100.0;
+            if (availH < 100.0) availH = 100.0;
+
+            double fitScale = min(availW / layoutW, availH / layoutH);
+            if (fitScale <= 0.0) fitScale = 1.0;
+
+            double targetAreaCenterX = leftMargin + availW / 2.0;
+            double targetAreaCenterY = topMargin + availH / 2.0;
+            double layoutCenterX = minX + layoutW / 2.0;
+            double layoutCenterY = minY + layoutH / 2.0;
+
+            jsx << L"        var itemsData = [\n";
+            for (size_t i = 0; i < payload.items.size(); ++i) {
+                const auto& it = payload.items[i];
+                double posX = targetAreaCenterX + (it.relX + it.width / 2.0 - layoutCenterX) * fitScale;
+                double posY = targetAreaCenterY + (it.relY + it.height / 2.0 - layoutCenterY) * fitScale;
+                double desiredW = it.width * fitScale;
+
+                jsx << L"            { path: \"" << EscapeJsxFilePath(it.filePath) 
+                    << L"\", x: " << posX 
+                    << L", y: " << posY 
+                    << L", targetW: " << desiredW << L" }"
+                    << (i + 1 < payload.items.size() ? L"," : L"") << L"\n";
+            }
+            jsx << L"        ];\n\n";
+
+            jsx << L"        for (var j = 0; j < itemsData.length; j++) {\n";
+            jsx << L"            var it = itemsData[j];\n";
+            jsx << L"            var f = new File(it.path);\n";
+            jsx << L"            if (f.exists) {\n";
+            jsx << L"                var io = new ImportOptions(f);\n";
+            jsx << L"                var footage = app.project.importFile(io);\n";
+            jsx << L"                footage.parentFolder = refFolder;\n";
+            jsx << L"                var layer = comp.layers.add(footage);\n";
+            jsx << L"                layer.property(\"Position\").setValue([it.x, it.y]);\n";
+            jsx << L"                if (footage.width > 0) {\n";
+            jsx << L"                    var sc = (it.targetW / footage.width) * 100;\n";
+            jsx << L"                    layer.property(\"Scale\").setValue([sc, sc]);\n";
+            jsx << L"                }\n";
+            jsx << L"            }\n";
+            jsx << L"        }\n";
+        }
+
+        jsx << L"\n        comp.openInViewer();\n";
+    }
+    else {
+        // Mode: loose_photos (User selected only photos - send directly to active comp if open, no new comp created!)
+        jsx << L"        var activeComp = (app.project.activeItem && (app.project.activeItem instanceof CompItem)) ? app.project.activeItem : null;\n";
+        jsx << L"        var itemsData = [\n";
+        for (size_t i = 0; i < payload.items.size(); ++i) {
+            const auto& it = payload.items[i];
+            jsx << L"            { path: \"" << EscapeJsxFilePath(it.filePath) 
+                << L"\", relX: " << it.relX 
+                << L", relY: " << it.relY 
+                << L", width: " << it.width 
+                << L", height: " << it.height << L" }"
+                << (i + 1 < payload.items.size() ? L"," : L"") << L"\n";
+        }
+        jsx << L"        ];\n\n";
+
+        jsx << L"        var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;\n";
+        jsx << L"        for (var k = 0; k < itemsData.length; k++) {\n";
+        jsx << L"            var it = itemsData[k];\n";
+        jsx << L"            if (it.relX < minX) minX = it.relX;\n";
+        jsx << L"            if (it.relY < minY) minY = it.relY;\n";
+        jsx << L"            if (it.relX + it.width > maxX) maxX = it.relX + it.width;\n";
+        jsx << L"            if (it.relY + it.height > maxY) maxY = it.relY + it.height;\n";
+        jsx << L"        }\n";
+        jsx << L"        var layoutW = (maxX > minX) ? (maxX - minX) : 100;\n";
+        jsx << L"        var layoutH = (maxY > minY) ? (maxY - minY) : 100;\n";
+        jsx << L"        var layoutCenterX = minX + layoutW / 2;\n";
+        jsx << L"        var layoutCenterY = minY + layoutH / 2;\n\n";
+
+        jsx << L"        for (var k = 0; k < itemsData.length; k++) {\n";
+        jsx << L"            var it = itemsData[k];\n";
+        jsx << L"            var f = new File(it.path);\n";
+        jsx << L"            if (f.exists) {\n";
+        jsx << L"                var io = new ImportOptions(f);\n";
+        jsx << L"                var footage = app.project.importFile(io);\n";
+        jsx << L"                footage.parentFolder = refFolder;\n";
+        jsx << L"                if (activeComp) {\n";
+        jsx << L"                    var layer = activeComp.layers.add(footage);\n";
+        jsx << L"                    layer.selected = true;\n";
+        jsx << L"                    if (itemsData.length === 1) {\n";
+        jsx << L"                        layer.property(\"Position\").setValue([activeComp.width / 2, activeComp.height / 2]);\n";
+        jsx << L"                        if (footage.width > 0 && footage.height > 0) {\n";
+        jsx << L"                            var targetW = activeComp.width * 0.75;\n";
+        jsx << L"                            var targetH = activeComp.height * 0.75;\n";
+        jsx << L"                            var sc = Math.min(targetW / footage.width, targetH / footage.height) * 100;\n";
+        jsx << L"                            layer.property(\"Scale\").setValue([sc, sc]);\n";
+        jsx << L"                        }\n";
+        jsx << L"                    } else {\n";
+        jsx << L"                        var maxAllowedW = activeComp.width * 0.82;\n";
+        jsx << L"                        var maxAllowedH = activeComp.height * 0.82;\n";
+        jsx << L"                        var fitScale = Math.min(maxAllowedW / layoutW, maxAllowedH / layoutH);\n";
+        jsx << L"                        if (fitScale <= 0) fitScale = 1.0;\n";
+        jsx << L"                        var posX = activeComp.width / 2 + (it.relX + it.width / 2 - layoutCenterX) * fitScale;\n";
+        jsx << L"                        var posY = activeComp.height / 2 + (it.relY + it.height / 2 - layoutCenterY) * fitScale;\n";
+        jsx << L"                        layer.property(\"Position\").setValue([posX, posY]);\n";
+        jsx << L"                        if (footage.width > 0) {\n";
+        jsx << L"                            var targetW = it.width * fitScale;\n";
+        jsx << L"                            var sc = (targetW / footage.width) * 100;\n";
+        jsx << L"                            layer.property(\"Scale\").setValue([sc, sc]);\n";
+        jsx << L"                        }\n";
+        jsx << L"                    }\n";
+        jsx << L"                }\n";
+        jsx << L"            }\n";
+        jsx << L"        }\n";
+    }
+
+    jsx << L"\n        app.endUndoGroup();\n";
+    jsx << L"        \"SUCCESS\";\n";
+    jsx << L"    } catch(err) {\n";
+    jsx << L"        try { app.endUndoGroup(); } catch(e) {}\n";
+    jsx << L"        \"ERROR: \" + err.toString();\n";
+    jsx << L"    }\n";
+    jsx << L"})();\n";
+
+    // Direct execution via After Effects executable
+    std::wstring aeExe = FindAfterEffectsCmd();
+    if (aeExe.empty()) {
+        aeExe = FindAfterEffectsExe();
+    }
     if (aeExe.empty()) {
         outMessage = L"Adobe After Effects executable not detected on this system.";
         return false;
     }
 
-    // Convert Windows backslashes to forward slashes for ExtendScript File path
-    std::wstring jsPath = imagePath;
-    for (auto& ch : jsPath) {
-        if (ch == L'\\') ch = L'/';
-    }
-
-    // Prepare temp jsx script
     wchar_t tempPath[MAX_PATH] = {0};
     GetTempPathW(MAX_PATH, tempPath);
-    std::wstring scriptFile = std::wstring(tempPath) + L"dropboard_ae_import.jsx";
+    std::wstring scriptFile = std::wstring(tempPath) + L"dropboard_ae_advanced_export.jsx";
 
-    std::wstringstream jsx;
-    jsx << L"// DropBoard Auto Import Script for Adobe After Effects\n";
-    jsx << L"(function() {\n";
-    jsx << L"    try {\n";
-    jsx << L"        var targetFile = new File(\"" << jsPath << L"\");\n";
-    jsx << L"        if (!targetFile.exists) {\n";
-    jsx << L"            alert(\"DropBoard: Reference file not found: \" + targetFile.fsName);\n";
-    jsx << L"            return;\n";
-    jsx << L"        }\n";
-    jsx << L"        if (!app.project) {\n";
-    jsx << L"            app.newProject();\n";
-    jsx << L"        }\n";
-    jsx << L"        var importOptions = new ImportOptions(targetFile);\n";
-    jsx << L"        var footageItem = app.project.importFile(importOptions);\n";
-    jsx << L"        if (app.project.activeItem && (app.project.activeItem instanceof CompItem)) {\n";
-    jsx << L"            var comp = app.project.activeItem;\n";
-    jsx << L"            var layer = comp.layers.add(footageItem);\n";
-    jsx << L"            layer.selected = true;\n";
-    jsx << L"        }\n";
-    jsx << L"    } catch(err) {\n";
-    jsx << L"        alert(\"DropBoard AE Import Error: \" + err.toString());\n";
-    jsx << L"    }\n";
-    jsx << L"})();\n";
+    // Write file in UTF-8 with BOM
+    std::string utf8Script;
+    int needed = WideCharToMultiByte(CP_UTF8, 0, jsx.str().c_str(), (int)jsx.str().length(), nullptr, 0, nullptr, nullptr);
+    if (needed > 0) {
+        utf8Script.resize(needed);
+        WideCharToMultiByte(CP_UTF8, 0, jsx.str().c_str(), (int)jsx.str().length(), &utf8Script[0], needed, nullptr, nullptr);
+    }
 
-    // Write file in UTF-8
-    std::wofstream file(scriptFile, std::ios::trunc);
+    std::ofstream file(scriptFile, std::ios::binary | std::ios::trunc);
     if (!file.is_open()) {
         outMessage = L"Failed to create temporary ExtendScript file.";
         return false;
     }
-    file << jsx.str();
+    const unsigned char bom[3] = { 0xEF, 0xBB, 0xBF };
+    file.write(reinterpret_cast<const char*>(bom), 3);
+    file.write(utf8Script.data(), utf8Script.size());
     file.close();
 
-    // Execute via afterfx.exe -r <scriptFile>
-    std::wstring cmd = L"\"" + aeExe + L"\" -r \"" + scriptFile + L"\"";
-    
+    // Execute via ShellExecuteW / cmd.exe just like VS Code's ae-jsx-runner
+    HINSTANCE hInst = ShellExecuteW(
+        nullptr,
+        L"open",
+        aeExe.c_str(),
+        (L"-r \"" + scriptFile + L"\"").c_str(),
+        nullptr,
+        SW_SHOWNORMAL
+    );
+
+    if ((INT_PTR)hInst > 32) {
+        outMessage = (payload.mode == L"group_comp") 
+            ? L"Created Reference Comp in Adobe After Effects!"
+            : L"Imported reference footage into Adobe After Effects!";
+        return true;
+    }
+
+    // Fallback: cmd.exe /d /s /c (exact equivalent of Node child_process.exec)
+    wchar_t sysDir[MAX_PATH] = {0};
+    GetSystemDirectoryW(sysDir, MAX_PATH);
+    std::wstring cmdExe = std::wstring(sysDir) + L"\\cmd.exe";
+    std::wstring fullCmd = L"\"" + cmdExe + L"\" /d /s /c \"\"" + aeExe + L"\" -r \"" + scriptFile + L"\"\"";
+
     STARTUPINFOW si = { sizeof(si) };
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi = {0};
-    std::vector<wchar_t> cmdBuffer(cmd.begin(), cmd.end());
+    std::vector<wchar_t> cmdBuffer(fullCmd.begin(), fullCmd.end());
     cmdBuffer.push_back(L'\0');
 
-    if (CreateProcessW(nullptr, cmdBuffer.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+    if (CreateProcessW(nullptr, cmdBuffer.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
-        outMessage = L"Sent reference to Adobe After Effects successfully!";
+        outMessage = (payload.mode == L"group_comp") 
+            ? L"Created Reference Comp in Adobe After Effects!"
+            : L"Imported reference footage into Adobe After Effects!";
         return true;
     } else {
         outMessage = L"Failed to launch After Effects process.";
         return false;
     }
+}
+
+bool ExternalAppIntegration::SendToAfterEffects(const std::wstring& imagePath, std::wstring& outMessage) {
+    AeExportCompPayload p;
+    p.mode = L"loose_photos";
+    AeExportItem item;
+    item.filePath = imagePath;
+    p.items.push_back(item);
+    return ExportToAfterEffectsAdvanced(p, outMessage);
 }
 
 bool ExternalAppIntegration::SendToPhotoshop(const std::wstring& imagePath, std::wstring& outMessage) {

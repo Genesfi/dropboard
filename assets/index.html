@@ -240,7 +240,7 @@
 
     <!-- Group 3: Arrange & Align -->
     <div class="dock-group" id="dock-group-arrange">
-      <button class="dock-btn" id="btn-auto-grid" title="Auto-Arrange as Grid">
+      <button class="dock-btn" id="btn-auto-grid" title="Auto-Arrange as Grid (Arranges selection or entire board if none selected)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="7" height="7"/>
           <rect x="14" y="3" width="7" height="7"/>
@@ -250,7 +250,7 @@
         <span>Grid</span>
       </button>
 
-      <button class="dock-btn" id="btn-pipeline-arrange" title="Storyboard Pipeline (Vertical Scenes with Connected Nodes on Left)">
+      <button class="dock-btn" id="btn-pipeline-arrange" title="Storyboard Pipeline (Arranges selection or entire board if none selected)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="3" y1="6" x2="8" y2="6"/>
           <line x1="3" y1="12" x2="8" y2="12"/>
@@ -313,7 +313,7 @@
 
     <!-- Group 5: App Integration & Export -->
     <div class="dock-group" id="dock-group-export">
-      <button class="dock-btn" id="btn-quick-ae" title="Send selected reference to Adobe After Effects">
+      <button class="dock-btn" id="btn-quick-ae" title="Export selected Scene Comp or Reference Images to Adobe After Effects">
         <span class="ae-badge">Ae</span>
         <span>Export</span>
       </button>
@@ -531,6 +531,16 @@
       <div class="cm-text">
         <strong>Auto-Tidy References</strong>
         <small>Pack and align items neatly</small>
+      </div>
+    </button>
+    <button class="cm-item" id="cm-grp-export-ae">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#818cf8" stroke-width="2">
+        <rect x="3" y="3" width="18" height="18" rx="3"/>
+        <path d="M8 17l3-9 3 9M9 14h4"/>
+      </svg>
+      <div class="cm-text">
+        <strong>Export to After Effects Comp</strong>
+        <small>Create Reference Comp with layout & info</small>
       </div>
     </button>
     <button class="cm-item" id="cm-grp-rename">
