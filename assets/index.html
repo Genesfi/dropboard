@@ -13,7 +13,7 @@
   <!-- Custom Frameless Titlebar -->
   <header class="titlebar" id="titlebar">
     <div class="titlebar-left">
-      <div class="app-brand">
+      <div class="app-brand" id="app-brand-btn" title="DropBoard Studio - Drag to move window (Click for About)">
         <svg class="brand-icon" viewBox="0 0 24 24" fill="none">
           <rect x="1.5" y="1.5" width="21" height="21" rx="5.5" fill="#0c1019" stroke="rgba(56, 189, 248, 0.35)" stroke-width="1"/>
           <!-- Papan 1 (Tegak Kiri - Cyan Blue) -->
@@ -114,6 +114,16 @@
           <div class="opacity-hint">Tip: Double-click % icon or press Ctrl+Alt+0 to reset</div>
         </div>
       </div>
+
+      <!-- About DropBoard button -->
+      <button class="tb-btn" id="btn-about-tb" title="About DropBoard & Creator">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="16" x2="12" y2="12"/>
+          <line x1="12" y1="8" x2="12.01" y2="8"/>
+        </svg>
+        <span class="tb-btn-label">About</span>
+      </button>
 
       <!-- Settings button -->
       <button class="tb-btn" id="btn-settings-tb" title="Settings (Auto-Save, Shortcuts, Cache)">
@@ -648,6 +658,18 @@
         <small>Ctrl+V</small>
       </div>
     </button>
+    <div class="cm-separator"></div>
+    <button class="cm-item" id="cm-open-about">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#38bdf8" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="16" x2="12" y2="12"/>
+        <line x1="12" y1="8" x2="12.01" y2="8"/>
+      </svg>
+      <div class="cm-text">
+        <strong>About DropBoard...</strong>
+        <small>Creator Migi Gustian & App Info</small>
+      </div>
+    </button>
   </div>
 
   <!-- Quick Node Palette Search Popup (Ctrl+Space / Shift+A) -->
@@ -726,6 +748,7 @@
         <button class="settings-tab-btn" data-tab="tab-toolbar">Toolbar & Layout</button>
         <button class="settings-tab-btn" data-tab="tab-shortcuts">Keyboard Shortcuts</button>
         <button class="settings-tab-btn" data-tab="tab-storage">Storage & Cache</button>
+        <button class="settings-tab-btn" data-tab="tab-about">About & Creator</button>
       </div>
       <div class="modal-body settings-body">
         <!-- Tab 1: General -->
@@ -1034,9 +1057,187 @@
             </div>
           </div>
         </div>
+
+        <!-- Tab: About & Creator -->
+        <div class="settings-tab-pane" id="tab-about">
+          <div class="settings-section">
+            <div class="about-hero" style="margin-bottom: 20px;">
+              <div class="about-logo-wrapper">
+                <svg class="about-logo" viewBox="0 0 24 24" fill="none">
+                  <rect x="1.5" y="1.5" width="21" height="21" rx="5.5" fill="#0c1019" stroke="rgba(56, 189, 248, 0.45)" stroke-width="1.2"/>
+                  <rect x="4.5" y="4.5" width="4.5" height="15" rx="1.5" fill="#38bdf8"/>
+                  <path d="M10 4.5h5a4.5 4.5 0 0 1 4.5 4.5v1.2a1.3 1.3 0 0 1-1.3 1.3H10V4.5z" fill="#ffffff"/>
+                  <path d="M10 12.5h8.2a1.3 1.3 0 0 1 1.3 1.3v1.2a4.5 4.5 0 0 1-4.5 4.5H10v-7z" fill="#38bdf8"/>
+                </svg>
+              </div>
+              <div class="about-app-info">
+                <div class="about-app-title-row">
+                  <h2 class="about-app-name">DropBoard Studio</h2>
+                  <span class="about-app-version">v1.0.0</span>
+                  <span class="about-badge-native">Windows Native</span>
+                </div>
+                <p class="about-app-desc">Infinite reference canvas & motion design visual workspace built with C++20 and WebView2. Deep pipeline integration with Adobe After Effects & Photoshop.</p>
+              </div>
+            </div>
+
+            <!-- Creator Card -->
+            <div class="about-creator-card">
+              <div class="creator-card-header">
+                <span class="creator-card-label">CREATOR & DEVELOPER</span>
+              </div>
+              <div class="creator-content">
+                <div class="creator-avatar">
+                  <span>MG</span>
+                </div>
+                <div class="creator-details">
+                  <div class="creator-name-row">
+                    <span class="creator-name">Migi Gustian</span>
+                    <span class="creator-role-tag">Creator</span>
+                  </div>
+                  <div class="creator-links-row">
+                    <button class="creator-link-chip link-x btn-open-x" title="Visit @migi_gn on X">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                        <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                      </svg>
+                      <span>@migi_gn</span>
+                    </button>
+                    <div class="creator-link-chip chip-email">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="4" width="20" height="16" rx="2"/>
+                        <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+                      </svg>
+                      <span>gnmigi@gmail.com</span>
+                      <button class="chip-copy-btn btn-copy-email-action" title="Copy Email Address">Copy</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- File Association Box in Tab -->
+            <div class="about-assoc-box" style="margin-top: 16px;">
+              <div class="about-assoc-icon">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#38bdf8" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <path d="m9 15 2 2 4-4"/>
+                </svg>
+              </div>
+              <div class="about-assoc-text">
+                <strong>Project File Association (.dropboard)</strong>
+                <span>Files display custom DropBoard icon in Explorer and open directly on double-click.</span>
+              </div>
+              <button class="modal-btn btn-outline btn-sm btn-register-assoc-action">
+                Refresh Icon
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="modal-btn btn-primary" id="btn-close-settings-footer">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dedicated About DropBoard Modal -->
+  <div class="modal-backdrop" id="about-modal" style="display:none;">
+    <div class="modal-card about-modal-card">
+      <div class="modal-header">
+        <div class="modal-header-title">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#38bdf8" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="16" x2="12" y2="12"/>
+            <line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+          <span>About DropBoard Studio</span>
+        </div>
+        <button class="modal-close-btn" id="btn-close-about-modal">✕</button>
+      </div>
+      <div class="modal-body about-modal-body">
+        <!-- Hero Header -->
+        <div class="about-hero">
+          <div class="about-logo-wrapper">
+            <svg class="about-logo" viewBox="0 0 24 24" fill="none">
+              <rect x="1.5" y="1.5" width="21" height="21" rx="5.5" fill="#0c1019" stroke="rgba(56, 189, 248, 0.45)" stroke-width="1.2"/>
+              <rect x="4.5" y="4.5" width="4.5" height="15" rx="1.5" fill="#38bdf8"/>
+              <path d="M10 4.5h5a4.5 4.5 0 0 1 4.5 4.5v1.2a1.3 1.3 0 0 1-1.3 1.3H10V4.5z" fill="#ffffff"/>
+              <path d="M10 12.5h8.2a1.3 1.3 0 0 1 1.3 1.3v1.2a4.5 4.5 0 0 1-4.5 4.5H10v-7z" fill="#38bdf8"/>
+            </svg>
+          </div>
+          <div class="about-app-info">
+            <div class="about-app-title-row">
+              <h2 class="about-app-name">DropBoard Studio</h2>
+              <span class="about-app-version">v1.0.0</span>
+              <span class="about-badge-native">Native C++20</span>
+            </div>
+            <p class="about-app-desc">High-performance infinite reference board & dynamic canvas workspace for motion designers, 3D artists, and visual creators. Deep Adobe After Effects & Photoshop pipeline integration.</p>
+          </div>
+        </div>
+
+        <!-- Creator Profile Card -->
+        <div class="about-creator-card">
+          <div class="creator-card-header">
+            <span class="creator-card-label">CREATOR & DEVELOPER</span>
+          </div>
+          <div class="creator-content">
+            <div class="creator-avatar">
+              <span>MG</span>
+            </div>
+            <div class="creator-details">
+              <div class="creator-name-row">
+                <span class="creator-name">Migi Gustian</span>
+                <span class="creator-role-tag">Creator</span>
+              </div>
+              <div class="creator-links-row">
+                <!-- X / Twitter button -->
+                <button class="creator-link-chip link-x btn-open-x" title="Visit @migi_gn on X">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor">
+                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                  </svg>
+                  <span>@migi_gn</span>
+                </button>
+                <!-- Email Chip with Copy Button -->
+                <div class="creator-link-chip chip-email">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="4" width="20" height="16" rx="2"/>
+                    <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+                  </svg>
+                  <span class="creator-email-val">gnmigi@gmail.com</span>
+                  <button class="chip-copy-btn btn-copy-email-action" title="Copy Email Address">Copy</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- File Association & Project Format Section -->
+        <div class="about-assoc-box">
+          <div class="about-assoc-icon">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#38bdf8" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <path d="m9 15 2 2 4-4"/>
+            </svg>
+          </div>
+          <div class="about-assoc-text">
+            <strong>Windows File Association (.dropboard)</strong>
+            <span>Project files display the custom DropBoard icon in File Explorer and open with a double-click.</span>
+          </div>
+          <button class="modal-btn btn-outline btn-sm btn-register-assoc-action" title="Re-register .dropboard icon and file association in Windows Explorer">
+            Refresh Icon
+          </button>
+        </div>
+
+        <!-- Tech Stack Badges -->
+        <div class="about-specs-row">
+          <div class="spec-pill"><span class="spec-dot green"></span> Hardware Accelerated WebView2</div>
+          <div class="spec-pill"><span class="spec-dot blue"></span> After Effects Auto-Rig JSX</div>
+          <div class="spec-pill"><span class="spec-dot purple"></span> Frameless DWM Immersive Dark</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="modal-btn btn-primary" id="btn-close-about-footer">Close</button>
       </div>
     </div>
   </div>

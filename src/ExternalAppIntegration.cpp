@@ -1,7 +1,78 @@
 #include "ExternalAppIntegration.h"
 #include <shlobj.h>
+#include <tlhelp32.h>
 #include <fstream>
 #include <sstream>
+#include <thread>
+#include <chrono>
+
+// Helper to check if a specific process is already running and retrieve its full executable path
+static std::wstring FindRunningProcessPath(const std::wstring& exeName) {
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap == INVALID_HANDLE_VALUE) return L"";
+
+    PROCESSENTRY32W pe = { sizeof(pe) };
+    if (Process32FirstW(hSnap, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, exeName.c_str()) == 0) {
+                HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+                if (hProc) {
+                    wchar_t fullPath[MAX_PATH] = { 0 };
+                    DWORD size = MAX_PATH;
+                    if (QueryFullProcessImageNameW(hProc, 0, fullPath, &size)) {
+                        CloseHandle(hProc);
+                        CloseHandle(hSnap);
+                        return std::wstring(fullPath);
+                    }
+                    CloseHandle(hProc);
+                }
+            }
+        } while (Process32NextW(hSnap, &pe));
+    }
+    CloseHandle(hSnap);
+    return L"";
+}
+
+// Helper to find the main window handle for After Effects
+static HWND FindAfterEffectsWindow() {
+    // 1. Direct check for standard After Effects main window class
+    HWND hWnd = FindWindowW(L"AE_Console_Win", nullptr);
+    if (hWnd && IsWindow(hWnd) && IsWindowVisible(hWnd)) return hWnd;
+
+    // 2. Comprehensive enumeration across all visible top-level windows
+    HWND hFound = nullptr;
+    EnumWindows([](HWND h, LPARAM lParam) -> BOOL {
+        if (!IsWindowVisible(h)) return TRUE;
+        wchar_t title[256] = { 0 };
+        GetWindowTextW(h, title, 256);
+        if (wcsstr(title, L"Adobe After Effects") != nullptr) {
+            *reinterpret_cast<HWND*>(lParam) = h;
+            return FALSE; // Stop enumeration
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&hFound));
+    return hFound;
+}
+
+// Helper to scan Adobe folder for any version matching a prefix
+static std::wstring ScanAdobeDirectoryForExe(const std::wstring& folderPrefix, const std::wstring& relativeExePath) {
+    std::wstring searchPattern = L"C:\\Program Files\\Adobe\\" + folderPrefix + L"*";
+    WIN32_FIND_DATAW findData;
+    HANDLE hFind = FindFirstFileW(searchPattern.c_str(), &findData);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                std::wstring candidate = L"C:\\Program Files\\Adobe\\" + std::wstring(findData.cFileName) + L"\\" + relativeExePath;
+                if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                    FindClose(hFind);
+                    return candidate;
+                }
+            }
+        } while (FindNextFileW(hFind, &findData));
+        FindClose(hFind);
+    }
+    return L"";
+}
 
 std::wstring ExternalAppIntegration::FindExecutableInRegistry(const std::wstring& appName) {
     HKEY hKey = nullptr;
@@ -20,17 +91,31 @@ std::wstring ExternalAppIntegration::FindExecutableInRegistry(const std::wstring
 }
 
 std::wstring ExternalAppIntegration::FindAfterEffectsExe() {
+    // 1. If After Effects is already actively running, target that exact instance!
+    std::wstring runningPath = FindRunningProcessPath(L"AfterFX.exe");
+    if (!runningPath.empty() && GetFileAttributesW(runningPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        return runningPath;
+    }
+
+    // 2. Check Windows Registry default App Paths
     std::wstring regPath = FindExecutableInRegistry(L"AfterFX.exe");
     if (!regPath.empty() && GetFileAttributesW(regPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
         return regPath;
     }
 
-    // Common Adobe install locations (check newest first)
+    // 3. Comprehensive list of install locations (2026 down to CC 2018)
     const wchar_t* commonPaths[] = {
+        L"C:\\Program Files\\Adobe\\Adobe After Effects 2026\\Support Files\\AfterFX.exe",
         L"C:\\Program Files\\Adobe\\Adobe After Effects 2025\\Support Files\\AfterFX.exe",
         L"C:\\Program Files\\Adobe\\Adobe After Effects 2024\\Support Files\\AfterFX.exe",
         L"C:\\Program Files\\Adobe\\Adobe After Effects 2023\\Support Files\\AfterFX.exe",
-        L"C:\\Program Files\\Adobe\\Adobe After Effects 2022\\Support Files\\AfterFX.exe"
+        L"C:\\Program Files\\Adobe\\Adobe After Effects 2022\\Support Files\\AfterFX.exe",
+        L"C:\\Program Files\\Adobe\\Adobe After Effects 2021\\Support Files\\AfterFX.exe",
+        L"C:\\Program Files\\Adobe\\Adobe After Effects 2020\\Support Files\\AfterFX.exe",
+        L"C:\\Program Files\\Adobe\\Adobe After Effects CC 2019\\Support Files\\AfterFX.exe",
+        L"C:\\Program Files\\Adobe\\Adobe After Effects 2019\\Support Files\\AfterFX.exe",
+        L"C:\\Program Files\\Adobe\\Adobe After Effects CC 2018\\Support Files\\AfterFX.exe",
+        L"C:\\Program Files\\Adobe\\Adobe After Effects (Beta)\\Support Files\\AfterFX.exe"
     };
 
     for (const wchar_t* p : commonPaths) {
@@ -38,6 +123,13 @@ std::wstring ExternalAppIntegration::FindAfterEffectsExe() {
             return p;
         }
     }
+
+    // 4. Wildcard scan in Adobe folder
+    std::wstring scanned = ScanAdobeDirectoryForExe(L"Adobe After Effects", L"Support Files\\AfterFX.exe");
+    if (!scanned.empty()) {
+        return scanned;
+    }
+
     return L"";
 }
 
@@ -58,15 +150,30 @@ std::wstring ExternalAppIntegration::FindAfterEffectsCmd() {
 }
 
 std::wstring ExternalAppIntegration::FindPhotoshopExe() {
+    // 1. If Photoshop is already actively running, target that exact instance!
+    std::wstring runningPath = FindRunningProcessPath(L"Photoshop.exe");
+    if (!runningPath.empty() && GetFileAttributesW(runningPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        return runningPath;
+    }
+
+    // 2. Check Windows Registry default App Paths
     std::wstring regPath = FindExecutableInRegistry(L"Photoshop.exe");
     if (!regPath.empty() && GetFileAttributesW(regPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
         return regPath;
     }
 
+    // 3. Comprehensive list of install locations (2026 down to CC 2018)
     const wchar_t* commonPaths[] = {
+        L"C:\\Program Files\\Adobe\\Adobe Photoshop 2026\\Photoshop.exe",
         L"C:\\Program Files\\Adobe\\Adobe Photoshop 2025\\Photoshop.exe",
         L"C:\\Program Files\\Adobe\\Adobe Photoshop 2024\\Photoshop.exe",
         L"C:\\Program Files\\Adobe\\Adobe Photoshop 2023\\Photoshop.exe",
+        L"C:\\Program Files\\Adobe\\Adobe Photoshop 2022\\Photoshop.exe",
+        L"C:\\Program Files\\Adobe\\Adobe Photoshop 2021\\Photoshop.exe",
+        L"C:\\Program Files\\Adobe\\Adobe Photoshop 2020\\Photoshop.exe",
+        L"C:\\Program Files\\Adobe\\Adobe Photoshop CC 2019\\Photoshop.exe",
+        L"C:\\Program Files\\Adobe\\Adobe Photoshop 2019\\Photoshop.exe",
+        L"C:\\Program Files\\Adobe\\Adobe Photoshop CC 2018\\Photoshop.exe",
         L"C:\\Program Files\\Adobe\\Adobe Photoshop (Beta)\\Photoshop.exe"
     };
 
@@ -75,20 +182,42 @@ std::wstring ExternalAppIntegration::FindPhotoshopExe() {
             return p;
         }
     }
+
+    // 4. Wildcard scan in Adobe folder
+    std::wstring scanned = ScanAdobeDirectoryForExe(L"Adobe Photoshop", L"Photoshop.exe");
+    if (!scanned.empty()) {
+        return scanned;
+    }
+
     return L"";
 }
 
 std::wstring ExternalAppIntegration::FindBlenderExe() {
+    // 1. If Blender is already running, target that exact instance!
+    std::wstring runningPath = FindRunningProcessPath(L"blender.exe");
+    if (!runningPath.empty() && GetFileAttributesW(runningPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        return runningPath;
+    }
+
+    // 2. Check Windows Registry default App Paths
     std::wstring regPath = FindExecutableInRegistry(L"blender.exe");
     if (!regPath.empty() && GetFileAttributesW(regPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
         return regPath;
     }
 
+    // 3. Common Blender Foundation & Steam install locations
     const wchar_t* commonPaths[] = {
+        L"C:\\Program Files\\Blender Foundation\\Blender 4.4\\blender.exe",
         L"C:\\Program Files\\Blender Foundation\\Blender 4.3\\blender.exe",
         L"C:\\Program Files\\Blender Foundation\\Blender 4.2\\blender.exe",
         L"C:\\Program Files\\Blender Foundation\\Blender 4.1\\blender.exe",
-        L"C:\\Program Files\\Blender Foundation\\Blender 4.0\\blender.exe"
+        L"C:\\Program Files\\Blender Foundation\\Blender 4.0\\blender.exe",
+        L"C:\\Program Files\\Blender Foundation\\Blender 3.6\\blender.exe",
+        L"C:\\Program Files\\Blender Foundation\\Blender 3.5\\blender.exe",
+        L"C:\\Program Files\\Blender Foundation\\Blender 3.4\\blender.exe",
+        L"C:\\Program Files\\Blender Foundation\\Blender 3.3\\blender.exe",
+        L"C:\\Program Files\\Blender Foundation\\Blender 3.0\\blender.exe",
+        L"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Blender\\blender.exe"
     };
 
     for (const wchar_t* p : commonPaths) {
@@ -288,26 +417,56 @@ bool ExternalAppIntegration::ExportToAfterEffectsAdvanced(const AeExportCompPayl
 
             jsx << L"        for (var j = 0; j < itemsData.length; j++) {\n";
             jsx << L"            var it = itemsData[j];\n";
-            jsx << L"            var f = new File(it.path);\n";
-            jsx << L"            if (f.exists) {\n";
-            jsx << L"                var io = new ImportOptions(f);\n";
-            jsx << L"                var footage = app.project.importFile(io);\n";
-            jsx << L"                footage.parentFolder = refFolder;\n";
-            jsx << L"                var layer = comp.layers.add(footage);\n";
-            jsx << L"                layer.property(\"Position\").setValue([it.x, it.y]);\n";
-            jsx << L"                if (footage.width > 0) {\n";
-            jsx << L"                    var sc = (it.targetW / footage.width) * 100;\n";
-            jsx << L"                    layer.property(\"Scale\").setValue([sc, sc]);\n";
+            jsx << L"            try {\n";
+            jsx << L"                var f = new File(it.path);\n";
+            jsx << L"                if (f.exists) {\n";
+            jsx << L"                    var footage = null;\n";
+            jsx << L"                    try {\n";
+            jsx << L"                        var io = new ImportOptions();\n";
+            jsx << L"                        io.file = f;\n";
+            jsx << L"                        if (io.canImportAs(ImportAsType.FOOTAGE)) {\n";
+            jsx << L"                            io.importAs = ImportAsType.FOOTAGE;\n";
+            jsx << L"                        }\n";
+            jsx << L"                        io.sequence = false;\n";
+            jsx << L"                        io.forceAlphabetical = false;\n";
+            jsx << L"                        footage = app.project.importFile(io);\n";
+            jsx << L"                    } catch(eIo) {\n";
+            jsx << L"                        try {\n";
+            jsx << L"                            footage = app.project.importFile(new ImportOptions(f));\n";
+            jsx << L"                        } catch(eDirect) {}\n";
+            jsx << L"                    }\n";
+            jsx << L"                    if (footage) {\n";
+            jsx << L"                        footage.parentFolder = refFolder;\n";
+            jsx << L"                        var layer = comp.layers.add(footage);\n";
+            jsx << L"                        layer.property(\"Position\").setValue([it.x, it.y]);\n";
+            jsx << L"                        if (footage.width > 0) {\n";
+            jsx << L"                            var sc = (it.targetW / footage.width) * 100;\n";
+            jsx << L"                            layer.property(\"Scale\").setValue([sc, sc]);\n";
+            jsx << L"                        }\n";
+            jsx << L"                    }\n";
             jsx << L"                }\n";
-            jsx << L"            }\n";
+            jsx << L"            } catch(eItem) {}\n";
             jsx << L"        }\n";
         }
 
         jsx << L"\n        comp.openInViewer();\n";
     }
     else {
-        // Mode: loose_photos (User selected only photos - send directly to active comp if open, no new comp created!)
+        // Mode: loose_photos (User selected only photos - send directly to active comp or auto-create comp)
         jsx << L"        var activeComp = (app.project.activeItem && (app.project.activeItem instanceof CompItem)) ? app.project.activeItem : null;\n";
+        jsx << L"        if (!activeComp) {\n";
+        jsx << L"            for (var ci = 1; ci <= app.project.items.length; ci++) {\n";
+        jsx << L"                if (app.project.items[ci] instanceof CompItem) {\n";
+        jsx << L"                    activeComp = app.project.items[ci];\n";
+        jsx << L"                    break;\n";
+        jsx << L"                }\n";
+        jsx << L"            }\n";
+        jsx << L"            if (!activeComp) {\n";
+        jsx << L"                activeComp = app.project.items.addComp(\"Reference Footage\", 1920, 1080, 1.0, 10.0, 30.0);\n";
+        jsx << L"                activeComp.parentFolder = refFolder;\n";
+        jsx << L"            }\n";
+        jsx << L"            activeComp.openInViewer();\n";
+        jsx << L"        }\n\n";
         jsx << L"        var itemsData = [\n";
         for (size_t i = 0; i < payload.items.size(); ++i) {
             const auto& it = payload.items[i];
@@ -335,38 +494,55 @@ bool ExternalAppIntegration::ExportToAfterEffectsAdvanced(const AeExportCompPayl
 
         jsx << L"        for (var k = 0; k < itemsData.length; k++) {\n";
         jsx << L"            var it = itemsData[k];\n";
-        jsx << L"            var f = new File(it.path);\n";
-        jsx << L"            if (f.exists) {\n";
-        jsx << L"                var io = new ImportOptions(f);\n";
-        jsx << L"                var footage = app.project.importFile(io);\n";
-        jsx << L"                footage.parentFolder = refFolder;\n";
-        jsx << L"                if (activeComp) {\n";
-        jsx << L"                    var layer = activeComp.layers.add(footage);\n";
-        jsx << L"                    layer.selected = true;\n";
-        jsx << L"                    if (itemsData.length === 1) {\n";
-        jsx << L"                        layer.property(\"Position\").setValue([activeComp.width / 2, activeComp.height / 2]);\n";
-        jsx << L"                        if (footage.width > 0 && footage.height > 0) {\n";
-        jsx << L"                            var targetW = activeComp.width * 0.75;\n";
-        jsx << L"                            var targetH = activeComp.height * 0.75;\n";
-        jsx << L"                            var sc = Math.min(targetW / footage.width, targetH / footage.height) * 100;\n";
-        jsx << L"                            layer.property(\"Scale\").setValue([sc, sc]);\n";
+        jsx << L"            try {\n";
+        jsx << L"                var f = new File(it.path);\n";
+        jsx << L"                if (f.exists) {\n";
+        jsx << L"                    var footage = null;\n";
+        jsx << L"                    try {\n";
+        jsx << L"                        var io = new ImportOptions();\n";
+        jsx << L"                        io.file = f;\n";
+        jsx << L"                        if (io.canImportAs(ImportAsType.FOOTAGE)) {\n";
+        jsx << L"                            io.importAs = ImportAsType.FOOTAGE;\n";
         jsx << L"                        }\n";
-        jsx << L"                    } else {\n";
-        jsx << L"                        var maxAllowedW = activeComp.width * 0.82;\n";
-        jsx << L"                        var maxAllowedH = activeComp.height * 0.82;\n";
-        jsx << L"                        var fitScale = Math.min(maxAllowedW / layoutW, maxAllowedH / layoutH);\n";
-        jsx << L"                        if (fitScale <= 0) fitScale = 1.0;\n";
-        jsx << L"                        var posX = activeComp.width / 2 + (it.relX + it.width / 2 - layoutCenterX) * fitScale;\n";
-        jsx << L"                        var posY = activeComp.height / 2 + (it.relY + it.height / 2 - layoutCenterY) * fitScale;\n";
-        jsx << L"                        layer.property(\"Position\").setValue([posX, posY]);\n";
-        jsx << L"                        if (footage.width > 0) {\n";
-        jsx << L"                            var targetW = it.width * fitScale;\n";
-        jsx << L"                            var sc = (targetW / footage.width) * 100;\n";
-        jsx << L"                            layer.property(\"Scale\").setValue([sc, sc]);\n";
+        jsx << L"                        io.sequence = false;\n";
+        jsx << L"                        io.forceAlphabetical = false;\n";
+        jsx << L"                        footage = app.project.importFile(io);\n";
+        jsx << L"                    } catch(eIo) {\n";
+        jsx << L"                        try {\n";
+        jsx << L"                            footage = app.project.importFile(new ImportOptions(f));\n";
+        jsx << L"                        } catch(eDirect) {}\n";
+        jsx << L"                    }\n";
+        jsx << L"                    if (footage) {\n";
+        jsx << L"                        footage.parentFolder = refFolder;\n";
+        jsx << L"                        if (activeComp) {\n";
+        jsx << L"                            var layer = activeComp.layers.add(footage);\n";
+        jsx << L"                            layer.selected = true;\n";
+        jsx << L"                            if (itemsData.length === 1) {\n";
+        jsx << L"                                layer.property(\"Position\").setValue([activeComp.width / 2, activeComp.height / 2]);\n";
+        jsx << L"                                if (footage.width > 0 && footage.height > 0) {\n";
+        jsx << L"                                    var targetW = activeComp.width * 0.75;\n";
+        jsx << L"                                    var targetH = activeComp.height * 0.75;\n";
+        jsx << L"                                    var sc = Math.min(targetW / footage.width, targetH / footage.height) * 100;\n";
+        jsx << L"                                    layer.property(\"Scale\").setValue([sc, sc]);\n";
+        jsx << L"                                }\n";
+        jsx << L"                            } else {\n";
+        jsx << L"                                var maxAllowedW = activeComp.width * 0.82;\n";
+        jsx << L"                                var maxAllowedH = activeComp.height * 0.82;\n";
+        jsx << L"                                var fitScale = Math.min(maxAllowedW / layoutW, maxAllowedH / layoutH);\n";
+        jsx << L"                                if (fitScale <= 0) fitScale = 1.0;\n";
+        jsx << L"                                var posX = activeComp.width / 2 + (it.relX + it.width / 2 - layoutCenterX) * fitScale;\n";
+        jsx << L"                                var posY = activeComp.height / 2 + (it.relY + it.height / 2 - layoutCenterY) * fitScale;\n";
+        jsx << L"                                layer.property(\"Position\").setValue([posX, posY]);\n";
+        jsx << L"                                if (footage.width > 0) {\n";
+        jsx << L"                                    var targetW = it.width * fitScale;\n";
+        jsx << L"                                    var sc = (targetW / footage.width) * 100;\n";
+        jsx << L"                                    layer.property(\"Scale\").setValue([sc, sc]);\n";
+        jsx << L"                                }\n";
+        jsx << L"                            }\n";
         jsx << L"                        }\n";
         jsx << L"                    }\n";
         jsx << L"                }\n";
-        jsx << L"            }\n";
+        jsx << L"            } catch(eItem) {}\n";
         jsx << L"        }\n";
     }
 
@@ -378,12 +554,12 @@ bool ExternalAppIntegration::ExportToAfterEffectsAdvanced(const AeExportCompPayl
     jsx << L"    }\n";
     jsx << L"})();\n";
 
-    // Direct execution via After Effects executable
-    std::wstring aeExe = FindAfterEffectsCmd();
-    if (aeExe.empty()) {
-        aeExe = FindAfterEffectsExe();
+    // Direct execution via After Effects command CLI (AfterFX.com / AfterFX.exe)
+    std::wstring aeCmd = FindAfterEffectsCmd();
+    if (aeCmd.empty()) {
+        aeCmd = FindAfterEffectsExe();
     }
-    if (aeExe.empty()) {
+    if (aeCmd.empty()) {
         outMessage = L"Adobe After Effects executable not detected on this system.";
         return false;
     }
@@ -410,39 +586,67 @@ bool ExternalAppIntegration::ExportToAfterEffectsAdvanced(const AeExportCompPayl
     file.write(utf8Script.data(), utf8Script.size());
     file.close();
 
-    // Execute via ShellExecuteW / cmd.exe just like VS Code's ae-jsx-runner
+    // Check if After Effects is already open and whether its window is currently maximized
+    HWND hAE = FindAfterEffectsWindow();
+    bool wasMaximized = (hAE != nullptr && IsZoomed(hAE));
+
+    // Execute via ShellExecuteW using SW_HIDE so the command CLI runner runs silently
+    // and NEVER sends SW_SHOWNORMAL to the GUI window!
     HINSTANCE hInst = ShellExecuteW(
         nullptr,
         L"open",
-        aeExe.c_str(),
+        aeCmd.c_str(),
         (L"-r \"" + scriptFile + L"\"").c_str(),
         nullptr,
-        SW_SHOWNORMAL
+        SW_HIDE
     );
 
-    if ((INT_PTR)hInst > 32) {
-        outMessage = (payload.mode == L"group_comp") 
-            ? L"Created Reference Comp in Adobe After Effects!"
-            : L"Imported reference footage into Adobe After Effects!";
-        return true;
+    bool launched = ((INT_PTR)hInst > 32);
+
+    if (!launched) {
+        // Fallback: cmd.exe /d /s /c
+        wchar_t sysDir[MAX_PATH] = {0};
+        GetSystemDirectoryW(sysDir, MAX_PATH);
+        std::wstring cmdExe = std::wstring(sysDir) + L"\\cmd.exe";
+        std::wstring fullCmd = L"\"" + cmdExe + L"\" /d /s /c \"\"" + aeCmd + L"\" -r \"" + scriptFile + L"\"\"";
+
+        STARTUPINFOW si = { sizeof(si) };
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESHOWWINDOW;
+        si.wShowWindow = SW_HIDE;
+        PROCESS_INFORMATION pi = {0};
+        std::vector<wchar_t> cmdBuffer(fullCmd.begin(), fullCmd.end());
+        cmdBuffer.push_back(L'\0');
+
+        if (CreateProcessW(nullptr, cmdBuffer.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+            launched = true;
+        }
     }
 
-    // Fallback: cmd.exe /d /s /c (exact equivalent of Node child_process.exec)
-    wchar_t sysDir[MAX_PATH] = {0};
-    GetSystemDirectoryW(sysDir, MAX_PATH);
-    std::wstring cmdExe = std::wstring(sysDir) + L"\\cmd.exe";
-    std::wstring fullCmd = L"\"" + cmdExe + L"\" /d /s /c \"\"" + aeExe + L"\" -r \"" + scriptFile + L"\"\"";
+    // Active Watchdog Thread:
+    // If AE was maximized, ensure it stays maximized if anything tries to restore it down
+    if (hAE && wasMaximized) {
+        std::thread([hAE]() {
+            for (int i = 0; i < 50; ++i) { // Check every 50ms for 2.5 seconds
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                if (!IsZoomed(hAE)) {
+                    ShowWindow(hAE, SW_MAXIMIZE);
+                    SetForegroundWindow(hAE);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                    if (!IsZoomed(hAE)) {
+                        ShowWindow(hAE, SW_MAXIMIZE);
+                    }
+                    break;
+                }
+            }
+        }).detach();
+    } else if (hAE) {
+        SetForegroundWindow(hAE);
+    }
 
-    STARTUPINFOW si = { sizeof(si) };
-    si.dwFlags = STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_HIDE;
-    PROCESS_INFORMATION pi = {0};
-    std::vector<wchar_t> cmdBuffer(fullCmd.begin(), fullCmd.end());
-    cmdBuffer.push_back(L'\0');
-
-    if (CreateProcessW(nullptr, cmdBuffer.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
+    if (launched) {
         outMessage = (payload.mode == L"group_comp") 
             ? L"Created Reference Comp in Adobe After Effects!"
             : L"Imported reference footage into Adobe After Effects!";
@@ -469,7 +673,7 @@ bool ExternalAppIntegration::SendToPhotoshop(const std::wstring& imagePath, std:
         return OpenWithDefaultApp(imagePath, outMessage);
     }
 
-    HINSTANCE hInst = ShellExecuteW(nullptr, L"open", psExe.c_str(), (L"\"" + imagePath + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+    HINSTANCE hInst = ShellExecuteW(nullptr, L"open", psExe.c_str(), (L"\"" + imagePath + L"\"").c_str(), nullptr, SW_SHOW);
     if ((INT_PTR)hInst > 32) {
         outMessage = L"Opened in Adobe Photoshop.";
         return true;
@@ -485,7 +689,7 @@ bool ExternalAppIntegration::SendToCustomApp(const std::wstring& exePath, const 
         return false;
     }
 
-    HINSTANCE hInst = ShellExecuteW(nullptr, L"open", exePath.c_str(), (L"\"" + imagePath + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+    HINSTANCE hInst = ShellExecuteW(nullptr, L"open", exePath.c_str(), (L"\"" + imagePath + L"\"").c_str(), nullptr, SW_SHOW);
     if ((INT_PTR)hInst > 32) {
         outMessage = L"Sent reference to application successfully.";
         return true;

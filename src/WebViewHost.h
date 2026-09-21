@@ -22,9 +22,12 @@ public:
     WebViewHost();
     ~WebViewHost();
 
-    bool Initialize(HWND hWnd, const std::wstring& assetsPath);
+    bool Initialize(HWND hWnd, const std::wstring& assetsPath, const std::wstring& initialFilePath = L"");
     void Resize(int width, int height);
     void Close();
+
+    void LoadBoardFromFile(const std::wstring& filePath);
+    std::wstring GetInitialFilePath() const { return m_initialFilePath; }
 
     void PostMessageToWeb(const std::wstring& jsonMessage);
     void QueueAddImage(const std::wstring& url, const std::wstring& title);
@@ -42,12 +45,14 @@ private:
 
     // Helpers
     std::wstring GetCacheDirectory();
+    std::wstring GetSessionFilePath();
     std::wstring DownloadImageToLocalCache(const std::wstring& url);
     std::wstring ResolveWebImageUrl(const std::wstring& inputUrl);
     std::wstring SaveBase64ToLocalCache(const std::string& base64Str, const std::wstring& ext);
 
     HWND m_hWnd;
     std::wstring m_assetsPath;
+    std::wstring m_initialFilePath;
     bool m_isAlwaysOnTop;
     float m_currentOpacity;
 

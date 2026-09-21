@@ -1,6 +1,8 @@
 #include <windows.h>
 #include <dwmapi.h>
 #include <shlwapi.h>
+#include <shlobj.h>
+#include <shellapi.h>
 #include <string>
 #include <fstream>
 #include <memory>
@@ -9,6 +11,7 @@
 
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "shlwapi.lib")
+#pragma comment(lib, "shell32.lib")
 
 static std::unique_ptr<WebViewHost> g_webViewHost;
 
@@ -23,6 +26,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_NCCALCSIZE:
         // Returning 0 removes the standard title bar entirely while preserving resize borders and Aero snap!
         return 0;
+
+    case WM_COPYDATA: {
+        COPYDATASTRUCT* cds = reinterpret_cast<COPYDATASTRUCT*>(lParam);
+        if (cds && cds->dwData == 1001 && cds->lpData && g_webViewHost) {
+            const wchar_t* pPath = reinterpret_cast<const wchar_t*>(cds->lpData);
+            g_webViewHost->LoadBoardFromFile(pPath);
+            if (IsIconic(hWnd)) {
+                ShowWindow(hWnd, SW_RESTORE);
+            }
+            SetForegroundWindow(hWnd);
+            return TRUE;
+        }
+        return FALSE;
+    }
 
     case WM_DROPBOARD_ADD_URL: {
         AddImageRequest* req = reinterpret_cast<AddImageRequest*>(lParam);
@@ -110,6 +127,69 @@ std::wstring LocateAssetsDir() {
     return candidate1;
 }
 
+void EnsureFileAssociationRegistered() {
+    wchar_t exePath[MAX_PATH] = { 0 };
+    if (!GetModuleFileNameW(nullptr, exePath, MAX_PATH)) return;
+
+    std::wstring exeStr = exePath;
+    std::wstring iconStr = exeStr + L",0";
+    std::wstring cmdStr = L"\"" + exeStr + L"\" \"%1\"";
+
+    auto setRegString = [](HKEY root, const std::wstring& subkey, const wchar_t* valName, const std::wstring& valData) {
+        HKEY hKey = nullptr;
+        if (RegCreateKeyExW(root, subkey.c_str(), 0, nullptr, REG_OPTION_NON_VOLATILE, KEY_WRITE, nullptr, &hKey, nullptr) == ERROR_SUCCESS) {
+            RegSetValueExW(hKey, valName, 0, REG_SZ,
+                reinterpret_cast<const BYTE*>(valData.c_str()),
+                static_cast<DWORD>((valData.length() + 1) * sizeof(wchar_t)));
+            RegCloseKey(hKey);
+        }
+    };
+
+    // 1. HKCU\Software\Classes\.dropboard
+    setRegString(HKEY_CURRENT_USER, L"Software\\Classes\\.dropboard", nullptr, L"DropBoard.Project");
+    setRegString(HKEY_CURRENT_USER, L"Software\\Classes\\.dropboard", L"Content Type", L"application/x-dropboard");
+    setRegString(HKEY_CURRENT_USER, L"Software\\Classes\\.dropboard", L"PerceivedType", L"Document");
+
+    // 2. HKCU\Software\Classes\DropBoard.Project
+    setRegString(HKEY_CURRENT_USER, L"Software\\Classes\\DropBoard.Project", nullptr, L"DropBoard Project File");
+    setRegString(HKEY_CURRENT_USER, L"Software\\Classes\\DropBoard.Project", L"FriendlyTypeName", L"DropBoard Project File");
+
+    // 3. HKCU\Software\Classes\DropBoard.Project\DefaultIcon
+    setRegString(HKEY_CURRENT_USER, L"Software\\Classes\\DropBoard.Project\\DefaultIcon", nullptr, iconStr);
+
+    // 4. HKCU\Software\Classes\DropBoard.Project\shell\open\command
+    setRegString(HKEY_CURRENT_USER, L"Software\\Classes\\DropBoard.Project\\shell\\open\\command", nullptr, cmdStr);
+
+    // 5. HKCU\Software\Classes\Applications\DropBoard.exe
+    setRegString(HKEY_CURRENT_USER, L"Software\\Classes\\Applications\\DropBoard.exe", L"FriendlyAppName", L"DropBoard Studio");
+    setRegString(HKEY_CURRENT_USER, L"Software\\Classes\\Applications\\DropBoard.exe\\DefaultIcon", nullptr, iconStr);
+    setRegString(HKEY_CURRENT_USER, L"Software\\Classes\\Applications\\DropBoard.exe\\shell\\open\\command", nullptr, cmdStr);
+
+    // 6. HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.dropboard
+    setRegString(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.dropboard\\OpenWithList", L"a", L"DropBoard.exe");
+    setRegString(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.dropboard\\OpenWithList", L"MRUList", L"a");
+
+    // 7. Refresh Windows Shell
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+}
+
+std::wstring GetCommandLineTargetFile() {
+    int numArgs = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &numArgs);
+    std::wstring target;
+    if (argv && numArgs >= 2) {
+        std::wstring candidate = argv[1];
+        if (!candidate.empty()) {
+            if (candidate.front() == L'"' && candidate.back() == L'"' && candidate.length() >= 2) {
+                candidate = candidate.substr(1, candidate.length() - 2);
+            }
+            target = candidate;
+        }
+        LocalFree(argv);
+    }
+    return target;
+}
+
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     // Enable Per-Monitor DPI Awareness v2
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -119,6 +199,30 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     if (FAILED(hr)) return 1;
 
     const wchar_t CLASS_NAME[] = L"DropBoardMainWindowClass";
+
+    // Parse target file from command line (e.g. user double-clicked a .dropboard file)
+    std::wstring fileToOpen = GetCommandLineTargetFile();
+
+    // Check single instance: if DropBoard is already running, hand over target file and focus it
+    HWND existingHwnd = FindWindowW(CLASS_NAME, nullptr);
+    if (existingHwnd) {
+        if (!fileToOpen.empty()) {
+            COPYDATASTRUCT cds = { 0 };
+            cds.dwData = 1001;
+            cds.cbData = static_cast<DWORD>((fileToOpen.length() + 1) * sizeof(wchar_t));
+            cds.lpData = (PVOID)fileToOpen.c_str();
+            SendMessageW(existingHwnd, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cds));
+        }
+        if (IsIconic(existingHwnd)) {
+            ShowWindow(existingHwnd, SW_RESTORE);
+        }
+        SetForegroundWindow(existingHwnd);
+        CoUninitialize();
+        return 0;
+    }
+
+    // Auto-ensure .dropboard file association & icon are registered in HKCU
+    EnsureFileAssociationRegistered();
 
     HICON hAppIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON));
     HICON hAppIconSm = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
@@ -181,7 +285,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     // Initialize WebView2
     g_webViewHost = std::make_unique<WebViewHost>();
     std::wstring assetsDir = LocateAssetsDir();
-    if (!g_webViewHost->Initialize(hWnd, assetsDir)) {
+    if (!g_webViewHost->Initialize(hWnd, assetsDir, fileToOpen)) {
         MessageBoxW(hWnd, L"Failed to initialize DropBoard UI. Please ensure Microsoft Edge WebView2 is installed.", L"DropBoard Error", MB_ICONERROR);
         return 1;
     }

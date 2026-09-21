@@ -1,0 +1,23 @@
+======================================================
+DropBoard Browser Companion Extension Setup Guide
+======================================================
+
+HOW TO INSTALL IN CHROME / EDGE / BRAVE:
+
+1. Open your browser and go to your extensions manager:
+   - Google Chrome : chrome://extensions
+   - Microsoft Edge: edge://extensions
+   - Brave Browser : brave://extensions
+
+2. In the top-right corner, toggle on "Developer mode".
+
+3. Click the "Load unpacked" button in the top-left corner.
+
+4. Select this "extension" folder:
+   C:\Program Files\DropBoard\extension
+   (or your custom DropBoard installation path).
+
+5. You're all set!
+   - Right-click any image on the web -> "Add Image to DropBoard"
+   - On Pinterest, a floating "+ Board" button appears on every pin.
+======================================================

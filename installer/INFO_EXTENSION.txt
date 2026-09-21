@@ -1,0 +1,25 @@
+======================================================================
+IMPORTANT: DROPBOARD BROWSER COMPANION EXTENSION (CHROME / EDGE / BRAVE)
+======================================================================
+
+DropBoard includes a companion extension for Google Chrome, Microsoft Edge,
+and Brave to capture images and references directly from Pinterest, 
+ArtStation, YouTube, and any web page straight onto your canvas with 1 click!
+
+HOW TO INSTALL THE EXTENSION (TAKES 10 SECONDS):
+----------------------------------------------------------------------
+1. Open your browser and navigate to the extensions page:
+   - Google Chrome : chrome://extensions
+   - Microsoft Edge: edge://extensions
+   - Brave Browser : brave://extensions
+
+2. In the top-right corner, ENABLE "Developer mode".
+
+3. In the top-left corner, click "Load unpacked".
+
+4. Select the "extension" folder inside your DropBoard directory.
+   (Check the box on the final setup screen to open this folder automatically).
+
+5. Done! Right-click any web image -> "Add Image to DropBoard".
+   On Pinterest, a "+ Board" hover button will automatically appear!
+======================================================================

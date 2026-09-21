@@ -49,9 +49,13 @@ const NativeBridge = {
   saveBoardDialog(data, name = '') { this.post('save_board_dialog', { data, name }); },
   loadBoardDirect(filePath) { this.post('load_board_direct', { filePath }); },
   loadBoardDialog() { this.post('load_board_dialog'); },
+  loadSessionBoard() { this.post('load_session_board'); },
   clearImageCache() { this.post('clear_image_cache'); },
   openCacheFolder() { this.post('open_cache_folder'); },
-  getSystemFonts() { this.post('get_system_fonts'); }
+  getSystemFonts() { this.post('get_system_fonts'); },
+  openExternalUrl(url) { this.post('open_external_url', { url }); },
+  registerFileAssociation() { this.post('register_file_association'); },
+  appReady() { this.post('app_ready'); }
 };
 
 // =============================================================================
@@ -326,23 +330,43 @@ class CanvasEngine {
       }
     });
 
-    // Pan via Middle Click, Space + Left Click, or Alt + Left Click
+    // Pan via Middle Click, Space + Left Click, Alt + Left Click, or Right-Click Drag (PureRef style)
+    let hasMovedPan = false;
+    let panStartClientX = 0;
+    let panStartClientY = 0;
+    let activePanButton = -1;
+
     this.viewport.addEventListener('mousedown', (e) => {
-      if (e.target.closest('.ref-card') || e.target.closest('.floating-dock') || e.target.closest('.canvas-hud') || e.target.closest('.titlebar')) {
+      // Don't pan if clicking UI controls outside canvas
+      if (e.target.closest('.floating-dock') || e.target.closest('.titlebar') || e.target.closest('.modal-card') || e.target.closest('.context-menu') || e.target.closest('.blender-popup') || e.target.closest('.opacity-popover')) {
         return;
       }
 
-      if (e.button === 1 || (e.button === 0 && (this.spacePressed || e.altKey))) {
+      // Check if this is a Pan action
+      const isMiddle = (e.button === 1);
+      const isSpaceOrAlt = (e.button === 0 && (this.spacePressed || e.altKey));
+      const isRight = (e.button === 2);
+
+      if (isMiddle || isSpaceOrAlt || isRight) {
         this.isPanning = true;
+        activePanButton = e.button;
+        hasMovedPan = false;
+        panStartClientX = e.clientX;
+        panStartClientY = e.clientY;
         this.panStartX = e.clientX - this.panX;
         this.panStartY = e.clientY - this.panY;
         this.viewport.classList.add('panning-active');
         e.preventDefault();
+        e.stopPropagation();
       }
-    });
+    }, true); // Capture phase: catches pan input before any child card/group intercepts it!
 
     window.addEventListener('mousemove', (e) => {
       if (this.isPanning) {
+        const dist = Math.hypot(e.clientX - panStartClientX, e.clientY - panStartClientY);
+        if (dist > 3) {
+          hasMovedPan = true;
+        }
         this.panX = e.clientX - this.panStartX;
         this.panY = e.clientY - this.panStartY;
         this.updateTransform();
@@ -358,6 +382,16 @@ class CanvasEngine {
         }
       }
     });
+
+    // Suppress context menu if user was right-click dragging to pan (PureRef style!)
+    window.addEventListener('contextmenu', (e) => {
+      if (hasMovedPan && activePanButton === 2) {
+        e.preventDefault();
+        e.stopPropagation();
+        hasMovedPan = false;
+        activePanButton = -1;
+      }
+    }, true);
   }
 }
 
@@ -424,8 +458,10 @@ class DropBoardManager {
     this.initBlenderSearch();
     this.initNewProjectModal();
     this.initSettingsModal();
+    this.initAboutModal();
     this.updateDockLayout();
     this.loadAutoSave();
+    NativeBridge.appReady();
 
     window.addEventListener('beforeunload', () => this.saveAutoSave());
   }
@@ -454,7 +490,8 @@ class DropBoardManager {
           youtubeUrl: msg.youtubeUrl,
           originalUrl: msg.originalUrl,
           localPath: msg.localPath,
-          localWebUrl: msg.localWebUrl
+          localWebUrl: msg.localWebUrl,
+          imageData: msg.imageData || null
         });
         Toast.show(msg.isYouTube ? 'Added YouTube Reference!' : 'Received reference from Browser Extension!', 'success');
       } else if (msg.type === 'download_completed') {
@@ -534,10 +571,12 @@ class DropBoardManager {
           return;
         }
         if (msg.filePath) {
-          this.currentFilePath = msg.filePath;
-          try { localStorage.setItem('dropboard_last_file_path', msg.filePath); } catch(e) {}
-          const fileName = msg.filePath.replace(/^.*[\\\/]/, '').replace(/\.dropboard$/i, '');
-          this.setProjectName(fileName, false);
+          if (!msg.filePath.toLowerCase().endsWith('session.dropboard')) {
+            this.currentFilePath = msg.filePath;
+            try { localStorage.setItem('dropboard_last_file_path', msg.filePath); } catch(e) {}
+            const fileName = msg.filePath.replace(/^.*[\\\/]/, '').replace(/\.dropboard$/i, '');
+            this.setProjectName(fileName, false);
+          }
         }
         this.deserialize(msg.content, msg.filePath);
         Toast.show(msg.direct ? `Restored: ${this.projectName}` : `Loaded: ${this.projectName}`, 'success');
@@ -545,16 +584,46 @@ class DropBoardManager {
         this.systemFonts = msg.fonts;
       } else if (msg.type === 'cache_cleared') {
         Toast.show(`Cleaned ${msg.count} cached image(s) from disk`, 'success');
+      } else if (msg.type === 'file_assoc_registered') {
+        Toast.show('DropBoard file icon (.dropboard) registered & updated in Windows Explorer!', 'success');
       }
     });
   }
 
   initUIEvents() {
-    // Frameless titlebar dragging
+    // Frameless titlebar dragging - supports dragging from logo, brand, titlebar background, or drag-region
+    const titlebar = document.getElementById('titlebar');
+    if (titlebar) {
+      titlebar.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        // Do not drag if clicking on interactive controls:
+        if (e.target.closest('.tb-btn') || 
+            e.target.closest('.window-control') || 
+            e.target.closest('.project-title-wrapper') || 
+            e.target.closest('.opacity-popover') ||
+            e.target.closest('input') ||
+            e.target.closest('button')) {
+          return;
+        }
+        NativeBridge.startDrag();
+      });
+    }
+
+    const appBrand = document.getElementById('app-brand-btn');
+    if (appBrand) {
+      appBrand.addEventListener('mousedown', (e) => {
+        if (e.button === 0) {
+          NativeBridge.startDrag();
+        }
+      });
+    }
+
     const dragRegion = document.getElementById('drag-region');
-    dragRegion.addEventListener('mousedown', (e) => {
-      if (e.button === 0) NativeBridge.startDrag();
-    });
+    if (dragRegion) {
+      dragRegion.addEventListener('mousedown', (e) => {
+        if (e.button === 0) NativeBridge.startDrag();
+      });
+    }
 
     // Project title inline editing
     const projWrapper = document.getElementById('project-title-wrapper');
@@ -1370,10 +1439,17 @@ class DropBoardManager {
     btnAE.innerHTML = '<strong>Ae</strong> Import';
     btnAE.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (card.localPath) {
-        NativeBridge.sendToAE(card.localPath);
+      const selCards = Array.from(this.selectedCards || []);
+      if (this.selectedCard && !selCards.includes(this.selectedCard)) selCards.push(this.selectedCard);
+      
+      if (selCards.length > 1) {
+        this.exportSelectionToAfterEffects();
       } else {
-        Toast.show('Caching high-res image...', 'info');
+        if (card.localPath || card.imageData) {
+          NativeBridge.sendToAE(card.localPath || '', card.imageData || this.getCardImageData(card) || '');
+        } else {
+          Toast.show('Caching high-res image...', 'info');
+        }
       }
     });
 
@@ -1511,7 +1587,8 @@ class DropBoardManager {
           e.target.closest('.card-overlay') || 
           e.target.closest('.card-group-pill') || 
           e.target.closest('.crop-overlay-editor') || 
-          e.button !== 0) {
+          e.button !== 0 ||
+          this.canvas.spacePressed || e.altKey || this.canvas.isPanning) {
         return;
       }
 
@@ -1522,109 +1599,151 @@ class DropBoardManager {
         this.selectCard(card, false);
       }
 
-      this.recordPreState('Move Reference');
-      isDragging = true;
       startMouseX = e.clientX;
       startMouseY = e.clientY;
       initialCardX = card.x;
       initialCardY = card.y;
       e.stopPropagation();
 
-      // Track start positions of all currently selected cards, groups, and nodes for synchronized movement
-      const movingCards = this.selectedCards.has(card) && this.selectedCards.size > 1
-        ? Array.from(this.selectedCards)
-        : [card];
+      let isDragging = false;
+      let hasStartedMoving = false;
+      let dragRafPending = false;
+      let lastMoveEvt = null;
 
-      const startPositions = movingCards.map(c => ({
-        card: c,
-        x: c.x,
-        y: c.y,
-        baseX: c.baseX !== undefined ? c.baseX : c.x,
-        baseY: c.baseY !== undefined ? c.baseY : c.y
-      }));
+      let movingCards = null;
+      let startPositions = null;
+      let movingGroups = null;
+      let startGroupPositions = null;
+      let movingNodes = null;
+      let startNodePositions = null;
 
-      const movingGroups = Array.from(this.selectedGroups || []);
-      const startGroupPositions = movingGroups.map(g => ({
-        group: g,
-        x: g.x,
-        y: g.y,
-        memberCards: this.cards.filter(c => c.groupId === g.id && !movingCards.includes(c)).map(mc => ({
-          card: mc,
-          x: mc.x,
-          y: mc.y,
-          baseX: mc.baseX !== undefined ? mc.baseX : mc.x,
-          baseY: mc.baseY !== undefined ? mc.baseY : mc.y
-        }))
-      }));
+      const initDragState = () => {
+        hasStartedMoving = true;
+        isDragging = true;
+        this.recordPreState('Move Reference');
 
-      const movingNodes = Array.from(this.selectedNodes || []);
-      const startNodePositions = movingNodes.map(n => ({
-        node: n,
-        x: n.x,
-        y: n.y
-      }));
+        movingCards = this.selectedCards.has(card) && this.selectedCards.size > 1
+          ? Array.from(this.selectedCards)
+          : [card];
+
+        startPositions = movingCards.map(c => {
+          if (c.element) c.element.classList.add('is-dragging-card');
+          return {
+            card: c,
+            x: c.x,
+            y: c.y,
+            baseX: c.baseX !== undefined ? c.baseX : c.x,
+            baseY: c.baseY !== undefined ? c.baseY : c.y
+          };
+        });
+
+        movingGroups = Array.from(this.selectedGroups || []);
+        startGroupPositions = movingGroups.map(g => ({
+          group: g,
+          x: g.x,
+          y: g.y,
+          memberCards: this.cards.filter(c => c.groupId === g.id && !movingCards.includes(c)).map(mc => ({
+            card: mc,
+            x: mc.x,
+            y: mc.y,
+            baseX: mc.baseX !== undefined ? mc.baseX : mc.x,
+            baseY: mc.baseY !== undefined ? mc.baseY : mc.y
+          }))
+        }));
+
+        movingNodes = Array.from(this.selectedNodes || []);
+        startNodePositions = movingNodes.map(n => ({
+          node: n,
+          x: n.x,
+          y: n.y
+        }));
+      };
 
       const onMouseMove = (moveEvent) => {
-        if (!isDragging) return;
-        const dx = (moveEvent.clientX - startMouseX) / this.canvas.zoom;
-        const dy = (moveEvent.clientY - startMouseY) / this.canvas.zoom;
+        lastMoveEvt = moveEvent;
 
-        // Move all selected cards together
-        startPositions.forEach(item => {
-          item.card.x = item.x + dx;
-          item.card.y = item.y + dy;
-          if (item.card.baseX !== undefined) item.card.baseX = item.baseX + dx;
-          if (item.card.baseY !== undefined) item.card.baseY = item.baseY + dy;
-          item.card.element.style.transform = `translate(${item.card.x}px, ${item.card.y}px)`;
-        });
-
-        // Move any selected groups together
-        startGroupPositions.forEach(item => {
-          item.group.x = item.x + dx;
-          item.group.y = item.y + dy;
-          if (item.group.element) item.group.element.style.transform = `translate(${item.group.x}px, ${item.group.y}px)`;
-          item.memberCards.forEach(mc => {
-            mc.card.x = mc.x + dx;
-            mc.card.y = mc.y + dy;
-            if (mc.card.baseX !== undefined) mc.card.baseX = mc.baseX + dx;
-            if (mc.card.baseY !== undefined) mc.card.baseY = mc.baseY + dy;
-            if (mc.card.element) mc.card.element.style.transform = `translate(${mc.card.x}px, ${mc.card.y}px)`;
-          });
-        });
-
-        // Move any selected nodes together
-        startNodePositions.forEach(item => {
-          item.node.x = item.x + dx;
-          item.node.y = item.y + dy;
-          if (item.node.element) item.node.element.style.transform = `translate(${item.node.x}px, ${item.node.y}px)`;
-        });
-
-        this.renderConnections();
-
-        // Check if hovering over any group frame (based on primary dragged card)
-        const cx = card.x + card.width / 2;
-        const cy = card.y + card.height / 2;
-        const hoverGroup = this.groups.find(g => 
-          cx >= g.x && cx <= (g.x + g.width) &&
-          cy >= g.y && cy <= (g.y + g.height)
-        );
-
-        if (hoverGroup !== currentHoverGroup) {
-          if (currentHoverGroup && currentHoverGroup.element) {
-            currentHoverGroup.element.classList.remove('is-drop-target');
-          }
-          currentHoverGroup = hoverGroup;
-          if (currentHoverGroup && currentHoverGroup.element) {
-            currentHoverGroup.element.classList.add('is-drop-target');
-          }
+        if (!hasStartedMoving) {
+          const dist = Math.hypot(moveEvent.clientX - startMouseX, moveEvent.clientY - startMouseY);
+          if (dist < 4) return;
+          initDragState();
         }
+
+        if (dragRafPending) return;
+        dragRafPending = true;
+
+        requestAnimationFrame(() => {
+          dragRafPending = false;
+          if (!hasStartedMoving || !lastMoveEvt) return;
+
+          const dx = (lastMoveEvt.clientX - startMouseX) / this.canvas.zoom;
+          const dy = (lastMoveEvt.clientY - startMouseY) / this.canvas.zoom;
+
+          // Move all selected cards together
+          startPositions.forEach(item => {
+            item.card.x = item.x + dx;
+            item.card.y = item.y + dy;
+            if (item.card.baseX !== undefined) item.card.baseX = item.baseX + dx;
+            if (item.card.baseY !== undefined) item.card.baseY = item.baseY + dy;
+            item.card.element.style.transform = `translate(${item.card.x}px, ${item.card.y}px)`;
+          });
+
+          // Move any selected groups together
+          startGroupPositions.forEach(item => {
+            item.group.x = item.x + dx;
+            item.group.y = item.y + dy;
+            if (item.group.element) item.group.element.style.transform = `translate(${item.group.x}px, ${item.group.y}px)`;
+            item.memberCards.forEach(mc => {
+              mc.card.x = mc.x + dx;
+              mc.card.y = mc.y + dy;
+              if (mc.card.baseX !== undefined) mc.card.baseX = mc.baseX + dx;
+              if (mc.card.baseY !== undefined) mc.card.baseY = mc.baseY + dy;
+              if (mc.card.element) mc.card.element.style.transform = `translate(${mc.card.x}px, ${mc.card.y}px)`;
+            });
+          });
+
+          // Move any selected nodes together
+          startNodePositions.forEach(item => {
+            item.node.x = item.x + dx;
+            item.node.y = item.y + dy;
+            if (item.node.element) item.node.element.style.transform = `translate(${item.node.x}px, ${item.node.y}px)`;
+          });
+
+          this.renderConnectionsThrottled();
+
+          // Check if hovering over any group frame (based on primary dragged card)
+          const cx = card.x + card.width / 2;
+          const cy = card.y + card.height / 2;
+          const hoverGroup = this.groups.find(g => 
+            cx >= g.x && cx <= (g.x + g.width) &&
+            cy >= g.y && cy <= (g.y + g.height)
+          );
+
+          if (hoverGroup !== currentHoverGroup) {
+            if (currentHoverGroup && currentHoverGroup.element) {
+              currentHoverGroup.element.classList.remove('is-drop-target');
+            }
+            currentHoverGroup = hoverGroup;
+            if (currentHoverGroup && currentHoverGroup.element) {
+              currentHoverGroup.element.classList.add('is-drop-target');
+            }
+          }
+        });
       };
 
       const onMouseUp = () => {
-        if (!isDragging) return;
-        isDragging = false;
         window.removeEventListener('mousemove', onMouseMove);
         window.removeEventListener('mouseup', onMouseUp);
+
+        if (!hasStartedMoving) {
+          // Instant selection / click - zero history snapshot, zero delay!
+          return;
+        }
+
+        if (startPositions) {
+          startPositions.forEach(item => {
+            if (item.card.element) item.card.element.classList.remove('is-dragging-card');
+          });
+        }
 
         if (currentHoverGroup && currentHoverGroup.element) {
           currentHoverGroup.element.classList.remove('is-drop-target');
@@ -1668,7 +1787,7 @@ class DropBoardManager {
         }
 
         currentHoverGroup = null;
-        this.commitHistory('Move Reference');
+        this.commitHistory('Move Reference', true);
       };
 
       window.addEventListener('mousemove', onMouseMove);
@@ -1900,6 +2019,7 @@ class DropBoardManager {
     const card = {
       id,
       url: srcCard.url,
+      imageData: srcCard.imageData || this.getCardImageData(srcCard) || undefined,
       localPath: srcCard.localPath || '',
       localWebUrl: srcCard.localWebUrl || '',
       isYouTube: !!srcCard.isYouTube,
@@ -3588,8 +3708,11 @@ class DropBoardManager {
     if (this.selectedNode && !selNodes.includes(this.selectedNode)) selNodes.push(this.selectedNode);
 
     // 1. Group Reference Comp Mode:
-    // If user explicitly chose a group via menu, or selected a group frame:
-    let targetGroup = preferredGroup || (selGroups.length > 0 ? selGroups[0] : null);
+    // Only if preferredGroup was specifically chosen, OR only a group frame was selected without card selection
+    let targetGroup = preferredGroup;
+    if (!targetGroup && selGroups.length > 0 && selCards.length === 0) {
+      targetGroup = selGroups[0];
+    }
 
     if (targetGroup) {
       let groupCards = this.cards.filter(c => c.groupId === targetGroup.id);
@@ -3606,9 +3729,29 @@ class DropBoardManager {
 
       const nodeInfo = this.extractNodeInfoForExport(connectedNodes);
 
+      const extractCardExportData = (c) => {
+        let imgData = '';
+        const imgEl = c.element ? c.element.querySelector('img') : null;
+        if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+          try {
+            const cvs = document.createElement('canvas');
+            cvs.width = imgEl.naturalWidth;
+            cvs.height = imgEl.naturalHeight;
+            const ctx = cvs.getContext('2d');
+            ctx.drawImage(imgEl, 0, 0);
+            const isPng = (c.url && c.url.toLowerCase().endsWith('.png')) || (c.localPath && c.localPath.toLowerCase().endsWith('.png'));
+            imgData = cvs.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.92);
+          } catch(e) {}
+        }
+        if (!imgData) {
+          imgData = c.imageData || this.getCardImageData(c) || '';
+        }
+        return imgData;
+      };
+
       const items = groupCards.map(c => ({
         filePath: c.localPath || '',
-        imageData: c.localPath ? '' : (c.imageData || ''),
+        imageData: extractCardExportData(c),
         relX: c.x - targetGroup.x,
         relY: c.y - targetGroup.y,
         width: c.width || 300,
@@ -3631,19 +3774,38 @@ class DropBoardManager {
       return;
     }
 
-    // 2. Loose Photos Mode (user selected photos only, no group selected):
-    // Send ONLY the selected photos directly into the active comp in After Effects (no new comp created!).
+    // 2. Loose Photos Mode (user selected photos directly, or selected multiple cards):
     if (selCards.length > 0) {
+      const extractCardExportData = (c) => {
+        let imgData = '';
+        const imgEl = c.element ? c.element.querySelector('img') : null;
+        if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+          try {
+            const cvs = document.createElement('canvas');
+            cvs.width = imgEl.naturalWidth;
+            cvs.height = imgEl.naturalHeight;
+            const ctx = cvs.getContext('2d');
+            ctx.drawImage(imgEl, 0, 0);
+            const isPng = (c.url && c.url.toLowerCase().endsWith('.png')) || (c.localPath && c.localPath.toLowerCase().endsWith('.png'));
+            imgData = cvs.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.92);
+          } catch(e) {}
+        }
+        if (!imgData) {
+          imgData = c.imageData || this.getCardImageData(c) || '';
+        }
+        return imgData;
+      };
+
       const items = selCards.map(c => ({
         filePath: c.localPath || '',
-        imageData: c.localPath ? '' : (c.imageData || ''),
+        imageData: extractCardExportData(c),
         relX: c.x,
         relY: c.y,
         width: c.width || 300,
         height: c.height || 200
       }));
 
-      Toast.show(`Importing ${items.length} reference photo(s) into active comp...`, 'info');
+      Toast.show(`Importing ${items.length} reference photo(s) into After Effects...`, 'info');
       NativeBridge.exportToAEComp({
         mode: 'loose_photos',
         items
@@ -3757,9 +3919,14 @@ class DropBoardManager {
     }
 
     document.getElementById('cm-send-ae').addEventListener('click', () => {
-      const c = this.activeContextMenuCard;
-      if (c && (c.localPath || c.imageData)) {
-        NativeBridge.sendToAE(c.localPath || '', c.imageData || '');
+      const selCards = Array.from(this.selectedCards || []);
+      if (this.selectedCard && !selCards.includes(this.selectedCard)) selCards.push(this.selectedCard);
+      const targetCard = this.activeContextMenuCard || this.selectedCard;
+
+      if (selCards.length > 1) {
+        this.exportSelectionToAfterEffects();
+      } else if (targetCard && (targetCard.localPath || targetCard.imageData)) {
+        NativeBridge.sendToAE(targetCard.localPath || '', targetCard.imageData || this.getCardImageData(targetCard) || '');
       } else {
         Toast.show('Select a reference card first', 'info');
       }
@@ -4541,6 +4708,7 @@ class DropBoardManager {
 
     const { top = 0, right = 0, bottom = 0, left = 0 } = card.crop || {};
     const isCropped = (top > 0 || right > 0 || bottom > 0 || left > 0);
+    const wasCropped = card.isCropped;
     card.isCropped = isCropped;
 
     if (isCropped) {
@@ -4574,7 +4742,7 @@ class DropBoardManager {
       card.element.style.height = `${height}px`;
       card.element.style.transform = `translate(${x}px, ${y}px)`;
 
-      if (card.mediaContainer) {
+      if (wasCropped && card.mediaContainer) {
         card.mediaContainer.style.clipPath = 'none';
         card.mediaContainer.style.overflow = 'visible';
         const img = card.mediaContainer.querySelector('img');
@@ -4594,10 +4762,9 @@ class DropBoardManager {
   calculateGroupContentHeight(group, targetWidth = group.width) {
     if (!group) return 180;
     const memberCards = this.cards.filter(c => c.groupId === group.id);
-    const headerEl = group.element ? group.element.querySelector('.group-header') : null;
+    const headerH = 38;
     const notesEl = group.element ? group.element.querySelector('.group-notes-container') : null;
-    const headerH = headerEl ? headerEl.offsetHeight : 38;
-    const notesH = notesEl ? notesEl.offsetHeight : 64;
+    const notesH = (notesEl && notesEl.clientHeight) ? notesEl.clientHeight : (group.notes ? 64 : 0);
     const topOffset = headerH + notesH + 14;
     const paddingBottom = 16;
     const gap = 12;
@@ -4663,10 +4830,9 @@ class DropBoardManager {
     const paddingBottom = isNoGap ? 8 : 16;
     const gap = isNoGap ? 0 : Math.min(24, Math.max(4, Math.round((this.arrangeGap !== undefined ? this.arrangeGap : 32) * 0.4)));
 
-    const headerEl = group.element.querySelector('.group-header');
+    const headerH = 38;
     const notesEl = group.element.querySelector('.group-notes-container');
-    const headerH = headerEl ? headerEl.offsetHeight : 38;
-    const notesH = notesEl ? notesEl.offsetHeight : 64;
+    const notesH = (notesEl && notesEl.clientHeight) ? notesEl.clientHeight : (group.notes ? 64 : 0);
     const topOffset = headerH + notesH + 14;
 
     const availW = Math.max(100, group.width - paddingX * 2);
@@ -4966,6 +5132,7 @@ class DropBoardManager {
     // Whole-Panel Group Dragging & Selection
     groupEl.addEventListener('mousedown', (e) => {
       if (e.button !== 0 ||
+          this.canvas.spacePressed || e.altKey || this.canvas.isPanning ||
           e.target.closest('.group-actions') || 
           e.target.closest('.group-notes-textarea') || 
           e.target.closest('.group-resize-handle') ||
@@ -4987,91 +5154,126 @@ class DropBoardManager {
         this.selectGroup(group, false);
       }
 
-      this.recordPreState('Move Group');
-      groupEl.classList.add('is-dragging-group');
-
       const startMouseX = e.clientX;
       const startMouseY = e.clientY;
 
-      // Track moving groups
-      const movingGroups = this.selectedGroups.has(group) && this.selectedGroups.size > 1
-        ? Array.from(this.selectedGroups)
-        : [group];
+      let isDragging = false;
+      let hasStartedMoving = false;
+      let dragRafPending = false;
+      let lastMoveEvt = null;
 
-      const startGroupPositions = movingGroups.map(g => ({
-        group: g,
-        startX: g.x,
-        startY: g.y,
-        memberCards: this.cards.filter(c => c.groupId === g.id).map(c => ({
+      let movingGroups = null;
+      let startGroupPositions = null;
+      let movingNodes = null;
+      let startNodePositions = null;
+      let movingLooseCards = null;
+
+      const initGroupDragState = () => {
+        hasStartedMoving = true;
+        isDragging = true;
+        this.recordPreState('Move Group');
+        groupEl.classList.add('is-dragging-group');
+
+        movingGroups = this.selectedGroups.has(group) && this.selectedGroups.size > 1
+          ? Array.from(this.selectedGroups)
+          : [group];
+
+        startGroupPositions = movingGroups.map(g => ({
+          group: g,
+          startX: g.x,
+          startY: g.y,
+          memberCards: this.cards.filter(c => c.groupId === g.id).map(c => ({
+            card: c,
+            x: c.x,
+            y: c.y,
+            baseX: c.baseX !== undefined ? c.baseX : c.x,
+            baseY: c.baseY !== undefined ? c.baseY : c.y
+          }))
+        }));
+
+        movingNodes = Array.from(this.selectedNodes || []);
+        startNodePositions = movingNodes.map(n => ({
+          node: n,
+          x: n.x,
+          y: n.y
+        }));
+
+        movingLooseCards = Array.from(this.selectedCards || []).filter(c => 
+          !movingGroups.some(g => g.id === c.groupId)
+        ).map(c => ({
           card: c,
           x: c.x,
           y: c.y,
           baseX: c.baseX !== undefined ? c.baseX : c.x,
           baseY: c.baseY !== undefined ? c.baseY : c.y
-        }))
-      }));
-
-      // Also move any selected standalone cards or nodes together!
-      const movingNodes = Array.from(this.selectedNodes || []);
-      const startNodePositions = movingNodes.map(n => ({
-        node: n,
-        x: n.x,
-        y: n.y
-      }));
-
-      const movingLooseCards = Array.from(this.selectedCards || []).filter(c => 
-        !movingGroups.some(g => g.id === c.groupId)
-      ).map(c => ({
-        card: c,
-        x: c.x,
-        y: c.y,
-        baseX: c.baseX !== undefined ? c.baseX : c.x,
-        baseY: c.baseY !== undefined ? c.baseY : c.y
-      }));
+        }));
+      };
 
       const onMouseMove = (moveEvt) => {
-        const dx = (moveEvt.clientX - startMouseX) / this.canvas.zoom;
-        const dy = (moveEvt.clientY - startMouseY) / this.canvas.zoom;
+        lastMoveEvt = moveEvt;
 
-        // Move all selected groups and their member cards
-        startGroupPositions.forEach(item => {
-          item.group.x = item.startX + dx;
-          item.group.y = item.startY + dy;
-          if (item.group.element) item.group.element.style.transform = `translate(${item.group.x}px, ${item.group.y}px)`;
+        if (!hasStartedMoving) {
+          const dist = Math.hypot(moveEvt.clientX - startMouseX, moveEvt.clientY - startMouseY);
+          if (dist < 4) return;
+          initGroupDragState();
+        }
 
-          item.memberCards.forEach(mc => {
-            mc.card.x = mc.x + dx;
-            mc.card.y = mc.y + dy;
-            if (mc.card.baseX !== undefined) mc.card.baseX = mc.baseX + dx;
-            if (mc.card.baseY !== undefined) mc.card.baseY = mc.baseY + dy;
-            if (mc.card.element) mc.card.element.style.transform = `translate(${mc.card.x}px, ${mc.card.y}px)`;
+        if (dragRafPending) return;
+        dragRafPending = true;
+
+        requestAnimationFrame(() => {
+          dragRafPending = false;
+          if (!hasStartedMoving || !lastMoveEvt) return;
+
+          const dx = (lastMoveEvt.clientX - startMouseX) / this.canvas.zoom;
+          const dy = (lastMoveEvt.clientY - startMouseY) / this.canvas.zoom;
+
+          // Move all selected groups and their member cards
+          startGroupPositions.forEach(item => {
+            item.group.x = item.startX + dx;
+            item.group.y = item.startY + dy;
+            if (item.group.element) item.group.element.style.transform = `translate(${item.group.x}px, ${item.group.y}px)`;
+
+            item.memberCards.forEach(mc => {
+              mc.card.x = mc.x + dx;
+              mc.card.y = mc.y + dy;
+              if (mc.card.baseX !== undefined) mc.card.baseX = mc.baseX + dx;
+              if (mc.card.baseY !== undefined) mc.card.baseY = mc.baseY + dy;
+              if (mc.card.element) mc.card.element.style.transform = `translate(${mc.card.x}px, ${mc.card.y}px)`;
+            });
           });
-        });
 
-        // Move any selected nodes
-        startNodePositions.forEach(item => {
-          item.node.x = item.x + dx;
-          item.node.y = item.y + dy;
-          if (item.node.element) item.node.element.style.transform = `translate(${item.node.x}px, ${item.node.y}px)`;
-        });
+          // Move any selected nodes
+          startNodePositions.forEach(item => {
+            item.node.x = item.x + dx;
+            item.node.y = item.y + dy;
+            if (item.node.element) item.node.element.style.transform = `translate(${item.node.x}px, ${item.node.y}px)`;
+          });
 
-        // Move any loose selected cards
-        movingLooseCards.forEach(item => {
-          item.card.x = item.x + dx;
-          item.card.y = item.y + dy;
-          if (item.card.baseX !== undefined) item.card.baseX = item.baseX + dx;
-          if (item.card.baseY !== undefined) item.card.baseY = item.baseY + dy;
-          if (item.card.element) item.card.element.style.transform = `translate(${item.card.x}px, ${item.card.y}px)`;
-        });
+          // Move any loose selected cards
+          movingLooseCards.forEach(item => {
+            item.card.x = item.x + dx;
+            item.card.y = item.y + dy;
+            if (item.card.baseX !== undefined) item.card.baseX = item.baseX + dx;
+            if (item.card.baseY !== undefined) item.card.baseY = item.baseY + dy;
+            if (item.card.element) item.card.element.style.transform = `translate(${item.card.x}px, ${item.card.y}px)`;
+          });
 
-        this.renderConnections();
+          this.renderConnectionsThrottled();
+        });
       };
 
       const onMouseUp = () => {
-        groupEl.classList.remove('is-dragging-group');
         window.removeEventListener('mousemove', onMouseMove);
         window.removeEventListener('mouseup', onMouseUp);
-        this.commitHistory('Move Group');
+
+        if (!hasStartedMoving) {
+          // Instant click / selection without delay!
+          return;
+        }
+
+        groupEl.classList.remove('is-dragging-group');
+        this.commitHistory('Move Group', true);
       };
 
       window.addEventListener('mousemove', onMouseMove);
@@ -5914,9 +6116,9 @@ class DropBoardManager {
   }
 
   initNodeDrag(nodeEl, node) {
-    let isDragging = false;
     nodeEl.addEventListener('mousedown', (e) => {
       if (e.button !== 0 ||
+          this.canvas.spacePressed || e.altKey || this.canvas.isPanning ||
           e.target.closest('.prod-node-pin') ||
           e.target.closest('.node-textarea') ||
           e.target.closest('.node-input-text') ||
@@ -5936,93 +6138,123 @@ class DropBoardManager {
         this.selectNode(node, false);
       }
 
-      this.recordPreState('Move Node');
-      isDragging = true;
-      nodeEl.classList.add('is-dragging');
-
       const startMouseX = e.clientX;
       const startMouseY = e.clientY;
 
-      // Track moving nodes
-      const movingNodes = this.selectedNodes.has(node) && this.selectedNodes.size > 1
-        ? Array.from(this.selectedNodes)
-        : [node];
+      let isDragging = false;
+      let hasStartedMoving = false;
+      let dragRafPending = false;
+      let lastMoveEvt = null;
 
-      const startNodePositions = movingNodes.map(n => ({
-        node: n,
-        startX: n.x,
-        startY: n.y
-      }));
+      let movingNodes = null;
+      let startNodePositions = null;
+      let movingGroups = null;
+      let startGroupPositions = null;
+      let movingLooseCards = null;
 
-      // Also move any selected groups together!
-      const movingGroups = Array.from(this.selectedGroups || []);
-      const startGroupPositions = movingGroups.map(g => ({
-        group: g,
-        startX: g.x,
-        startY: g.y,
-        memberCards: this.cards.filter(c => c.groupId === g.id).map(c => ({
+      const initNodeDragState = () => {
+        hasStartedMoving = true;
+        isDragging = true;
+        this.recordPreState('Move Node');
+        nodeEl.classList.add('is-dragging');
+
+        movingNodes = this.selectedNodes.has(node) && this.selectedNodes.size > 1
+          ? Array.from(this.selectedNodes)
+          : [node];
+
+        startNodePositions = movingNodes.map(n => ({
+          node: n,
+          startX: n.x,
+          startY: n.y
+        }));
+
+        movingGroups = Array.from(this.selectedGroups || []);
+        startGroupPositions = movingGroups.map(g => ({
+          group: g,
+          startX: g.x,
+          startY: g.y,
+          memberCards: this.cards.filter(c => c.groupId === g.id).map(c => ({
+            card: c,
+            x: c.x,
+            y: c.y,
+            baseX: c.baseX !== undefined ? c.baseX : c.x,
+            baseY: c.baseY !== undefined ? c.baseY : c.y
+          }))
+        }));
+
+        movingLooseCards = Array.from(this.selectedCards || []).filter(c => 
+          !movingGroups.some(g => g.id === c.groupId)
+        ).map(c => ({
           card: c,
           x: c.x,
           y: c.y,
           baseX: c.baseX !== undefined ? c.baseX : c.x,
           baseY: c.baseY !== undefined ? c.baseY : c.y
-        }))
-      }));
-
-      // Also move any selected cards together!
-      const movingLooseCards = Array.from(this.selectedCards || []).filter(c => 
-        !movingGroups.some(g => g.id === c.groupId)
-      ).map(c => ({
-        card: c,
-        x: c.x,
-        y: c.y,
-        baseX: c.baseX !== undefined ? c.baseX : c.x,
-        baseY: c.baseY !== undefined ? c.baseY : c.y
-      }));
+        }));
+      };
 
       const onMouseMove = (moveEvt) => {
-        if (!isDragging) return;
-        const dx = (moveEvt.clientX - startMouseX) / this.canvas.zoom;
-        const dy = (moveEvt.clientY - startMouseY) / this.canvas.zoom;
+        lastMoveEvt = moveEvt;
 
-        startNodePositions.forEach(item => {
-          item.node.x = Math.round(item.startX + dx);
-          item.node.y = Math.round(item.startY + dy);
-          if (item.node.element) item.node.element.style.transform = `translate(${item.node.x}px, ${item.node.y}px)`;
-        });
+        if (!hasStartedMoving) {
+          const dist = Math.hypot(moveEvt.clientX - startMouseX, moveEvt.clientY - startMouseY);
+          if (dist < 4) return;
+          initNodeDragState();
+        }
 
-        startGroupPositions.forEach(item => {
-          item.group.x = item.startX + dx;
-          item.group.y = item.startY + dy;
-          if (item.group.element) item.group.element.style.transform = `translate(${item.group.x}px, ${item.group.y}px)`;
+        if (dragRafPending) return;
+        dragRafPending = true;
 
-          item.memberCards.forEach(mc => {
-            mc.card.x = mc.x + dx;
-            mc.card.y = mc.y + dy;
-            if (mc.card.baseX !== undefined) mc.card.baseX = mc.baseX + dx;
-            if (mc.card.baseY !== undefined) mc.card.baseY = mc.baseY + dy;
-            if (mc.card.element) mc.card.element.style.transform = `translate(${mc.card.x}px, ${mc.card.y}px)`;
+        requestAnimationFrame(() => {
+          dragRafPending = false;
+          if (!hasStartedMoving || !lastMoveEvt) return;
+
+          const dx = (lastMoveEvt.clientX - startMouseX) / this.canvas.zoom;
+          const dy = (lastMoveEvt.clientY - startMouseY) / this.canvas.zoom;
+
+          startNodePositions.forEach(item => {
+            item.node.x = Math.round(item.startX + dx);
+            item.node.y = Math.round(item.startY + dy);
+            if (item.node.element) item.node.element.style.transform = `translate(${item.node.x}px, ${item.node.y}px)`;
           });
-        });
 
-        movingLooseCards.forEach(item => {
-          item.card.x = item.x + dx;
-          item.card.y = item.y + dy;
-          if (item.card.baseX !== undefined) item.card.baseX = item.baseX + dx;
-          if (item.card.baseY !== undefined) item.card.baseY = item.baseY + dy;
-          if (item.card.element) item.card.element.style.transform = `translate(${item.card.x}px, ${item.card.y}px)`;
-        });
+          startGroupPositions.forEach(item => {
+            item.group.x = item.startX + dx;
+            item.group.y = item.startY + dy;
+            if (item.group.element) item.group.element.style.transform = `translate(${item.group.x}px, ${item.group.y}px)`;
 
-        this.renderConnections();
+            item.memberCards.forEach(mc => {
+              mc.card.x = mc.x + dx;
+              mc.card.y = mc.y + dy;
+              if (mc.card.baseX !== undefined) mc.card.baseX = mc.baseX + dx;
+              if (mc.card.baseY !== undefined) mc.card.baseY = mc.baseY + dy;
+              if (mc.card.element) mc.card.element.style.transform = `translate(${mc.card.x}px, ${mc.card.y}px)`;
+            });
+          });
+
+          movingLooseCards.forEach(item => {
+            item.card.x = item.x + dx;
+            item.card.y = item.y + dy;
+            if (item.card.baseX !== undefined) item.card.baseX = item.baseX + dx;
+            if (item.card.baseY !== undefined) item.card.baseY = item.baseY + dy;
+            if (item.card.element) item.card.element.style.transform = `translate(${item.card.x}px, ${item.card.y}px)`;
+          });
+
+          this.renderConnectionsThrottled();
+        });
       };
 
       const onMouseUp = () => {
-        if (!isDragging) return;
-        isDragging = false;
-        nodeEl.classList.remove('is-dragging');
         window.removeEventListener('mousemove', onMouseMove);
         window.removeEventListener('mouseup', onMouseUp);
-        this.commitHistory('Move Node');
+
+        if (!hasStartedMoving) {
+          // Instant click / selection without delay!
+          return;
+        }
+
+        nodeEl.classList.remove('is-dragging');
+        this.commitHistory('Move Node', true);
       };
 
       window.addEventListener('mousemove', onMouseMove);
@@ -6202,12 +6434,29 @@ class DropBoardManager {
     }
   }
 
+  renderConnectionsThrottled() {
+    if (this.connectionsRafPending) return;
+    if (!this.connections || this.connections.length === 0) return;
+    this.connectionsRafPending = true;
+    requestAnimationFrame(() => {
+      this.connectionsRafPending = false;
+      this.renderConnections();
+    });
+  }
+
   renderConnections() {
     if (!this.connectorLayer) {
       this.connectorLayer = document.getElementById('connector-layer');
     }
     if (!this.connectorLayer) return;
     this.connectorLayer.style.zIndex = '1';
+
+    if (!this.connections || this.connections.length === 0) {
+      if (this.connectorLayer.children.length > 0) {
+        this.connectorLayer.innerHTML = '';
+      }
+      return;
+    }
 
     // Filter valid connections
     this.connections = this.connections.filter(conn => {
@@ -6475,10 +6724,14 @@ class DropBoardManager {
     }
   }
 
-  commitHistory(actionName) {
+  commitHistory(actionName, forceChanged = false) {
     if (this.preActionSnapshot) {
-      const current = this.getSnapshot();
-      if (JSON.stringify(current) !== JSON.stringify(this.preActionSnapshot.snapshot)) {
+      let hasChanged = forceChanged;
+      if (!hasChanged) {
+        const current = this.getSnapshot();
+        hasChanged = (JSON.stringify(current) !== JSON.stringify(this.preActionSnapshot.snapshot));
+      }
+      if (hasChanged) {
         this.undoStack.push({
           description: actionName || this.preActionSnapshot.description,
           snapshot: this.preActionSnapshot.snapshot
@@ -6942,13 +7195,22 @@ class DropBoardManager {
               img.src = c.imageData;
               return;
             }
-            // Fallback 2: YouTube thumbnail fallback
+            // Fallback 2: If cache file was removed, but originalUrl exists (Pinterest, Google, Bing, Web)
+            if (c.originalUrl && !img.dataset.originalUrlTried && (c.originalUrl.startsWith('http://') || c.originalUrl.startsWith('https://') || c.originalUrl.startsWith('data:image/'))) {
+              img.dataset.originalUrlTried = 'true';
+              img.src = c.originalUrl;
+              if (c.originalUrl.startsWith('http://') || c.originalUrl.startsWith('https://')) {
+                NativeBridge.downloadImage(c.originalUrl, c.id);
+              }
+              return;
+            }
+            // Fallback 3: YouTube thumbnail fallback
             if (c.isYouTube && c.youtubeId && !img.dataset.fallbackTried) {
               img.dataset.fallbackTried = 'true';
               img.src = `https://img.youtube.com/vi/${c.youtubeId}/hqdefault.jpg`;
               return;
             }
-            // Fallback 3: Even if image file was deleted from disk and no imageData exists,
+            // Fallback 4: Even if image file was deleted from disk and no imageData exists,
             // keep the card on board with a placeholder so groups, notes, and connections are preserved!
             const fallbackCard = {
               id: c.id,
@@ -7344,6 +7606,12 @@ class DropBoardManager {
 
     if (btnClearCache) {
       btnClearCache.addEventListener('click', () => {
+        this.cards.forEach(c => {
+          if (!c.imageData && !c.isYouTube) {
+            this.getCardImageData(c);
+          }
+        });
+        this.saveAutoSave();
         NativeBridge.clearImageCache();
       });
     }
@@ -7354,6 +7622,91 @@ class DropBoardManager {
         NativeBridge.saveBoardDialog(currentData, this.projectName);
       });
     }
+  }
+
+  initAboutModal() {
+    const modal = document.getElementById('about-modal');
+    const btnTb = document.getElementById('btn-about-tb');
+    const btnBrand = document.getElementById('app-brand-btn');
+    const btnCm = document.getElementById('cm-open-about');
+    const btnClose = document.getElementById('btn-close-about-modal');
+    const btnCloseFooter = document.getElementById('btn-close-about-footer');
+
+    const openAbout = () => {
+      if (modal) {
+        modal.classList.add('show');
+        modal.style.display = 'flex';
+      }
+    };
+
+    const closeAbout = () => {
+      if (modal) {
+        modal.classList.remove('show');
+        setTimeout(() => {
+          if (!modal.classList.contains('show')) modal.style.display = 'none';
+        }, 150);
+      }
+    };
+
+    if (btnTb) btnTb.addEventListener('click', openAbout);
+    if (btnBrand) btnBrand.addEventListener('click', openAbout);
+    if (btnCm) btnCm.addEventListener('click', openAbout);
+    if (btnClose) btnClose.addEventListener('click', closeAbout);
+    if (btnCloseFooter) btnCloseFooter.addEventListener('click', closeAbout);
+
+    if (modal) {
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeAbout();
+      });
+    }
+
+    // Keyboard shortcut F1 -> open about
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'F1') {
+        e.preventDefault();
+        openAbout();
+      }
+    });
+
+    // Copy Email handler (supports all .btn-copy-email-action elements)
+    document.querySelectorAll('.btn-copy-email-action').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const email = 'gnmigi@gmail.com';
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(email);
+          } else {
+            const ta = document.createElement('textarea');
+            ta.value = email;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+          }
+          Toast.show(`Email copied: ${email}`, 'success');
+        } catch (err) {
+          Toast.show(`Email: ${email}`, 'info');
+        }
+      });
+    });
+
+    // Visit X button (@migi_gn)
+    document.querySelectorAll('.btn-open-x').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        NativeBridge.openExternalUrl('https://x.com/migi_gn');
+      });
+    });
+
+    // File association registration button
+    document.querySelectorAll('.btn-register-assoc-action').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        NativeBridge.registerFileAssociation();
+        Toast.show('Refreshing .dropboard file association & icon...', 'info');
+      });
+    });
   }
 
   updateDockLayout() {
@@ -7390,7 +7743,7 @@ class DropBoardManager {
     clearTimeout(this.autoSaveTimer);
     this.autoSaveTimer = setTimeout(() => {
       this.saveAutoSave();
-    }, 800);
+    }, 1200);
   }
 
   saveAutoSave() {
@@ -7400,16 +7753,31 @@ class DropBoardManager {
         localStorage.removeItem('dropboard_autosave_state');
         return;
       }
-      const data = this.serialize(false);
+      this.cards.forEach(c => {
+        if (!c.imageData && !c.isYouTube) {
+          this.getCardImageData(c);
+        }
+      });
+      const data = this.serialize(true);
       if (this.currentFilePath) {
         data.currentFilePath = this.currentFilePath;
         try { localStorage.setItem('dropboard_last_file_path', this.currentFilePath); } catch(e) {}
         try {
-          const fullData = JSON.stringify(this.serialize(true), null, 2);
+          const fullData = JSON.stringify(data);
           NativeBridge.saveBoardDirect(fullData, this.currentFilePath);
         } catch(e) {}
+      } else {
+        try {
+          const fullData = JSON.stringify(data);
+          NativeBridge.saveBoardDirect(fullData, '');
+        } catch(e) {}
       }
-      localStorage.setItem('dropboard_autosave_state', JSON.stringify(data));
+      try {
+        const lightData = this.serialize(false);
+        if (this.currentFilePath) lightData.currentFilePath = this.currentFilePath;
+        localStorage.setItem('dropboard_autosave_state', JSON.stringify(lightData));
+      } catch(e) {}
+
       const counter = document.getElementById('ref-counter');
       if (counter && !counter.textContent.includes('• Saved')) {
         const orig = counter.textContent;
@@ -7430,16 +7798,7 @@ class DropBoardManager {
         NativeBridge.loadBoardDirect(lastPath);
         return;
       }
-      const saved = localStorage.getItem('dropboard_autosave_state');
-      if (saved) {
-        const parsed = typeof saved === 'string' ? JSON.parse(saved) : saved;
-        const filePath = (parsed && parsed.currentFilePath) || null;
-        this.deserialize(parsed, filePath);
-        if (filePath) {
-          this.currentFilePath = filePath;
-        }
-        Toast.show('Restored previous board session', 'info', 2200);
-      }
+      NativeBridge.loadSessionBoard();
     } catch (e) {
       console.warn('Failed to load auto-save:', e);
     }

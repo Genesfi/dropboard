@@ -5,19 +5,19 @@ const ADD_ENDPOINT = `http://127.0.0.1:${DROPBOARD_PORT}/add`;
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "send-to-dropboard-img",
-    title: "📌 Add Image to DropBoard",
+    title: "Add Image to DropBoard",
     contexts: ["image"]
   });
 
   chrome.contextMenus.create({
     id: "send-to-dropboard-link",
-    title: "📌 Send Link / Pin to DropBoard",
+    title: "Send Link to DropBoard",
     contexts: ["link"]
   });
 
   chrome.contextMenus.create({
     id: "send-to-dropboard-page",
-    title: "📌 Send Current Page to DropBoard",
+    title: "Send Current Page to DropBoard",
     contexts: ["page"]
   });
 });

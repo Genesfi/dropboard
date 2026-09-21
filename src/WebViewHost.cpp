@@ -175,9 +175,20 @@ std::wstring WebViewHost::GetCacheDirectory() {
     return cacheDir;
 }
 
-bool WebViewHost::Initialize(HWND hWnd, const std::wstring& assetsPath) {
+std::wstring WebViewHost::GetSessionFilePath() {
+    wchar_t localAppData[MAX_PATH] = {0};
+    SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, localAppData);
+    std::wstring appDir = std::wstring(localAppData) + L"\\DropBoard";
+    CreateDirectoryW(appDir.c_str(), nullptr);
+    return appDir + L"\\session.dropboard";
+}
+
+extern void EnsureFileAssociationRegistered();
+
+bool WebViewHost::Initialize(HWND hWnd, const std::wstring& assetsPath, const std::wstring& initialFilePath) {
     m_hWnd = hWnd;
     m_assetsPath = assetsPath;
+    m_initialFilePath = initialFilePath;
 
     // Start background HTTP server for Browser Extension bridge on port 28888
     m_httpServer = std::make_unique<LocalHttpServer>();
@@ -238,6 +249,21 @@ bool WebViewHost::Initialize(HWND hWnd, const std::wstring& assetsPath) {
                                 settings->put_AreDefaultContextMenusEnabled(FALSE);
                                 settings->put_AreDevToolsEnabled(TRUE);
                             }
+
+                            // Intercept external popup/blank links to open in system default browser
+                            m_webview->add_NewWindowRequested(
+                                Callback<ICoreWebView2NewWindowRequestedEventHandler>(
+                                    [](ICoreWebView2*, ICoreWebView2NewWindowRequestedEventArgs* args) -> HRESULT {
+                                        args->put_Handled(TRUE);
+                                        LPWSTR uri = nullptr;
+                                        if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
+                                            ShellExecuteW(nullptr, L"open", uri, nullptr, nullptr, SW_SHOWNORMAL);
+                                            CoTaskMemFree(uri);
+                                        }
+                                        return S_OK;
+                                    }).Get(),
+                                nullptr
+                            );
 
                             SetupWebMessageHandling();
 
@@ -531,8 +557,23 @@ static bool DecodeBase64ToFile(const std::string& base64Str, const std::wstring&
     return true;
 }
 
+static bool IsWebpFile(const std::wstring& filePath) {
+    if (filePath.empty()) return false;
+    HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+    BYTE header[16] = {0};
+    DWORD bytesRead = 0;
+    ReadFile(hFile, header, sizeof(header), &bytesRead, nullptr);
+    CloseHandle(hFile);
+    if (bytesRead >= 12 && header[0] == 'R' && header[1] == 'I' && header[2] == 'F' && header[3] == 'F') {
+        if (header[8] == 'W' && header[9] == 'E' && header[10] == 'B' && header[11] == 'P') return true;
+    }
+    return false;
+}
+
 static std::wstring EnsureDiskFileForExternalApp(const std::wstring& filePath, const std::wstring& imageData, const std::wstring& cacheDir) {
-    if (!filePath.empty() && GetFileAttributesW(filePath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+    // If file exists and is NOT a WebP file, it's safe for external apps like After Effects
+    if (!filePath.empty() && GetFileAttributesW(filePath.c_str()) != INVALID_FILE_ATTRIBUTES && !IsWebpFile(filePath)) {
         return filePath;
     }
     if (imageData.empty()) return filePath;
@@ -543,19 +584,15 @@ static std::wstring EnsureDiskFileForExternalApp(const std::wstring& filePath, c
     std::string b64Utf8 = JsonUtil::WideToUtf8(b64);
     std::wstring ext = L".jpg";
     if (mimeHeader.find(L"png") != std::wstring::npos) ext = L".png";
-    else if (mimeHeader.find(L"gif") != std::wstring::npos) ext = L".gif";
-    else if (mimeHeader.find(L"webp") != std::wstring::npos) ext = L".webp";
 
-    std::wstring fname;
-    if (!filePath.empty()) {
-        size_t slash = filePath.find_last_of(L"\\/");
-        if (slash != std::wstring::npos) fname = filePath.substr(slash + 1);
-        else fname = filePath;
+    static uint64_t s_c = 0;
+    std::wstring alphaTag = L"";
+    uint64_t val = (GetTickCount64() << 16) ^ (++s_c * 0x9e3779b97f4a7c15ULL);
+    for (int i = 0; i < 8; ++i) {
+        alphaTag += (wchar_t)(L'a' + (val % 26));
+        val /= 26;
     }
-    if (fname.empty()) {
-        static uint64_t s_c = 0;
-        fname = L"export_" + std::to_wstring(GetTickCount64()) + L"_" + std::to_wstring(++s_c) + ext;
-    }
+    std::wstring fname = L"ref_still_" + alphaTag + ext;
     std::wstring outPath = cacheDir + L"\\" + fname;
     DecodeBase64ToFile(b64Utf8, outPath);
     return outPath;
@@ -1064,6 +1101,9 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
     else if (action == L"save_board_direct") {
         std::wstring data = JsonUtil::ExtractString(json, L"data");
         std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
+        if (filePath.empty()) {
+            filePath = GetSessionFilePath();
+        }
         if (!filePath.empty()) {
             std::wstring embeddedData = EnsureEmbeddedImagesInBoardJson(data);
             std::string utf8Data = JsonUtil::WideToUtf8(embeddedData);
@@ -1107,27 +1147,47 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
             }
         }
     }
+    else if (action == L"register_file_association") {
+        EnsureFileAssociationRegistered();
+        std::wstringstream resp;
+        resp << L"{\"type\":\"file_assoc_registered\",\"success\":true}";
+        PostMessageToWeb(resp.str());
+    }
     else if (action == L"load_board_direct") {
         std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
-        if (!filePath.empty()) {
-            std::ifstream in(filePath, std::ios::binary);
-            if (in.is_open()) {
-                std::stringstream ss;
-                ss << in.rdbuf();
-                in.close();
-                std::wstring wContent = JsonUtil::Utf8ToWide(ss.str());
-                std::wstringstream resp;
-                resp << L"{\"type\":\"board_loaded\",\"success\":true,\"direct\":true,\"filePath\":\""
-                     << JsonUtil::EscapeString(filePath) << L"\",\"content\":\""
-                     << JsonUtil::EscapeString(wContent) << L"\"}";
-                PostMessageToWeb(resp.str());
-            } else {
-                std::wstringstream resp;
-                resp << L"{\"type\":\"board_loaded\",\"success\":false,\"filePath\":\""
-                     << JsonUtil::EscapeString(filePath) << L"\",\"error\":\"Cannot open file\"}";
-                PostMessageToWeb(resp.str());
-            }
+        LoadBoardFromFile(filePath);
+    }
+    else if (action == L"load_session_board") {
+        std::wstring sessionPath = GetSessionFilePath();
+        if (GetFileAttributesW(sessionPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            LoadBoardFromFile(sessionPath);
+        } else {
+            std::wstringstream resp;
+            resp << L"{\"type\":\"board_loaded\",\"success\":false,\"error\":\"No session file found\"}";
+            PostMessageToWeb(resp.str());
         }
+    }
+    else if (action == L"app_ready") {
+        if (!m_initialFilePath.empty()) {
+            LoadBoardFromFile(m_initialFilePath);
+            m_initialFilePath.clear();
+        }
+    }
+    else if (action == L"open_external_url") {
+        std::wstring url = JsonUtil::ExtractString(json, L"url");
+        if (!url.empty()) {
+            ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        }
+    }
+    else if (action == L"register_file_association") {
+        EnsureFileAssociationRegistered();
+        std::wstringstream resp;
+        resp << L"{\"type\":\"file_assoc_registered\",\"success\":true}";
+        PostMessageToWeb(resp.str());
+    }
+    else if (action == L"load_board_direct") {
+        std::wstring filePath = JsonUtil::ExtractString(json, L"filePath");
+        LoadBoardFromFile(filePath);
     }
     else if (action == L"clear_image_cache") {
         std::wstring cacheDir = GetCacheDirectory();
@@ -1153,5 +1213,46 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
         std::wstring cacheDir = GetCacheDirectory();
         ShellExecuteW(nullptr, L"open", cacheDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     }
+    else if (action == L"open_extension_folder") {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+        std::wstring dir = exePath;
+        size_t lastSlash = dir.find_last_of(L"\\/");
+        if (lastSlash != std::wstring::npos) {
+            dir = dir.substr(0, lastSlash);
+        }
+        std::wstring extDir = dir + L"\\extension";
+        DWORD attribs = GetFileAttributesW(extDir.c_str());
+        if (attribs == INVALID_FILE_ATTRIBUTES || !(attribs & FILE_ATTRIBUTE_DIRECTORY)) {
+            extDir = dir + L"\\..\\..\\extension";
+            attribs = GetFileAttributesW(extDir.c_str());
+            if (attribs == INVALID_FILE_ATTRIBUTES || !(attribs & FILE_ATTRIBUTE_DIRECTORY)) {
+                extDir = L"extension";
+            }
+        }
+        ShellExecuteW(nullptr, L"open", extDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
 }
+
+void WebViewHost::LoadBoardFromFile(const std::wstring& filePath) {
+    if (filePath.empty()) return;
+    std::ifstream in(filePath, std::ios::binary);
+    if (in.is_open()) {
+        std::stringstream ss;
+        ss << in.rdbuf();
+        in.close();
+        std::wstring wContent = JsonUtil::Utf8ToWide(ss.str());
+        std::wstringstream resp;
+        resp << L"{\"type\":\"board_loaded\",\"success\":true,\"direct\":true,\"filePath\":\""
+             << JsonUtil::EscapeString(filePath) << L"\",\"content\":\""
+             << JsonUtil::EscapeString(wContent) << L"\"}";
+        PostMessageToWeb(resp.str());
+    } else {
+        std::wstringstream resp;
+        resp << L"{\"type\":\"board_loaded\",\"success\":false,\"filePath\":\""
+             << JsonUtil::EscapeString(filePath) << L"\",\"error\":\"Cannot open file\"}";
+        PostMessageToWeb(resp.str());
+    }
+}
+
 

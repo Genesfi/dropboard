@@ -33,7 +33,7 @@ btnCapture.addEventListener('click', async () => {
       const data = await res.json();
       if (data.success) {
         btnCapture.textContent = '✓ Sent to Board!';
-        setTimeout(() => { btnCapture.textContent = '📌 Send Current Tab to Board'; }, 2000);
+        setTimeout(() => { btnCapture.textContent = 'Send Current Tab to Board'; }, 2000);
       } else {
         btnCapture.textContent = 'Failed';
       }
