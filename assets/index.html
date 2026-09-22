@@ -149,6 +149,9 @@
     </div>
   </header>
 
+  <!-- Top Hover Trigger Zone for Auto-Hide Dock -->
+  <div class="dock-hover-zone" id="dock-hover-zone"></div>
+
   <!-- Main Floating Action Deck -->
   <aside class="floating-dock dock-top" id="floating-dock">
 
@@ -344,6 +347,14 @@
 
     <!-- Group 6: Toolbar Layout & Settings -->
     <div class="dock-group" id="dock-group-settings">
+      <button class="dock-btn" id="btn-dock-pin" title="Toggle Auto-Hide Toolbar (Hide toolbar to maximize canvas, reveal on hover)">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" id="icon-dock-pin">
+          <line x1="12" y1="17" x2="12" y2="22"/>
+          <path d="M5 17h14v-2l-2-3V6a1 1 0 0 0-1-1h-8a1 1 0 0 0-1 1v6l-2 3v2z"/>
+        </svg>
+        <span id="dock-pin-label">Pin</span>
+      </button>
+
       <button class="dock-btn" id="btn-dock-pos-toggle" title="Switch Toolbar Position (Top Bar / Left Sidebar for vertical monitors)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -466,9 +477,16 @@
         <small>Focus on specific area</small>
       </div>
     </button>
+    <button class="cm-item cm-yt-item" id="cm-play-yt" style="display: none;">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="#ff0033"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      <div class="cm-item-col">
+        <strong id="cm-play-yt-text">Play in DropBoard</strong>
+        <small>Watch inline video reference</small>
+      </div>
+    </button>
     <button class="cm-item cm-yt-item" id="cm-open-yt" style="display: none;">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="#ff0033"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg>
-      <span>Open YouTube Video</span>
+      <span>Open in External Browser</span>
     </button>
     <button class="cm-item cm-yt-item" id="cm-copy-yt-link" style="display: none;">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
@@ -992,6 +1010,17 @@
 
             <!-- Hidden input for state sync -->
             <input type="hidden" id="settings-select-dock-style" value="auto" />
+
+            <div class="settings-row" style="margin-top: 18px;">
+              <div class="settings-info">
+                <strong>Auto-Hide Toolbar on Hover</strong>
+                <span>Automatically hides the floating toolbar to maximize canvas space, revealing smoothly when your mouse hovers near the top</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="settings-toggle-autohide-dock">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
           </div>
         </div>
 

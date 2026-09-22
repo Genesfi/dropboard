@@ -41,6 +41,9 @@ const NativeBridge = {
   copyFileToClipboard(filePath, imageData = '') { this.post('copy_file_to_clipboard', { filePath, imageData }); },
   revealInExplorer(filePath, imageData = '') { this.post('reveal_in_explorer', { filePath, imageData }); },
   sendToAE(filePath, imageData = '') { this.post('send_to_ae', { filePath, imageData }); },
+  snapVideoFrame(cardId, clientX, clientY, width, height, sendToAe = true, imageData = '') {
+    this.post('snap_video_frame', { cardId, clientX, clientY, width, height, sendToAe, imageData });
+  },
   exportToAEComp(payload) { this.post('export_to_ae_comp', payload); },
   sendToPhotoshop(filePath, imageData = '') { this.post('send_to_photoshop', { filePath, imageData }); },
   sendToCustom(exePath, filePath, imageData = '') { this.post('send_to_custom', { exePath, filePath, imageData }); },
@@ -83,9 +86,10 @@ const Toast = {
 // Infinite Canvas Viewport & Coordinate Transformer
 // =============================================================================
 class CanvasEngine {
-  constructor(viewportEl, worldEl) {
+  constructor(viewportEl, worldEl, app = null) {
     this.viewport = viewportEl;
     this.world = worldEl;
+    this.app = app;
 
     this.panX = window.innerWidth / 2;
     this.panY = window.innerHeight / 2;
@@ -195,47 +199,49 @@ class CanvasEngine {
     let wheelGestureTimeout = null;
     let isTrackpadGestureActive = false;
 
-    // Trackpad & Mouse Wheel handling
-    this.viewport.addEventListener('wheel', (e) => {
-      e.preventDefault();
-
+    const onWheelAction = (e) => {
       const navMode = this.navMode || 'macos';
       const zoomSens = this.zoomSensitivity || 1.0;
       const panSens = this.panSensitivity || 1.0;
 
+      let cx = e.clientX;
+      let cy = e.clientY;
+      if (cx > window.innerWidth || cy > window.innerHeight) {
+        const winLeft = window.screenLeft !== undefined ? window.screenLeft : (window.screenX || 0);
+        const winTop = window.screenTop !== undefined ? window.screenTop : (window.screenY || 0);
+        cx = cx - winLeft;
+        cy = cy - winTop;
+      }
+      if (cx === undefined || isNaN(cx)) cx = window.innerWidth / 2;
+      if (cy === undefined || isNaN(cy)) cy = window.innerHeight / 2;
+
       // 1. Pinch-to-zoom on Precision Touchpad OR Ctrl + Mouse Wheel
-      // In Chromium / WebView2, trackpad pinch fires a WheelEvent with e.ctrlKey === true.
       if (e.ctrlKey) {
         let factor;
-        if (Math.abs(e.deltaY) >= 80) {
-          // Discrete mouse wheel tick with Ctrl pressed
+        if (Math.abs(e.deltaY) >= 60) {
           factor = e.deltaY < 0 ? 1.15 : 0.87;
         } else {
-          // Continuous trackpad pinch gesture (small continuous delta)
           factor = Math.exp(-e.deltaY * 0.006 * zoomSens);
         }
-        this.zoomAt(e.clientX, e.clientY, factor);
+        this.zoomAt(cx, cy, factor);
         return;
       }
 
       // 2. PureRef / Classic Mouse Wheel Mode
       if (navMode === 'mouse') {
         const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
-        this.zoomAt(e.clientX, e.clientY, zoomFactor);
+        this.zoomAt(cx, cy, zoomFactor);
         return;
       }
 
       // 3. Touchpad Navigation Modes (macOS or Windows PC style)
-      // Check if it is a discrete physical mouse wheel (e.g. standard notch with deltaX=0 and large discrete deltaY)
       const hasHorizontalDelta = Math.abs(e.deltaX) > 0;
       const isFractionalDelta = (e.deltaY % 1 !== 0);
-      const isSmallDelta = Math.abs(e.deltaY) < 60;
-      const isDiscreteMouseWheel = (e.deltaMode !== 0) || (e.deltaX === 0 && Math.abs(e.deltaY) >= 100 && e.deltaY % 1 === 0);
+      const isDiscreteMouseWheel = (e.deltaMode !== 0) || (e.deltaX === 0 && Math.abs(e.deltaY) >= 30 && e.deltaY % 1 === 0);
 
-      // If user is actually rolling a discrete physical mouse wheel while in touchpad mode, let it zoom!
       if (isDiscreteMouseWheel && !isTrackpadGestureActive && !hasHorizontalDelta && !isFractionalDelta) {
         const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
-        this.zoomAt(e.clientX, e.clientY, zoomFactor);
+        this.zoomAt(cx, cy, zoomFactor);
         return;
       }
 
@@ -245,9 +251,6 @@ class CanvasEngine {
         isTrackpadGestureActive = false;
       }, 250);
 
-      // Direction calculation:
-      // macOS Style: Natural paper-like dragging (+1)
-      // Windows Style: Traditional PC scroll direction (-1)
       let directionSign = (navMode === 'macos') ? 1 : -1;
       if (this.invertPan) {
         directionSign *= -1;
@@ -256,6 +259,11 @@ class CanvasEngine {
       this.panX += directionSign * e.deltaX * panSens;
       this.panY += directionSign * e.deltaY * panSens;
       this.updateTransform();
+    };
+
+    this.viewport.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      onWheelAction(e);
     }, { passive: false });
 
     // Multi-touch gestures for touchscreen displays / 2-in-1 laptops
@@ -313,11 +321,14 @@ class CanvasEngine {
     this.viewport.addEventListener('touchend', endTouch);
     this.viewport.addEventListener('touchcancel', endTouch);
 
-    // Keyboard Spacebar tracking
+    // Keyboard Spacebar / Alt tracking for instant pan mode
     window.addEventListener('keydown', (e) => {
-      if (e.code === 'Space' && !this.spacePressed && e.target.tagName !== 'INPUT') {
-        this.spacePressed = true;
-        this.viewport.classList.add('panning');
+      if ((e.code === 'Space' || e.altKey) && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+        if (e.code === 'Space') {
+          this.spacePressed = true;
+          this.viewport.classList.add('panning');
+        }
+        document.body.classList.add('is-space-held');
       }
     });
 
@@ -328,6 +339,9 @@ class CanvasEngine {
           this.viewport.classList.remove('panning');
         }
       }
+      if (!this.spacePressed && !e.altKey) {
+        document.body.classList.remove('is-space-held');
+      }
     });
 
     // Pan via Middle Click, Space + Left Click, Alt + Left Click, or Right-Click Drag (PureRef style)
@@ -335,6 +349,18 @@ class CanvasEngine {
     let panStartClientX = 0;
     let panStartClientY = 0;
     let activePanButton = -1;
+
+    this.startExternalPan = (button, clientX, clientY) => {
+      this.isPanning = true;
+      activePanButton = button;
+      hasMovedPan = false;
+      panStartClientX = clientX;
+      panStartClientY = clientY;
+      this.panStartX = clientX - this.panX;
+      this.panStartY = clientY - this.panY;
+      this.viewport.classList.add('panning-active');
+      document.body.classList.add('is-canvas-panning');
+    };
 
     this.viewport.addEventListener('mousedown', (e) => {
       // Don't pan if clicking UI controls outside canvas
@@ -356,6 +382,7 @@ class CanvasEngine {
         this.panStartX = e.clientX - this.panX;
         this.panStartY = e.clientY - this.panY;
         this.viewport.classList.add('panning-active');
+        document.body.classList.add('is-canvas-panning');
         e.preventDefault();
         e.stopPropagation();
       }
@@ -376,11 +403,55 @@ class CanvasEngine {
     window.addEventListener('mouseup', (e) => {
       if (this.isPanning) {
         this.isPanning = false;
+        document.body.classList.remove('is-canvas-panning');
         this.viewport.classList.remove('panning-active');
         if (!this.spacePressed) {
           this.viewport.classList.remove('panning');
         }
       }
+    });
+
+    // Listen for pan and wheel messages forwarded from inside iframes (YouTube, web embeds)
+    window.addEventListener('message', (e) => {
+      if (!e.data || e.source === window) return;
+      if (e.data.type === 'DROPBOARD_IFRAME_PAN_START') {
+        const winLeft = window.screenLeft !== undefined ? window.screenLeft : (window.screenX || 0);
+        const winTop = window.screenTop !== undefined ? window.screenTop : (window.screenY || 0);
+        const clientX = e.data.clientX !== undefined ? (e.data.clientX - winLeft) : (window.innerWidth / 2);
+        const clientY = e.data.clientY !== undefined ? (e.data.clientY - winTop) : (window.innerHeight / 2);
+        this.startExternalPan(e.data.button, clientX, clientY);
+      } else if (e.data.type === 'DROPBOARD_IFRAME_WHEEL') {
+        const winLeft = window.screenLeft !== undefined ? window.screenLeft : (window.screenX || 0);
+        const winTop = window.screenTop !== undefined ? window.screenTop : (window.screenY || 0);
+        const clientX = e.data.clientX !== undefined ? (e.data.clientX - winLeft) : (window.innerWidth / 2);
+        const clientY = e.data.clientY !== undefined ? (e.data.clientY - winTop) : (window.innerHeight / 2);
+        onWheelAction({
+          ...e.data,
+          clientX,
+          clientY
+        });
+      } else if (e.data.type === 'DROPBOARD_IFRAME_CLICK') {
+        if (this.app) {
+          const card = this.app.cards.find(c => 
+            (c.ytIframe && c.ytIframe.contentWindow === e.source) || 
+            (e.data.cardId && c.id === e.data.cardId)
+          );
+          if (card) {
+            this.app.selectCard(card, false);
+          }
+        }
+      }
+    });
+
+    window.addEventListener('blur', () => {
+      if (this.isPanning) {
+        this.isPanning = false;
+        document.body.classList.remove('is-canvas-panning');
+        this.viewport.classList.remove('panning-active');
+        this.viewport.classList.remove('panning');
+      }
+      this.spacePressed = false;
+      document.body.classList.remove('is-space-held');
     });
 
     // Suppress context menu if user was right-click dragging to pan (PureRef style!)
@@ -416,7 +487,7 @@ class DropBoardManager {
 
     this.viewport = document.getElementById('viewport');
     this.world = document.getElementById('world');
-    this.canvas = new CanvasEngine(this.viewport, this.world);
+    this.canvas = new CanvasEngine(this.viewport, this.world, this);
     this.selectedCards = new Set();
     this.selectedGroups = new Set();
     this.selectedNodes = new Set();
@@ -438,11 +509,14 @@ class DropBoardManager {
     } catch(e) {}
     this.dockPosition = 'top'; // 'top' | 'left' | 'bottom'
     this.dockStyle = 'auto'; // 'auto' | 'icon' | 'full'
+    this.autoHideDock = false;
     try {
       const savedPos = localStorage.getItem('dropboard_dock_pos');
       if (savedPos) this.dockPosition = savedPos;
       const savedStyle = localStorage.getItem('dropboard_dock_style');
       if (savedStyle) this.dockStyle = savedStyle;
+      const savedAutoHide = localStorage.getItem('dropboard_autohide_dock');
+      if (savedAutoHide !== null) this.autoHideDock = (savedAutoHide === 'true');
     } catch(e) {}
     this.activeConnectingNode = null;
     this.connectorLayer = document.getElementById('connector-layer');
@@ -550,6 +624,25 @@ class DropBoardManager {
         Toast.show(msg.message, msg.success ? 'success' : 'error');
       } else if (msg.type === 'clipboard_result') {
         Toast.show(msg.success ? 'Copied image file to clipboard!' : 'Failed to copy to clipboard', msg.success ? 'success' : 'error');
+      } else if (msg.type === 'frame_snapped') {
+        if (msg.success) {
+          const ytCard = this.cards.find(c => c.id === msg.cardId);
+          const newX = ytCard ? (ytCard.x + ytCard.width + 30) : 0;
+          const newY = ytCard ? ytCard.y : 0;
+          const src = msg.localWebUrl || msg.imageData;
+          this.addReferenceFromUrl(src, newX, newY, `Snap Frame (${ytCard ? ytCard.sourceLabel : 'Video'})`, {
+            localPath: msg.localPath,
+            localWebUrl: msg.localWebUrl,
+            imageData: msg.imageData
+          });
+          if (msg.sendToAe) {
+            Toast.show(msg.aeSuccess ? '📸 Frame berhasil di-capture dan di-import ke After Effects!' : '📸 Frame di-capture! Mengirim ke After Effects...', 'success', 3500);
+          } else {
+            Toast.show('📸 Frame berhasil di-capture ke DropBoard!', 'success', 2500);
+          }
+        } else {
+          Toast.show('Gagal mengambil snapshot video', 'error');
+        }
       } else if (msg.type === 'board_saved') {
         if (msg.filePath) {
           this.currentFilePath = msg.filePath;
@@ -908,6 +1001,30 @@ class DropBoardManager {
       });
     }
 
+    // Dock Auto-Hide Pin / Unpin Quick Toggle
+    const btnDockPin = document.getElementById('btn-dock-pin');
+    if (btnDockPin) {
+      btnDockPin.addEventListener('click', () => {
+        this.setAutoHideDock(!this.autoHideDock);
+      });
+    }
+
+    // Auto-Hide Dock Hover Trigger Zone & Leave Handling
+    const dockHoverZone = document.getElementById('dock-hover-zone');
+    const floatingDock = document.getElementById('floating-dock');
+    if (dockHoverZone && floatingDock) {
+      dockHoverZone.addEventListener('mouseenter', () => {
+        if (this.autoHideDock) {
+          floatingDock.classList.add('is-revealed');
+        }
+      });
+      floatingDock.addEventListener('mouseleave', () => {
+        if (this.autoHideDock) {
+          floatingDock.classList.remove('is-revealed');
+        }
+      });
+    }
+
     // Undo & Redo Dock buttons
     const btnUndo = document.getElementById('btn-undo');
     if (btnUndo) btnUndo.addEventListener('click', () => this.undo());
@@ -1205,8 +1322,19 @@ class DropBoardManager {
       for (let i = 0; i < items.length; i++) {
         if (items[i].type.indexOf('image') !== -1) {
           const blob = items[i].getAsFile();
-          this.handleLocalFile(blob, 0, 0);
-          Toast.show('Pasted image from clipboard', 'success');
+          const shouldSendAE = !!this.autoSendNextPasteToAE;
+          this.autoSendNextPasteToAE = false;
+
+          this.handleLocalFile(blob, 0, 0, (dataUrl, nativePath) => {
+            if (shouldSendAE) {
+              NativeBridge.sendToAE(nativePath || '', dataUrl || '');
+              Toast.show('📸 Snapshot video berhasil dikirim ke After Effects!', 'success', 3500);
+            }
+          });
+
+          if (!shouldSendAE) {
+            Toast.show('Pasted image from clipboard', 'success');
+          }
           return;
         }
       }
@@ -1230,7 +1358,7 @@ class DropBoardManager {
     return url;
   }
 
-  handleLocalFile(file, worldX = 0, worldY = 0) {
+  handleLocalFile(file, worldX = 0, worldY = 0, onDoneCallback = null) {
     if (!file.type.startsWith('image/')) return;
 
     const nativePath = file.path || '';
@@ -1240,6 +1368,7 @@ class DropBoardManager {
       this.addReferenceFromUrl(dataUrl, worldX, worldY, file.name || 'Local File', {
         localPath: nativePath
       });
+      if (onDoneCallback) onDoneCallback(dataUrl, nativePath);
     };
     reader.readAsDataURL(file);
   }
@@ -1415,22 +1544,73 @@ class DropBoardManager {
       cardEl.appendChild(ytBadge);
     }
 
-    // Overlay Quick Action Buttons
+    // YouTube Center Play Icon Button & Header Bar
+    if (card.isYouTube) {
+      const centerPlay = document.createElement('div');
+      centerPlay.className = 'card-yt-center-play';
+      centerPlay.title = 'Play in DropBoard';
+      centerPlay.innerHTML = '<svg viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"/></svg>';
+      centerPlay.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.toggleYouTubePlayback(card);
+      });
+      mediaContainer.appendChild(centerPlay);
+      card.centerPlayBtn = centerPlay;
+
+      const topDragBar = document.createElement('div');
+      topDragBar.className = 'card-top-drag-bar';
+      topDragBar.title = 'Drag to move video card';
+      cardEl.appendChild(topDragBar);
+    }
+
+    // Overlay Quick Action Buttons (Unified Card Toolbar)
     const overlay = document.createElement('div');
     overlay.className = 'card-overlay';
+    card.overlay = overlay;
+
+    const dragGrip = document.createElement('div');
+    dragGrip.className = 'card-drag-grip';
+    dragGrip.title = 'Drag to move reference card';
+    dragGrip.innerHTML = `
+      <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><circle cx="8" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="8" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="8" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>
+      <span>Move</span>
+    `;
+    overlay.appendChild(dragGrip);
 
     if (card.isYouTube) {
       const btnPlay = document.createElement('button');
       btnPlay.className = 'card-action-btn btn-yt-play';
-      btnPlay.title = 'Open YouTube Video in Browser';
-      btnPlay.innerHTML = '▶ Watch';
+      btnPlay.title = 'Play/Stop Video in DropBoard';
+      btnPlay.innerHTML = '▶ Play';
       btnPlay.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.toggleYouTubePlayback(card);
+      });
+      overlay.appendChild(btnPlay);
+      card.btnPlayOverlay = btnPlay;
+
+      const btnSnapAe = document.createElement('button');
+      btnSnapAe.className = 'card-action-btn btn-yt-snap-ae';
+      btnSnapAe.title = 'Screenshot clean video frame directly to After Effects';
+      btnSnapAe.innerHTML = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:2px;vertical-align:-1px;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>Snap to Ae';
+      btnSnapAe.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.snapYouTubeFrameToAE(card);
+      });
+      overlay.appendChild(btnSnapAe);
+      card.btnSnapAe = btnSnapAe;
+
+      const btnBrowser = document.createElement('button');
+      btnBrowser.className = 'card-action-btn btn-yt-ext';
+      btnBrowser.title = 'Open in External Browser';
+      btnBrowser.innerHTML = '↗ Browser';
+      btnBrowser.addEventListener('click', (e) => {
         e.stopPropagation();
         if (card.youtubeUrl) {
           NativeBridge.openDefault(card.youtubeUrl);
         }
       });
-      overlay.appendChild(btnPlay);
+      overlay.appendChild(btnBrowser);
     }
 
     const btnAE = document.createElement('button');
@@ -1463,7 +1643,7 @@ class DropBoardManager {
     });
 
     const btnCopy = document.createElement('button');
-    btnCopy.className = 'card-action-btn';
+    btnCopy.className = 'card-action-btn copy-action-btn';
     btnCopy.title = 'Copy Image File';
     btnCopy.innerHTML = 'Copy';
     btnCopy.addEventListener('click', (e) => {
@@ -1477,11 +1657,15 @@ class DropBoardManager {
 
     const btnDel = document.createElement('button');
     btnDel.className = 'card-action-btn';
-    btnDel.title = 'Delete';
+    btnDel.title = 'Delete or Close';
     btnDel.innerHTML = '✕';
     btnDel.addEventListener('click', (e) => {
       e.stopPropagation();
-      this.removeCard(card);
+      if (card.isPlayingYouTube) {
+        this.stopYouTubeCard(card);
+      } else {
+        this.removeCard(card);
+      }
     });
 
     overlay.appendChild(btnAE);
@@ -1490,13 +1674,12 @@ class DropBoardManager {
     overlay.appendChild(btnDel);
     cardEl.appendChild(overlay);
 
-    // Double click to open YouTube video directly
+    // Double click on YouTube card toggles inline playback
     if (card.isYouTube) {
       cardEl.addEventListener('dblclick', (e) => {
+        if (e.target.closest('.card-overlay')) return;
         e.stopPropagation();
-        if (card.youtubeUrl) {
-          NativeBridge.openDefault(card.youtubeUrl);
-        }
+        this.toggleYouTubePlayback(card);
       });
     }
 
@@ -1529,6 +1712,187 @@ class DropBoardManager {
     card.element = cardEl;
     this.world.appendChild(cardEl);
     this.applyCropTransform(card);
+  }
+
+  toggleYouTubePlayback(card) {
+    if (!card || !card.isYouTube) return;
+    if (card.isPlayingYouTube) {
+      this.stopYouTubeCard(card);
+    } else {
+      this.playYouTubeCard(card);
+    }
+  }
+
+  playYouTubeCard(card) {
+    if (!card || !card.youtubeId || !card.mediaContainer) return;
+    card.isPlayingYouTube = true;
+
+    if (card.element) {
+      card.element.classList.add('is-yt-playing');
+    }
+
+    if (card.btnPlayOverlay) {
+      card.btnPlayOverlay.innerHTML = '⏹ Stop';
+      card.btnPlayOverlay.classList.add('is-playing');
+      card.btnPlayOverlay.title = 'Stop Video Player';
+    }
+
+    // Hide static thumbnail image
+    const img = card.mediaContainer.querySelector('img');
+    if (img) img.style.display = 'none';
+
+    // Remove any previous iframe instance
+    const oldIframe = card.mediaContainer.querySelector('.card-yt-iframe');
+    if (oldIframe) {
+      oldIframe.src = 'about:blank';
+      oldIframe.remove();
+    }
+
+    // Create YouTube embed iframe
+    const iframe = document.createElement('iframe');
+    iframe.className = 'card-yt-iframe';
+    iframe.src = `https://www.youtube-nocookie.com/embed/${card.youtubeId}?autoplay=1&enablejsapi=1#cardId=${card.id}`;
+    iframe.title = 'YouTube Video Player';
+    iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share');
+    iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+    iframe.setAttribute('allowfullscreen', 'true');
+    card.mediaContainer.appendChild(iframe);
+    card.ytIframe = iframe;
+
+    // Auto-hide toolbar overlay on inactivity when playing (like media players)
+    if (card.overlay) {
+      const showOverlay = () => {
+        if (!card.overlay) return;
+        card.overlay.classList.add('is-visible');
+        clearTimeout(card.overlayHideTimer);
+        card.overlayHideTimer = setTimeout(() => {
+          if (card.overlay && !card.overlay.matches(':hover')) {
+            card.overlay.classList.remove('is-visible');
+          }
+        }, 2200);
+      };
+
+      if (!card.overlayMouseMoveBound) {
+        card.overlayMouseMoveBound = true;
+        card.element.addEventListener('mousemove', showOverlay);
+        card.element.addEventListener('mouseleave', () => {
+          clearTimeout(card.overlayHideTimer);
+          if (card.overlay && !card.overlay.matches(':hover')) {
+            card.overlay.classList.remove('is-visible');
+          }
+        });
+      }
+
+      showOverlay();
+    }
+
+    Toast.show('Playing YouTube in DropBoard', 'info');
+  }
+
+  stopYouTubeCard(card) {
+    if (!card) return;
+    card.isPlayingYouTube = false;
+
+    if (card.overlay) {
+      clearTimeout(card.overlayHideTimer);
+      card.overlay.classList.remove('is-visible');
+      card.overlay.style.opacity = '';
+      card.overlay.style.pointerEvents = '';
+    }
+
+    if (card.element) {
+      card.element.classList.remove('is-yt-playing');
+    }
+
+    if (card.btnPlayOverlay) {
+      card.btnPlayOverlay.innerHTML = '▶ Play';
+      card.btnPlayOverlay.classList.remove('is-playing');
+      card.btnPlayOverlay.title = 'Play in DropBoard';
+    }
+
+    if (card.mediaContainer) {
+      const iframes = card.mediaContainer.querySelectorAll('.card-yt-iframe');
+      iframes.forEach(f => {
+        f.src = 'about:blank';
+        f.remove();
+      });
+      const img = card.mediaContainer.querySelector('img');
+      if (img) img.style.display = '';
+    }
+    card.ytIframe = null;
+  }
+
+  snapYouTubeFrameToAE(card) {
+    if (!card || !card.element) return;
+    const mediaEl = card.mediaContainer || card.element;
+    const rect = mediaEl.getBoundingClientRect();
+
+    // 1. Temporarily hide toolbar overlay and bring card to front
+    const prevZIndex = card.element.style.zIndex;
+    card.element.style.zIndex = '9999';
+    if (card.overlay) {
+      card.overlay.classList.remove('is-visible');
+      card.overlay.style.opacity = '0';
+      card.overlay.style.pointerEvents = 'none';
+    }
+
+    let handled = false;
+    const restoreUI = () => {
+      card.element.style.zIndex = prevZIndex || '';
+      if (card.overlay) {
+        card.overlay.style.opacity = '';
+        card.overlay.style.pointerEvents = '';
+      }
+    };
+
+    // 2. Listen for clean direct video canvas frame from injected script in YouTube iframe
+    const onFrameMessage = (e) => {
+      if (e.data && e.data.type === 'DROPBOARD_YT_FRAME_RESULT' && e.data.cardId === card.id) {
+        window.removeEventListener('message', onFrameMessage);
+        clearTimeout(fallbackTimer);
+        handled = true;
+        restoreUI();
+        NativeBridge.snapVideoFrame(
+          card.id,
+          Math.round(rect.left),
+          Math.round(rect.top),
+          Math.round(rect.width),
+          Math.round(rect.height),
+          true,
+          e.data.dataUrl
+        );
+      }
+    };
+    window.addEventListener('message', onFrameMessage);
+
+    // 3. Request clean video canvas frame from the YouTube iframe
+    if (card.ytIframe && card.ytIframe.contentWindow) {
+      try {
+        card.ytIframe.contentWindow.postMessage({
+          type: 'DROPBOARD_CAPTURE_YT_FRAME',
+          cardId: card.id,
+          sendToAe: true
+        }, '*');
+      } catch(err) {}
+    }
+
+    // 4. Fallback: if iframe does not reply within 180ms, capture screen cleanly without header
+    const fallbackTimer = setTimeout(() => {
+      if (handled) return;
+      window.removeEventListener('message', onFrameMessage);
+      NativeBridge.snapVideoFrame(
+        card.id,
+        Math.round(rect.left),
+        Math.round(rect.top),
+        Math.round(rect.width),
+        Math.round(rect.height),
+        true,
+        ''
+      );
+      setTimeout(restoreUI, 250);
+    }, 180);
+
+    Toast.show('📸 Mengambil clean snapshot video ke After Effects...', 'info', 1800);
   }
 
   updateCardGroupBadge(card, cardEl = card.element) {
@@ -1584,7 +1948,9 @@ class DropBoardManager {
 
     cardEl.addEventListener('mousedown', (e) => {
       if (e.target.classList.contains('resize-handle') || 
-          e.target.closest('.card-overlay') || 
+          e.target.closest('button') || 
+          e.target.closest('input') || 
+          e.target.closest('a') || 
           e.target.closest('.card-group-pill') || 
           e.target.closest('.crop-overlay-editor') || 
           e.button !== 0 ||
@@ -1621,6 +1987,10 @@ class DropBoardManager {
         hasStartedMoving = true;
         isDragging = true;
         this.recordPreState('Move Reference');
+
+        const iframes = document.querySelectorAll('.card-yt-iframe');
+        iframes.forEach(f => f.style.pointerEvents = 'none');
+        document.body.classList.add('is-dragging-card');
 
         movingCards = this.selectedCards.has(card) && this.selectedCards.size > 1
           ? Array.from(this.selectedCards)
@@ -1734,6 +2104,9 @@ class DropBoardManager {
         window.removeEventListener('mousemove', onMouseMove);
         window.removeEventListener('mouseup', onMouseUp);
 
+        document.body.classList.remove('is-dragging-card');
+        document.querySelectorAll('.card-yt-iframe').forEach(f => f.style.pointerEvents = 'auto');
+
         if (!hasStartedMoving) {
           // Instant selection / click - zero history snapshot, zero delay!
           return;
@@ -1801,6 +2174,10 @@ class DropBoardManager {
       e.preventDefault();
       this.recordPreState('Resize Reference');
 
+      // Disable iframe pointer events during resize so mousemove is never swallowed
+      const iframes = document.querySelectorAll('.card-yt-iframe');
+      iframes.forEach(f => f.style.pointerEvents = 'none');
+
       const dir = handle.dataset.dir;
       const startMouseX = e.clientX;
       const startMouseY = e.clientY;
@@ -1858,6 +2235,7 @@ class DropBoardManager {
       const onMouseUp = () => {
         window.removeEventListener('mousemove', onMouseMove);
         window.removeEventListener('mouseup', onMouseUp);
+        document.querySelectorAll('.card-yt-iframe').forEach(f => f.style.pointerEvents = 'auto');
         if (card.groupId) {
           const group = this.groups.find(g => g.id === card.groupId);
           if (group) {
@@ -2376,6 +2754,7 @@ class DropBoardManager {
 
   removeCard(card) {
     if (!card) return;
+    this.stopYouTubeCard(card);
     this.recordPreState('Delete Reference');
     if (card.element) card.element.remove();
     this.cards = this.cards.filter(c => c.id !== card.id);
@@ -2389,6 +2768,7 @@ class DropBoardManager {
   clearAll(clearAutoSave = true) {
     this.recordPreState('Clear Canvas');
     this.cards.forEach(c => {
+      this.stopYouTubeCard(c);
       if (c.element) c.element.remove();
     });
     this.cards = [];
@@ -3946,6 +4326,15 @@ class DropBoardManager {
       }
     });
 
+    const cmPlayYt = document.getElementById('cm-play-yt');
+    if (cmPlayYt) {
+      cmPlayYt.addEventListener('click', () => {
+        if (this.activeContextMenuCard) {
+          this.toggleYouTubePlayback(this.activeContextMenuCard);
+        }
+      });
+    }
+
     document.getElementById('cm-open-yt').addEventListener('click', () => {
       if (this.activeContextMenuCard && this.activeContextMenuCard.youtubeUrl) {
         NativeBridge.openDefault(this.activeContextMenuCard.youtubeUrl);
@@ -4027,6 +4416,10 @@ class DropBoardManager {
     ytItems.forEach(el => {
       el.style.display = card.isYouTube ? 'flex' : 'none';
     });
+    const cmPlayYtText = document.getElementById('cm-play-yt-text');
+    if (cmPlayYtText) {
+      cmPlayYtText.textContent = card.isPlayingYouTube ? 'Stop Video Player' : 'Play in DropBoard';
+    }
 
     const detachItem = document.getElementById('cm-detach-group');
     if (detachItem) {
@@ -5366,17 +5759,15 @@ class DropBoardManager {
       type,
       x,
       y,
-      width: customData.width && customData.width >= 295 ? customData.width : (type === 'font' ? 295 : (type === 'note' || type === 'plan' ? 285 : 260)),
+      width: customData.width ? customData.width : (type === 'font' ? 295 : (type === 'note' || type === 'plan' ? 280 : 260)),
       title: customData.title || meta.defaultTitle,
       color: customData.color || meta.color,
-      content: customData.content !== undefined ? customData.content : (type === 'note' ? 'Write notes, ideas, story beat, or camera details...' : ''),
+      content: customData.content !== undefined ? customData.content : '',
       mode: customData.mode || 'text', // 'text' | 'checklist'
-      items: customData.items ? [...customData.items] : [
-        { id: 1, text: 'Plan task details', done: false }
-      ],
-      tags: customData.tags ? [...customData.tags] : (type === 'note' ? ['#notes'] : []),
+      items: customData.items ? [...customData.items] : [],
+      tags: customData.tags ? [...customData.tags] : [],
       fontFamily: customData.fontFamily || 'Plus Jakarta Sans',
-      fontSize: customData.fontSize || '24px',
+      fontSize: customData.fontSize || (type === 'font' ? '24px' : 13),
       activeVfx: customData.activeVfx || ['Glow'],
       deadline: customData.deadline || new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0],
       status: customData.status || 'in_progress', // 'todo' | 'in_progress' | 'done'
@@ -5483,6 +5874,90 @@ class DropBoardManager {
         swatchesDiv.appendChild(swatch);
       });
       toolbar.appendChild(swatchesDiv);
+
+      // Font Size Controls (A- / A+ and scrub slider like After Effects)
+      const fontDiv = document.createElement('div');
+      fontDiv.className = 'node-font-controls';
+      node.fontSize = node.fontSize ? parseInt(node.fontSize) : 13;
+      
+      const btnFontMinus = document.createElement('button');
+      btnFontMinus.className = 'node-font-btn';
+      btnFontMinus.textContent = 'A-';
+      btnFontMinus.title = 'Smaller Font (Ctrl+Click to reset)';
+
+      const fontLabel = document.createElement('span');
+      fontLabel.className = 'node-font-label';
+      fontLabel.textContent = `${node.fontSize}px`;
+      fontLabel.title = 'Drag left/right to adjust font size (like After Effects)';
+
+      const btnFontPlus = document.createElement('button');
+      btnFontPlus.className = 'node-font-btn';
+      btnFontPlus.textContent = 'A+';
+      btnFontPlus.title = 'Larger Font';
+
+      const applyFontSize = (delta) => {
+        node.fontSize = Math.max(10, Math.min(48, node.fontSize + delta));
+        fontLabel.textContent = `${node.fontSize}px`;
+        textarea.style.fontSize = `${node.fontSize}px`;
+        autoResizeTextarea();
+        this.renderConnections();
+        this.scheduleAutoSave();
+      };
+
+      btnFontMinus.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (e.ctrlKey) {
+          node.fontSize = 13;
+          fontLabel.textContent = '13px';
+          textarea.style.fontSize = '13px';
+          autoResizeTextarea();
+          this.renderConnections();
+          this.scheduleAutoSave();
+        } else {
+          applyFontSize(-1);
+        }
+      });
+      btnFontPlus.addEventListener('click', (e) => {
+        e.stopPropagation();
+        applyFontSize(1);
+      });
+
+      // AE-style mouse-drag scrubbing on fontLabel
+      fontLabel.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        e.preventDefault();
+        const startX = e.clientX;
+        const initialSize = node.fontSize;
+        this.recordPreState('Resize Font');
+
+        const onScrubMove = (moveEvt) => {
+          const diff = Math.round((moveEvt.clientX - startX) / 5);
+          const newSize = Math.max(10, Math.min(48, initialSize + diff));
+          if (newSize !== node.fontSize) {
+            node.fontSize = newSize;
+            fontLabel.textContent = `${node.fontSize}px`;
+            textarea.style.fontSize = `${node.fontSize}px`;
+            autoResizeTextarea();
+            this.renderConnections();
+          }
+        };
+
+        const onScrubUp = () => {
+          window.removeEventListener('mousemove', onScrubMove);
+          window.removeEventListener('mouseup', onScrubUp);
+          this.commitHistory('Resize Font');
+          this.scheduleAutoSave();
+        };
+
+        window.addEventListener('mousemove', onScrubMove);
+        window.addEventListener('mouseup', onScrubUp);
+      });
+
+      fontDiv.appendChild(btnFontMinus);
+      fontDiv.appendChild(fontLabel);
+      fontDiv.appendChild(btnFontPlus);
+      toolbar.appendChild(fontDiv);
       body.appendChild(toolbar);
 
       // Text container
@@ -5491,11 +5966,25 @@ class DropBoardManager {
       const textarea = document.createElement('textarea');
       textarea.className = 'node-textarea';
       textarea.value = node.content;
-      textarea.placeholder = 'Write lyrics, camera notes, storyboard details...';
+      textarea.placeholder = 'Type note or reference text here...';
+      textarea.style.fontSize = `${node.fontSize}px`;
+
+      const autoResizeTextarea = () => {
+        textarea.style.height = 'auto';
+        const minH = node.customTextareaHeight || 52;
+        textarea.style.height = `${Math.max(minH, textarea.scrollHeight)}px`;
+      };
+
       textarea.addEventListener('input', () => {
         node.content = textarea.value;
+        autoResizeTextarea();
+        this.renderConnections();
         this.scheduleAutoSave();
       });
+
+      textarea.addEventListener('paste', () => setTimeout(autoResizeTextarea, 0));
+      setTimeout(autoResizeTextarea, 0);
+
       textContainer.appendChild(textarea);
       body.appendChild(textContainer);
 
@@ -5589,6 +6078,7 @@ class DropBoardManager {
         btnModeChk.classList.remove('active');
         textContainer.style.display = 'block';
         chkContainer.style.display = 'none';
+        setTimeout(autoResizeTextarea, 0);
         this.scheduleAutoSave();
       });
       btnModeChk.addEventListener('click', (e) => {
@@ -5624,7 +6114,6 @@ class DropBoardManager {
         const btnAddTag = document.createElement('button');
         btnAddTag.className = 'node-add-tag-btn';
         btnAddTag.textContent = '+ Tag';
-        btnAddTag.title = 'Add custom tag';
 
         const inlineTagInput = document.createElement('input');
         inlineTagInput.type = 'text';
@@ -5639,29 +6128,39 @@ class DropBoardManager {
               node.tags.push(clean);
               this.scheduleAutoSave();
             }
+            inlineTagInput.value = '';
+            renderTags();
           }
-          renderTags();
         };
 
         inlineTagInput.addEventListener('keydown', (e) => {
-          e.stopPropagation();
-          if (e.key === 'Enter') {
-            commitTag();
-          } else if (e.key === 'Escape') {
-            renderTags();
+          if (e.key === 'Enter') commitTag();
+          if (e.key === 'Escape') {
+            inlineTagInput.value = '';
+            inlineTagInput.blur();
           }
         });
-        inlineTagInput.addEventListener('blur', commitTag);
 
         btnAddTag.addEventListener('click', (e) => {
           e.stopPropagation();
-          btnAddTag.replaceWith(inlineTagInput);
           inlineTagInput.focus();
         });
+
         tagsContainer.appendChild(btnAddTag);
+        tagsContainer.appendChild(inlineTagInput);
       };
       renderTags();
       body.appendChild(tagsContainer);
+
+      // Manual Node Corner Resize Handles (All 4 Corners)
+      ['nw', 'ne', 'sw', 'se'].forEach(dir => {
+        const handle = document.createElement('div');
+        handle.className = `node-resize-handle node-handle-${dir}`;
+        handle.dataset.dir = dir;
+        handle.title = `Drag to resize note (${dir.toUpperCase()})`;
+        this.initNodeResize(handle, node, nodeEl, dir, autoResizeTextarea);
+        nodeEl.appendChild(handle);
+      });
 
     } else if (type === 'font') {
       const row1 = document.createElement('div');
@@ -6273,11 +6772,103 @@ class DropBoardManager {
     Toast.show(`Removed ${node.title}`, 'info');
   }
 
+  initNodeResize(handle, node, nodeEl, dir, onResizeCallback) {
+    handle.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      this.recordPreState('Resize Node');
+
+      const startMouseX = e.clientX;
+      const startMouseY = e.clientY;
+      const startWidth = node.width || 285;
+      const startHeight = node.height || nodeEl.offsetHeight || 180;
+      const startX = node.x || 0;
+      const startY = node.y || 0;
+      const startFontSize = node.fontSize ? parseInt(node.fontSize) : 13;
+      const textarea = nodeEl.querySelector('.node-textarea');
+      const startTextareaH = textarea ? textarea.offsetHeight : 60;
+
+      const onMouseMove = (moveEvent) => {
+        const dx = (moveEvent.clientX - startMouseX) / this.canvas.zoom;
+        const dy = (moveEvent.clientY - startMouseY) / this.canvas.zoom;
+        const minW = (node.type === 'note') ? 120 : 160;
+        const minH = (node.type === 'note') ? 50 : 80;
+
+        let newWidth = startWidth;
+        let newHeight = startHeight;
+        let newX = startX;
+        let newY = startY;
+
+        // Horizontal stretching
+        if (dir.includes('e')) {
+          newWidth = Math.max(minW, Math.min(1600, Math.round(startWidth + dx)));
+        } else if (dir.includes('w')) {
+          newWidth = Math.max(minW, Math.min(1600, Math.round(startWidth - dx)));
+          newX = startX + (startWidth - newWidth);
+        }
+
+        // Vertical stretching
+        if (dir.includes('s')) {
+          newHeight = Math.max(minH, Math.min(1800, Math.round(startHeight + dy)));
+        } else if (dir.includes('n')) {
+          newHeight = Math.max(minH, Math.min(1800, Math.round(startHeight - dy)));
+          newY = startY + (startHeight - newHeight);
+        }
+
+        node.width = newWidth;
+        node.height = newHeight;
+        node.x = Math.round(newX);
+        node.y = Math.round(newY);
+
+        nodeEl.style.width = `${newWidth}px`;
+        nodeEl.style.minHeight = `${newHeight}px`;
+        nodeEl.style.transform = `translate(${node.x}px, ${node.y}px)`;
+
+        // Proportional Font Size Scaling & Vertical Expansion (like Text Tool in After Effects)
+        if (node.type === 'note') {
+          const scaleX = newWidth / startWidth;
+          const scaleY = newHeight / startHeight;
+          const scale = (scaleX * 0.65) + (scaleY * 0.35);
+          const newFontSize = Math.max(8.5, Math.min(72, Math.round(startFontSize * scale)));
+          node.fontSize = newFontSize;
+
+          const fontLabel = nodeEl.querySelector('.node-font-label');
+          if (fontLabel) fontLabel.textContent = `${newFontSize}px`;
+
+          if (textarea) {
+            textarea.style.fontSize = `${newFontSize}px`;
+            const dHeight = newHeight - startHeight;
+            const newTaHeight = Math.max(28, Math.round(startTextareaH + dHeight));
+            node.customTextareaHeight = newTaHeight;
+            textarea.style.height = `${newTaHeight}px`;
+          }
+        }
+
+        if (onResizeCallback) onResizeCallback();
+        this.renderConnections();
+      };
+
+      const onMouseUp = () => {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+        this.commitHistory('Resize Node');
+        this.scheduleAutoSave();
+      };
+
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    });
+  }
+
   initPinDrag(pinEl, node, side) {
     pinEl.addEventListener('mousedown', (e) => {
       e.stopPropagation();
       e.preventDefault();
       
+      document.body.classList.add('is-connecting-wire');
+      const iframes = document.querySelectorAll('.card-yt-iframe');
+      iframes.forEach(f => f.style.pointerEvents = 'none');
+
       const startPos = this.getNodePinPosition(node, side);
       let ghostWire = document.getElementById('connector-ghost-wire');
       if (!ghostWire) {
@@ -6297,18 +6888,18 @@ class DropBoardManager {
         const d = `M ${p1.x} ${p1.y} C ${p1.x + (side === 'left' ? -dx : dx)} ${p1.y}, ${p2.x + (side === 'left' ? dx : -dx)} ${p2.y}, ${p2.x} ${p2.y}`;
         ghostWire.setAttribute('d', d);
 
-        // Find candidate hover target
+        // Find candidate hover target (with generous 12px margin)
         let newHoverEl = null;
         const hoverCard = this.cards.find(c => 
-          mouseWorld.x >= c.x && mouseWorld.x <= (c.x + c.width) &&
-          mouseWorld.y >= c.y && mouseWorld.y <= (c.y + c.height)
+          mouseWorld.x >= (c.x - 12) && mouseWorld.x <= (c.x + c.width + 12) &&
+          mouseWorld.y >= (c.y - 12) && mouseWorld.y <= (c.y + c.height + 12)
         );
         if (hoverCard && hoverCard.element) {
           newHoverEl = hoverCard.element;
         } else {
           const hoverGrp = this.groups.find(g => 
-            mouseWorld.x >= g.x && mouseWorld.x <= (g.x + g.width) &&
-            mouseWorld.y >= g.y && mouseWorld.y <= (g.y + g.height)
+            mouseWorld.x >= (g.x - 8) && mouseWorld.x <= (g.x + g.width + 8) &&
+            mouseWorld.y >= (g.y - 8) && mouseWorld.y <= (g.y + g.height + 8)
           );
           if (hoverGrp && hoverGrp.element) {
             newHoverEl = hoverGrp.element;
@@ -6325,6 +6916,10 @@ class DropBoardManager {
       const onMouseUp = (upEvt) => {
         window.removeEventListener('mousemove', onMouseMove);
         window.removeEventListener('mouseup', onMouseUp);
+
+        document.body.classList.remove('is-connecting-wire');
+        document.querySelectorAll('.card-yt-iframe').forEach(f => f.style.pointerEvents = 'auto');
+
         if (ghostWire) ghostWire.remove();
         if (activeHoverTargetEl) {
           activeHoverTargetEl.classList.remove('pin-hover-target');
@@ -6333,10 +6928,10 @@ class DropBoardManager {
 
         const mouseWorld = this.canvas.screenToWorld(upEvt.clientX, upEvt.clientY);
         
-        // Check if dropped on a card
+        // Check if dropped on a card (with 12px margin)
         const targetCard = this.cards.find(c => 
-          mouseWorld.x >= c.x && mouseWorld.x <= (c.x + c.width) &&
-          mouseWorld.y >= c.y && mouseWorld.y <= (c.y + c.height)
+          mouseWorld.x >= (c.x - 12) && mouseWorld.x <= (c.x + c.width + 12) &&
+          mouseWorld.y >= (c.y - 12) && mouseWorld.y <= (c.y + c.height + 12)
         );
         if (targetCard) {
           this.recordPreState('Connect Node');
@@ -6452,9 +7047,23 @@ class DropBoardManager {
     this.connectorLayer.style.zIndex = '1';
 
     if (!this.connections || this.connections.length === 0) {
-      if (this.connectorLayer.children.length > 0) {
+      if (this.connectorLayer) {
         this.connectorLayer.innerHTML = '';
       }
+      // Purge all connection pills from cards and nodes
+      this.cards.forEach(card => {
+        if (card.element) {
+          card.element.querySelectorAll('.card-node-link-pill').forEach(p => p.remove());
+        }
+      });
+      this.nodes.forEach(node => {
+        const connList = node.element ? node.element.querySelector('.node-connections-list') : null;
+        if (connList) {
+          connList.innerHTML = '';
+          connList.style.display = 'none';
+        }
+      });
+      this.updateConnectedFontEffects();
       return;
     }
 
@@ -6578,10 +7187,11 @@ class DropBoardManager {
     // Update link pills on connected cards
     this.cards.forEach(card => {
       const activeLink = this.connections.find(c => c.toTargetId === card.id);
-      let pill = card.element ? card.element.querySelector('.card-node-link-pill') : null;
+      const existingPills = card.element ? Array.from(card.element.querySelectorAll('.card-node-link-pill')) : [];
       if (activeLink) {
         const parentNode = this.nodes.find(n => n.id === activeLink.fromNodeId);
         if (parentNode && card.element) {
+          let pill = existingPills[0];
           if (!pill) {
             pill = document.createElement('div');
             pill.className = 'card-node-link-pill';
@@ -6589,9 +7199,15 @@ class DropBoardManager {
           }
           pill.style.setProperty('--link-color', parentNode.color || '#38bdf8');
           pill.innerHTML = `<span>●</span><span>${parentNode.title}</span>`;
+          // Remove any extra duplicate pills
+          for (let i = 1; i < existingPills.length; i++) {
+            existingPills[i].remove();
+          }
+        } else {
+          existingPills.forEach(p => p.remove());
         }
-      } else if (pill) {
-        pill.remove();
+      } else {
+        existingPills.forEach(p => p.remove());
       }
     });
 
@@ -7469,6 +8085,10 @@ class DropBoardManager {
       if (toggleInvertPan) {
         toggleInvertPan.checked = this.canvas.invertPan;
       }
+      const toggleAutoHide = document.getElementById('settings-toggle-autohide-dock');
+      if (toggleAutoHide) {
+        toggleAutoHide.checked = this.autoHideDock;
+      }
       syncVisualSelectors();
       updateStats();
       if (modal) {
@@ -7587,6 +8207,13 @@ class DropBoardManager {
       selectDockStyle.addEventListener('change', (e) => {
         this.setDockStyle(e.target.value);
         syncVisualSelectors();
+      });
+    }
+
+    const toggleAutoHide = document.getElementById('settings-toggle-autohide-dock');
+    if (toggleAutoHide) {
+      toggleAutoHide.addEventListener('change', (e) => {
+        this.setAutoHideDock(e.target.checked);
       });
     }
 
@@ -7716,8 +8343,40 @@ class DropBoardManager {
     dock.classList.remove('dock-top', 'dock-left', 'dock-bottom', 'dock-style-auto', 'dock-style-icon', 'dock-style-full');
     dock.classList.add(`dock-${this.dockPosition}`);
     dock.classList.add(`dock-style-${this.dockStyle}`);
+    document.body.classList.remove('dock-pos-top', 'dock-pos-left', 'dock-pos-bottom');
+    document.body.classList.add(`dock-pos-${this.dockPosition}`);
     if (posLabel) {
       posLabel.textContent = this.dockPosition === 'left' ? 'Top Bar' : 'Sidebar';
+    }
+    this.setAutoHideDock(this.autoHideDock, false);
+  }
+
+  setAutoHideDock(enabled, showToast = true) {
+    this.autoHideDock = !!enabled;
+    try { localStorage.setItem('dropboard_autohide_dock', this.autoHideDock ? 'true' : 'false'); } catch(e) {}
+    document.body.classList.toggle('has-autohide-dock', this.autoHideDock);
+    document.body.classList.remove('dock-pos-top', 'dock-pos-left', 'dock-pos-bottom');
+    document.body.classList.add(`dock-pos-${this.dockPosition}`);
+
+    const btnPin = document.getElementById('btn-dock-pin');
+    const pinLabel = document.getElementById('dock-pin-label');
+    if (btnPin) {
+      btnPin.classList.toggle('is-pinned', !this.autoHideDock);
+      btnPin.classList.toggle('is-autohide', this.autoHideDock);
+      btnPin.title = this.autoHideDock 
+        ? 'Toolbar: Auto-Hide on Hover (Click to Pin always visible)' 
+        : 'Toolbar: Always Pinned (Click to enable Auto-Hide)';
+    }
+    if (pinLabel) {
+      pinLabel.textContent = this.autoHideDock ? 'Float' : 'Pin';
+    }
+
+    const toggle = document.getElementById('settings-toggle-autohide-dock');
+    if (toggle) toggle.checked = this.autoHideDock;
+
+    if (showToast) {
+      const hint = this.dockPosition === 'left' ? 'Hover left edge to reveal' : (this.dockPosition === 'bottom' ? 'Hover bottom edge to reveal' : 'Hover top edge to reveal');
+      Toast.show(this.autoHideDock ? `Toolbar set to Auto-Hide (${hint})` : 'Toolbar pinned always visible', 'info', 1800);
     }
   }
 

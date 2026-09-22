@@ -15,12 +15,67 @@
 #include <winhttp.h>
 #include <wincrypt.h>
 #include <regex>
+#include <gdiplus.h>
 
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "gdiplus.lib")
 
 using namespace Microsoft::WRL;
+
+// Helper function to get GDI+ encoder CLSID for PNG/JPEG
+static int GetEncoderClsid(const WCHAR* format, CLSID* pClsid) {
+    UINT num = 0, size = 0;
+    Gdiplus::GetImageEncodersSize(&num, &size);
+    if (size == 0) return -1;
+    auto* pImageCodecInfo = (Gdiplus::ImageCodecInfo*)(malloc(size));
+    if (!pImageCodecInfo) return -1;
+    Gdiplus::GetImageEncoders(num, size, pImageCodecInfo);
+    for (UINT j = 0; j < num; ++j) {
+        if (wcscmp(pImageCodecInfo[j].MimeType, format) == 0) {
+            *pClsid = pImageCodecInfo[j].Clsid;
+            free(pImageCodecInfo);
+            return j;
+        }
+    }
+    free(pImageCodecInfo);
+    return -1;
+}
+
+// Win32 GDI direct frame capture from screen DC
+static bool CaptureScreenRectToPng(int screenX, int screenY, int width, int height, const std::wstring& outPngPath) {
+    if (width <= 0 || height <= 0) return false;
+    HDC hdcScreen = GetDC(NULL);
+    if (!hdcScreen) return false;
+    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+    if (!hdcMem) { ReleaseDC(NULL, hdcScreen); return false; }
+    HBITMAP hBitmap = CreateCompatibleBitmap(hdcScreen, width, height);
+    if (!hBitmap) { DeleteDC(hdcMem); ReleaseDC(NULL, hdcScreen); return false; }
+    HGDIOBJ hOld = SelectObject(hdcMem, hBitmap);
+    BitBlt(hdcMem, 0, 0, width, height, hdcScreen, screenX, screenY, SRCCOPY);
+    SelectObject(hdcMem, hOld);
+    DeleteDC(hdcMem);
+    ReleaseDC(NULL, hdcScreen);
+
+    Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+    ULONG_PTR gdiplusToken = 0;
+    Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+
+    bool saved = false;
+    {
+        Gdiplus::Bitmap bmp(hBitmap, NULL);
+        CLSID pngClsid;
+        if (GetEncoderClsid(L"image/png", &pngClsid) >= 0) {
+            if (bmp.Save(outPngPath.c_str(), &pngClsid, NULL) == Gdiplus::Ok) {
+                saved = true;
+            }
+        }
+    }
+    Gdiplus::GdiplusShutdown(gdiplusToken);
+    DeleteObject(hBitmap);
+    return saved;
+}
 
 // Simple JSON string parser helper for safe extraction
 namespace JsonUtil {
@@ -266,6 +321,95 @@ bool WebViewHost::Initialize(HWND hWnd, const std::wstring& assetsPath, const st
                             );
 
                             SetupWebMessageHandling();
+
+                            // Inject clean YouTube frame capture hook & UI cleanup into all frames
+                            m_webview->AddScriptToExecuteOnDocumentCreated(
+                                L"(function() {\n"
+                                L"  if (window.self === window.top) return;\n"
+                                L"  if (location.hostname.indexOf('youtube') === -1) return;\n"
+                                L"  function cleanYoutube() {\n"
+                                L"    try {\n"
+                                L"      if (!document.getElementById('dropboard-clean-yt')) {\n"
+                                L"        var style = document.createElement('style');\n"
+                                L"        style.id = 'dropboard-clean-yt';\n"
+                                L"        style.textContent = '.ytp-pause-overlay, .ytp-bezel, .ytp-chrome-top, .ytp-gradient-top, .ytp-gradient-bottom { display: none !important; }';\n"
+                                L"        (document.head || document.documentElement).appendChild(style);\n"
+                                L"      }\n"
+                                L"    } catch(e) {}\n"
+                                L"  }\n"
+                                L"  cleanYoutube();\n"
+                                L"  if (document.readyState === 'loading') {\n"
+                                L"    document.addEventListener('DOMContentLoaded', cleanYoutube);\n"
+                                L"  } else {\n"
+                                L"    cleanYoutube();\n"
+                                L"  }\n"
+                                L"  window.addEventListener('mousedown', function(e) {\n"
+                                L"    if (e.button === 0) {\n"
+                                L"      var cardId = '';\n"
+                                L"      try {\n"
+                                L"        if (location.hash && location.hash.indexOf('cardId=') !== -1) {\n"
+                                L"          cardId = location.hash.split('cardId=')[1].split('&')[0];\n"
+                                L"        }\n"
+                                L"      } catch(err) {}\n"
+                                L"      window.parent.postMessage({\n"
+                                L"        type: 'DROPBOARD_IFRAME_CLICK',\n"
+                                L"        cardId: cardId,\n"
+                                L"        clientX: e.screenX,\n"
+                                L"        clientY: e.screenY\n"
+                                L"      }, '*');\n"
+                                L"    } else if (e.button === 1 || e.button === 2) {\n"
+                                L"      e.preventDefault();\n"
+                                L"      window.parent.postMessage({\n"
+                                L"        type: 'DROPBOARD_IFRAME_PAN_START',\n"
+                                L"        button: e.button,\n"
+                                L"        clientX: e.screenX,\n"
+                                L"        clientY: e.screenY\n"
+                                L"      }, '*');\n"
+                                L"    }\n"
+                                L"  }, true);\n"
+                                L"  window.addEventListener('wheel', function(e) {\n"
+                                L"    e.preventDefault();\n"
+                                L"    window.parent.postMessage({\n"
+                                L"      type: 'DROPBOARD_IFRAME_WHEEL',\n"
+                                L"      deltaX: e.deltaX,\n"
+                                L"      deltaY: e.deltaY,\n"
+                                L"      deltaMode: e.deltaMode || 0,\n"
+                                L"      clientX: e.screenX,\n"
+                                L"      clientY: e.screenY,\n"
+                                L"      ctrlKey: e.ctrlKey,\n"
+                                L"      shiftKey: e.shiftKey,\n"
+                                L"      altKey: e.altKey\n"
+                                L"    }, '*');\n"
+                                L"  }, { passive: false });\n"
+                                L"  window.addEventListener('message', function(ev) {\n"
+                                L"    if (!ev.data) return;\n"
+                                L"    if (ev.data.type === 'DROPBOARD_CAPTURE_YT_FRAME') {\n"
+                                L"      try {\n"
+                                L"        var v = document.querySelector('video');\n"
+                                L"        if (v) {\n"
+                                L"          var w = v.videoWidth || v.clientWidth || 1280;\n"
+                                L"          var h = v.videoHeight || v.clientHeight || 720;\n"
+                                L"          var c = document.createElement('canvas');\n"
+                                L"          c.width = w;\n"
+                                L"          c.height = h;\n"
+                                L"          var ctx = c.getContext('2d');\n"
+                                L"          ctx.drawImage(v, 0, 0, w, h);\n"
+                                L"          var dataUrl = c.toDataURL('image/png');\n"
+                                L"          window.parent.postMessage({\n"
+                                L"            type: 'DROPBOARD_YT_FRAME_RESULT',\n"
+                                L"            cardId: ev.data.cardId,\n"
+                                L"            dataUrl: dataUrl,\n"
+                                L"            sendToAe: !!ev.data.sendToAe\n"
+                                L"          }, '*');\n"
+                                L"        }\n"
+                                L"      } catch(err) {\n"
+                                L"        console.warn('Frame capture error:', err);\n"
+                                L"      }\n"
+                                L"    }\n"
+                                L"  });\n"
+                                L"})();\n",
+                                nullptr
+                            );
 
                             // Map folder to virtual host name for secure origin
                             ComPtr<ICoreWebView2_3> webview3;
@@ -742,8 +886,7 @@ std::wstring WebViewHost::DownloadImageToLocalCache(const std::wstring& url) {
 
     std::wstring cacheDir = GetCacheDirectory();
 
-    // Generate unique filename based on timestamp + hash
-    auto now = std::chrono::system_clock::now().time_since_epoch().count();
+    // Generate deterministic filename based on URL hash (Automatic Cache Deduplication)
     size_t hashVal = std::hash<std::wstring>{}(url);
 
     // Try to determine extension from URL
@@ -760,8 +903,13 @@ std::wstring WebViewHost::DownloadImageToLocalCache(const std::wstring& url) {
     }
 
     std::wstringstream ss;
-    ss << cacheDir << L"\\ref_" << hashVal << L"_" << now << ext;
+    ss << cacheDir << L"\\ref_" << hashVal << ext;
     std::wstring localPath = ss.str();
+
+    // Fast Cache Hit: If identical URL is already cached on disk, reuse immediately!
+    if (GetFileAttributesW(localPath.c_str()) != INVALID_FILE_ATTRIBUTES && IsValidImageFile(localPath)) {
+        return localPath;
+    }
 
     HRESULT hr = URLDownloadToFileW(nullptr, url.c_str(), localPath.c_str(), 0, nullptr);
     if (SUCCEEDED(hr)) {
@@ -966,6 +1114,53 @@ void WebViewHost::HandleJsonCommand(const std::wstring& json) {
              << L"\"app\":\"after_effects\","
              << L"\"success\":" << (ok ? L"true" : L"false") << L","
              << L"\"message\":\"" << JsonUtil::EscapeString(msg) << L"\"}";
+        PostMessageToWeb(resp.str());
+    }
+    else if (action == L"snap_video_frame") {
+        double clientX = JsonUtil::ExtractNumber(json, L"clientX", 0.0);
+        double clientY = JsonUtil::ExtractNumber(json, L"clientY", 0.0);
+        double width = JsonUtil::ExtractNumber(json, L"width", 480.0);
+        double height = JsonUtil::ExtractNumber(json, L"height", 270.0);
+        bool sendToAe = (json.find(L"\"sendToAe\":true") != std::wstring::npos);
+        std::wstring cardId = JsonUtil::ExtractString(json, L"cardId");
+        std::wstring rawImageData = JsonUtil::ExtractString(json, L"imageData");
+
+        std::wstring cacheDir = GetCacheDirectory();
+        static int snapCounter = 1;
+        std::wstring fileName = L"snap_yt_" + std::to_wstring(time(nullptr)) + L"_" + std::to_wstring(snapCounter++) + L".png";
+        std::wstring fullPath = cacheDir + L"\\" + fileName;
+
+        bool ok = false;
+        if (!rawImageData.empty()) {
+            size_t comma = rawImageData.find(L',');
+            std::wstring b64 = (comma != std::wstring::npos) ? rawImageData.substr(comma + 1) : rawImageData;
+            std::string b64Utf8 = JsonUtil::WideToUtf8(b64);
+            ok = DecodeBase64ToFile(b64Utf8, fullPath);
+        } else {
+            // Convert client coordinates to screen coordinates
+            POINT pt = { (LONG)clientX, (LONG)clientY };
+            ClientToScreen(m_hWnd, &pt);
+            ok = CaptureScreenRectToPng(pt.x, pt.y, (int)width, (int)height, fullPath);
+        }
+
+        std::wstring aeMsg = L"";
+        bool aeOk = false;
+        if (ok && sendToAe) {
+            aeOk = ExternalAppIntegration::SendToAfterEffects(fullPath, aeMsg);
+        }
+
+        std::wstring localWebUrl = ok ? (L"https://dropboard-cache.local/" + fileName) : L"";
+        std::wstring b64Data = ok ? (!rawImageData.empty() ? rawImageData : FileToBase64DataUrl(fullPath)) : L"";
+
+        std::wstringstream resp;
+        resp << L"{\"type\":\"frame_snapped\","
+             << L"\"cardId\":\"" << JsonUtil::EscapeString(cardId) << L"\","
+             << L"\"success\":" << (ok ? L"true" : L"false") << L","
+             << L"\"localPath\":\"" << JsonUtil::EscapeString(fullPath) << L"\","
+             << L"\"localWebUrl\":\"" << JsonUtil::EscapeString(localWebUrl) << L"\","
+             << L"\"imageData\":\"" << JsonUtil::EscapeString(b64Data) << L"\","
+             << L"\"sendToAe\":" << (sendToAe ? L"true" : L"false") << L","
+             << L"\"aeSuccess\":" << (aeOk ? L"true" : L"false") << L"}";
         PostMessageToWeb(resp.str());
     }
     else if (action == L"export_to_ae_comp") {

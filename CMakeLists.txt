@@ -44,6 +44,7 @@ target_link_libraries(DropBoard PRIVATE
     shell32
     user32
     gdi32
+    gdiplus
     comdlg32
     advapi32
 )
