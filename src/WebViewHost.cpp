@@ -285,11 +285,11 @@ bool WebViewHost::Initialize(HWND hWnd, const std::wstring& assetsPath, const st
                             m_controller->put_Bounds(initialBounds);
                             m_controller->put_IsVisible(TRUE);
 
-                            // Dark background for seamless loading
+                            // Transparent background for per-pixel alpha transparency
                             ComPtr<ICoreWebView2Controller2> controller2;
                             if (SUCCEEDED(m_controller.As(&controller2))) {
-                                COREWEBVIEW2_COLOR darkColor = { 255, 18, 20, 26 };
-                                controller2->put_DefaultBackgroundColor(darkColor);
+                                COREWEBVIEW2_COLOR transparentColor = { 0, 0, 0, 0 };
+                                controller2->put_DefaultBackgroundColor(transparentColor);
                             }
 
                             m_controller->get_CoreWebView2(&m_webview);
@@ -478,9 +478,11 @@ void WebViewHost::SetOpacity(float opacity) {
 
     LONG_PTR exStyle = GetWindowLongPtrW(m_hWnd, GWL_EXSTYLE);
     if (opacity >= 0.999f) {
-        // Remove WS_EX_LAYERED for maximum performance when fully opaque
-        SetWindowLongPtrW(m_hWnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
-        RedrawWindow(m_hWnd, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+        if (exStyle & WS_EX_LAYERED) {
+            SetWindowLongPtrW(m_hWnd, GWL_EXSTYLE, exStyle & ~WS_EX_LAYERED);
+            SetWindowPos(m_hWnd, nullptr, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        }
     } else {
         if (!(exStyle & WS_EX_LAYERED)) {
             SetWindowLongPtrW(m_hWnd, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);

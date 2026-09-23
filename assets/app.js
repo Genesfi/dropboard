@@ -789,31 +789,95 @@ class DropBoardManager {
       Toast.show(isPinned ? 'Always on Top: ON' : 'Always on Top: OFF', 'info');
     });
 
-    // Opacity Controls & Safety Restoration
+    // Opacity Controls & Dual-Mode Transparency (Canvas BG Glass vs Window Global)
     const opacityToggle = document.getElementById('btn-opacity-toggle');
     const opacityPopover = document.getElementById('opacity-popover');
     const opacitySlider = document.getElementById('opacity-slider');
     const opacityLabel = document.getElementById('opacity-label');
     const btnResetOpacity = document.getElementById('btn-reset-opacity');
 
-    this.setWindowOpacity = (val) => {
-      const clamped = Math.max(30, Math.min(100, val));
-      opacitySlider.value = clamped;
-      opacityLabel.textContent = `${clamped}%`;
-      NativeBridge.setOpacity(clamped / 100);
-      opacityToggle.classList.toggle('is-translucent', clamped < 100);
+    const canvasBgSlider = document.getElementById('canvas-bg-slider');
+    const canvasBgLabel = document.getElementById('canvas-bg-opacity-label');
+    const canvasPresetBtns = opacityPopover.querySelectorAll('.canvas-preset-btn');
+    const winPresetBtns = opacityPopover.querySelectorAll('.win-preset-btn');
+
+    let currentWinOpacity = 100;
+    let currentCanvasBgOpacity = 100;
+
+    const updateToggleBadge = () => {
+      if (currentWinOpacity < 100) {
+        opacityLabel.textContent = `${currentWinOpacity}%`;
+      } else if (currentCanvasBgOpacity < 100) {
+        opacityLabel.textContent = `${currentCanvasBgOpacity}% BG`;
+      } else {
+        opacityLabel.textContent = '100%';
+      }
+      opacityToggle.classList.toggle('is-translucent', currentWinOpacity < 100 || currentCanvasBgOpacity < 100);
     };
+
+    this.setCanvasBgOpacity = (val, save = true) => {
+      const clamped = Math.max(0, Math.min(100, Math.round(val)));
+      currentCanvasBgOpacity = clamped;
+      if (canvasBgSlider) canvasBgSlider.value = clamped;
+      if (canvasBgLabel) canvasBgLabel.textContent = `${clamped}%`;
+
+      // Apply per-pixel alpha transparency directly to CSS variables
+      const alpha = clamped / 100;
+      document.documentElement.style.setProperty('--canvas-bg-alpha', alpha.toFixed(2));
+      document.body.classList.toggle('canvas-clear-glass', clamped === 0);
+
+      // Update preset active classes
+      canvasPresetBtns.forEach(btn => {
+        const pVal = parseInt(btn.dataset.canvasVal, 10);
+        btn.classList.toggle('active', pVal === clamped);
+      });
+
+      updateToggleBadge();
+      if (save) {
+        try { localStorage.setItem('dropboard_canvas_bg_opacity', clamped); } catch (e) {}
+      }
+    };
+
+    this.setWindowOpacity = (val) => {
+      const clamped = Math.max(30, Math.min(100, Math.round(val)));
+      currentWinOpacity = clamped;
+      if (opacitySlider) opacitySlider.value = clamped;
+      NativeBridge.setOpacity(clamped / 100);
+
+      winPresetBtns.forEach(btn => {
+        const pVal = parseInt(btn.dataset.val, 10);
+        btn.classList.toggle('active', pVal === clamped);
+      });
+
+      updateToggleBadge();
+    };
+
+    // Load saved canvas background opacity preference
+    try {
+      const savedCanvasBg = localStorage.getItem('dropboard_canvas_bg_opacity');
+      if (savedCanvasBg !== null) {
+        const parsed = parseInt(savedCanvasBg, 10);
+        if (!isNaN(parsed)) {
+          this.setCanvasBgOpacity(parsed, false);
+        }
+      }
+    } catch (e) {}
 
     opacityToggle.addEventListener('click', (e) => {
       e.stopPropagation();
       opacityPopover.classList.toggle('show');
     });
 
-    // Double-click % button instantly resets window opacity to 100% solid
+    opacityPopover.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+
+    // Double-click % button instantly resets both to 100% solid
     opacityToggle.addEventListener('dblclick', (e) => {
       e.stopPropagation();
       this.setWindowOpacity(100);
-      Toast.show('Window Opacity Reset to 100%', 'success');
+      this.setCanvasBgOpacity(100);
+      Toast.show('Canvas & Window Opacity Reset to 100%', 'success');
     });
 
     if (btnResetOpacity) {
@@ -824,8 +888,22 @@ class DropBoardManager {
       });
     }
 
-    const presetBtns = opacityPopover.querySelectorAll('.opacity-preset-btn');
-    presetBtns.forEach(btn => {
+    canvasPresetBtns.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const val = parseInt(btn.dataset.canvasVal, 10);
+        this.setCanvasBgOpacity(val);
+      });
+    });
+
+    if (canvasBgSlider) {
+      canvasBgSlider.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value, 10);
+        this.setCanvasBgOpacity(val);
+      });
+    }
+
+    winPresetBtns.forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const val = parseInt(btn.dataset.val, 10);
@@ -833,15 +911,17 @@ class DropBoardManager {
       });
     });
 
+    if (opacitySlider) {
+      opacitySlider.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value, 10);
+        this.setWindowOpacity(val);
+      });
+    }
+
     document.addEventListener('click', (e) => {
-      if (!opacityPopover.contains(e.target) && e.target !== opacityToggle) {
+      if (!opacityPopover.contains(e.target) && !opacityToggle.contains(e.target) && e.target !== opacityToggle) {
         opacityPopover.classList.remove('show');
       }
-    });
-
-    opacitySlider.addEventListener('input', (e) => {
-      const val = parseInt(e.target.value, 10);
-      this.setWindowOpacity(val);
     });
 
     // HUD Zoom Buttons

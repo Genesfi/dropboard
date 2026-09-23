@@ -1,0 +1,11332 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Reflection;
+using System.Text.Json;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+using System.Runtime.InteropServices;
+using System.Windows.Interop;
+using DropBoard.Native.Services;
+using Microsoft.Win32;
+using XamlAnimatedGif;
+using YoutubeExplode;
+using YoutubeExplode.Videos.Streams;
+
+namespace DropBoard.Native
+{
+    public enum ResizeCorner
+    {
+        None,
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight
+    }
+
+    public enum ToastType
+    {
+        Success,
+        Info,
+        Error
+    }
+
+    public class CanvasSnapshot
+    {
+        public string ActionName { get; set; } = "";
+        public List<CardSnapshot> Cards { get; set; } = new();
+        public List<GroupSnapshot> Groups { get; set; } = new();
+        public double MatrixM11 { get; set; } = 1.0;
+        public double MatrixOffsetX { get; set; }
+        public double MatrixOffsetY { get; set; }
+    }
+
+    public class GroupSnapshot
+    {
+        public string Id { get; set; } = "";
+        public string Title { get; set; } = "";
+        public string Color { get; set; } = "";
+        public string Notes { get; set; } = "";
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
+    }
+
+    public class GroupItem
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
+        public string Title { get; set; } = "Scene 01";
+        public string Color { get; set; } = "#3B82F6";
+        public string Notes { get; set; } = "";
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Width { get; set; } = 460;
+        public double Height { get; set; } = 380;
+        public Grid Container { get; set; } = null!;
+        public Border? HeaderBorder { get; set; }
+        public Border FrameBorder { get; set; } = null!;
+        public TextBox? NotesBox { get; set; }
+        public TextBlock TitleText { get; set; } = null!;
+        public TextBlock CountBadge { get; set; } = null!;
+        public Border ColorDot { get; set; } = null!;
+        public Border? ResizeHandle { get; set; }
+        public Border HandleTL { get; set; } = null!;
+        public Border HandleTR { get; set; } = null!;
+        public Border HandleBL { get; set; } = null!;
+        public Border HandleBR { get; set; } = null!;
+        public Border? HoverToolbar { get; set; }
+        public bool IsSelected { get; set; } = false;
+    }
+
+    public class CardSnapshot
+    {
+        public string Id { get; set; } = "";
+        public double X { get; set; }
+        public double Y { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
+        public string LocalPath { get; set; } = "";
+        public string Base64Data { get; set; } = "";
+        public BitmapSource Bitmap { get; set; } = null!;
+        public BitmapSource? OriginalBitmap { get; set; }
+        public double BaseWidth { get; set; }
+        public double BaseHeight { get; set; }
+        public double BaseX { get; set; }
+        public double BaseY { get; set; }
+        public double CropTop { get; set; }
+        public double CropRight { get; set; }
+        public double CropBottom { get; set; }
+        public double CropLeft { get; set; }
+        public bool IsYouTube { get; set; } = false;
+        public string YouTubeId { get; set; } = "";
+        public string YouTubeUrl { get; set; } = "";
+        public bool IsNote { get; set; } = false;
+        public string NoteText { get; set; } = "";
+        public string NoteFontFamily { get; set; } = "Segoe UI";
+        public double NoteFontSize { get; set; } = 16.0;
+        public string NoteTextColor { get; set; } = "#FFFFFF";
+        public string NoteBgColor { get; set; } = "Transparent";
+        public TextAlignment NoteAlignment { get; set; } = TextAlignment.Left;
+        public bool IsPaletteCard { get; set; } = false;
+        public string PalettePinsData { get; set; } = "";
+        public int PaletteColorCount { get; set; } = 5;
+        public ColorMood PaletteMood { get; set; } = ColorMood.Colorful;
+        public int PaletteRows { get; set; } = 1;
+        public string? LinkedSourceCardId { get; set; } = null;
+        public string? GroupId { get; set; } = null;
+    }
+
+    public class CardItem
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
+        public string? GroupId { get; set; } = null;
+        public string LocalPath { get; set; } = "";
+        public string Base64Data { get; set; } = "";
+        public Grid Container { get; set; } = null!;
+        public Border ContentBorder { get; set; } = null!;
+        public Image ImageControl { get; set; } = null!;
+        public BitmapSource Bitmap { get; set; } = null!;
+        public BitmapSource OriginalBitmap { get; set; } = null!;
+        public double BaseWidth { get; set; } = 0;
+        public double BaseHeight { get; set; } = 0;
+        public double BaseX { get; set; } = 0;
+        public double BaseY { get; set; } = 0;
+        public double CropTop { get; set; } = 0;
+        public double CropRight { get; set; } = 0;
+        public double CropBottom { get; set; } = 0;
+        public double CropLeft { get; set; } = 0;
+        public bool IsCropped => (CropTop > 0 || CropRight > 0 || CropBottom > 0 || CropLeft > 0);
+        public double AspectRatio { get; set; } = 1.0;
+        public bool IsSelected { get; set; } = false;
+        public Border HoverToolbar { get; set; } = null!;
+
+        // YouTube Video Player Integration
+        public bool IsYouTube { get; set; } = false;
+        public string YouTubeId { get; set; } = "";
+        public string YouTubeUrl { get; set; } = "";
+        public bool IsPlayingYouTube { get; set; } = false;
+        public MediaElement? NativePlayer { get; set; } = null;
+        public Microsoft.Web.WebView2.Wpf.WebView2? PlayerControl { get; set; } = null;
+        public Border? YouTubeTagBadge { get; set; } = null;
+        public Border? BtnPlayOverlay { get; set; } = null;
+        public Border? CenterPlayBtn { get; set; } = null;
+
+        // Note / Text Card Integration
+        public bool IsNote { get; set; } = false;
+        public string NoteText { get; set; } = "";
+        public string NoteFontFamily { get; set; } = "Segoe UI";
+        public double NoteFontSize { get; set; } = 16.0;
+        public string NoteTextColor { get; set; } = "#FFFFFF";
+        public string NoteBgColor { get; set; } = "Transparent";
+        public TextAlignment NoteAlignment { get; set; } = TextAlignment.Left;
+        public TextBox? NoteEditor { get; set; } = null;
+
+        // HWND lockstep position and size cache
+        public int LastPixelX { get; set; } = int.MinValue;
+        public int LastPixelY { get; set; } = int.MinValue;
+        public int LastPixelW { get; set; } = int.MinValue;
+        public int LastPixelH { get; set; } = int.MinValue;
+
+        // Real-time Canvas Color Palette Mode
+        public bool IsPaletteMode { get; set; } = false;
+        public Canvas? PalettePinsCanvas { get; set; } = null;
+        public List<PalettePin> ActivePalettePins { get; set; } = new();
+        public int PaletteColorCount { get; set; } = 5;
+        public ColorMood PaletteMood { get; set; } = ColorMood.Colorful;
+
+        // Standalone Live Color Palette Card
+        public bool IsPaletteCard { get; set; } = false;
+        public int PaletteRows { get; set; } = 1;
+        public CardItem? LinkedSourceImageCard { get; set; } = null;
+        public CardItem? LinkedPaletteCard { get; set; } = null;
+        public string? PendingLinkedSourceCardId { get; set; } = null;
+        public Grid? PaletteGridContent { get; set; } = null;
+        public TextBlock? PaletteTitleText { get; set; } = null;
+
+        // Resize Handles
+        public Border HandleTL { get; set; } = null!;
+        public Border HandleTR { get; set; } = null!;
+        public Border HandleBL { get; set; } = null!;
+        public Border HandleBR { get; set; } = null!;
+
+        private double _fallbackX = 0;
+        private double _fallbackY = 0;
+        private double _fallbackWidth = 320;
+        private double _fallbackHeight = 180;
+
+        public double X
+        {
+            get
+            {
+                if (Container == null) return _fallbackX;
+                double val = Canvas.GetLeft(Container);
+                return double.IsNaN(val) ? _fallbackX : val;
+            }
+            set
+            {
+                double safeVal = double.IsNaN(value) ? 0 : value;
+                _fallbackX = safeVal;
+                if (Container != null)
+                {
+                    Canvas.SetLeft(Container, safeVal);
+                    if (!IsCropped || BaseWidth <= 0) BaseX = safeVal;
+                    else BaseX = safeVal - BaseWidth * (CropLeft / 100.0);
+                }
+            }
+        }
+
+        public double Y
+        {
+            get
+            {
+                if (Container == null) return _fallbackY;
+                double val = Canvas.GetTop(Container);
+                return double.IsNaN(val) ? _fallbackY : val;
+            }
+            set
+            {
+                double safeVal = double.IsNaN(value) ? 0 : value;
+                _fallbackY = safeVal;
+                if (Container != null)
+                {
+                    Canvas.SetTop(Container, safeVal);
+                    if (!IsCropped || BaseHeight <= 0) BaseY = safeVal;
+                    else BaseY = safeVal - BaseHeight * (CropTop / 100.0);
+                }
+            }
+        }
+
+        public double Width
+        {
+            get
+            {
+                if (Container == null) return _fallbackWidth;
+                double val = Container.Width;
+                if (double.IsNaN(val) || val <= 0) val = Container.ActualWidth;
+                return (double.IsNaN(val) || val <= 0) ? _fallbackWidth : val;
+            }
+            set
+            {
+                if (double.IsNaN(value) || value <= 0) return;
+                _fallbackWidth = value;
+                if (Container != null) Container.Width = value;
+                if (ContentBorder != null) ContentBorder.Width = value;
+                if (ImageControl != null) ImageControl.Width = value;
+                if (NativePlayer != null) NativePlayer.Width = value;
+            }
+        }
+
+        public double Height
+        {
+            get
+            {
+                if (Container == null) return _fallbackHeight;
+                double val = Container.Height;
+                if (double.IsNaN(val) || val <= 0) val = Container.ActualHeight;
+                return (double.IsNaN(val) || val <= 0) ? _fallbackHeight : val;
+            }
+            set
+            {
+                if (double.IsNaN(value) || value <= 0) return;
+                _fallbackHeight = value;
+                if (Container != null) Container.Height = value;
+                if (ContentBorder != null) ContentBorder.Height = value;
+                if (ImageControl != null) ImageControl.Height = value;
+                if (NativePlayer != null) NativePlayer.Height = value;
+            }
+        }
+    }
+
+    public partial class MainWindow : Window
+    {
+        private readonly List<CardItem> _cards = new();
+        private readonly HashSet<CardItem> _selectedCards = new();
+        private readonly List<GroupItem> _groups = new();
+        private readonly HashSet<GroupItem> _selectedGroups = new();
+
+        // Group Dragging & Resizing State
+        private bool _isDraggingGroup = false;
+        private GroupItem? _draggingGroup = null;
+        private Point _groupDragStartMousePoint;
+        private Point _groupDragStartPos;
+        private readonly Dictionary<CardItem, Point> _groupCardsInitialPositions = new();
+        private bool _isResizingGroup = false;
+        private GroupItem? _resizingGroup = null;
+        private ResizeCorner _activeGroupCorner = ResizeCorner.None;
+        private Point _groupResizeStartMousePoint;
+        private Rect _groupResizeInitialBounds;
+
+        private class GroupResizeMemberState
+        {
+            public CardItem Card { get; set; } = null!;
+            public double InitWidth { get; set; }
+            public double InitHeight { get; set; }
+            public double RelX { get; set; }
+            public double RelY { get; set; }
+        }
+        private readonly List<GroupResizeMemberState> _groupResizeMemberCards = new();
+
+        // System Fonts Cache for Notes
+        private static readonly List<string> _installedFontNames =
+            Fonts.SystemFontFamilies.Select(f => f.Source).OrderBy(n => n).ToList();
+        private bool _isCardSubMenuOpen = false;
+
+        // Persistent Settings & HTTP Server
+        private readonly AppSettings _settings = AppSettings.Load();
+        private LocalHttpServer? _httpServer;
+
+        // Undo & Redo History
+        private readonly Stack<CanvasSnapshot> _undoStack = new();
+        private readonly Stack<CanvasSnapshot> _redoStack = new();
+        private bool _isApplyingSnapshot = false;
+        private int _highestZ = 10;
+        private int _lowestZ = 5;
+
+        // Paths & Session Management
+        private static string AppDataDir => System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DropBoard");
+        private static string SessionFilePath => System.IO.Path.Combine(AppDataDir, "session.dropboard");
+        private static string RecentConfigPath => System.IO.Path.Combine(AppDataDir, "recent.json");
+        private static string CacheDir => System.IO.Path.Combine(AppDataDir, "Cache");
+
+        private readonly DispatcherTimer _autoSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(1000) };
+        private bool _isRestoringSession = false;
+
+        // Canvas Pan & Zoom
+        private Point _lastPanPoint;
+        private bool _isPanning = false;
+
+        // Marquee Selection Box
+        private bool _isMarqueeSelecting = false;
+        private Point _marqueeStartWorldPoint;
+
+        // Card Dragging (Single & Multi)
+        private bool _isDraggingCards = false;
+        private Point _cardDragStartMousePoint;
+        private readonly Dictionary<CardItem, Point> _cardsInitialPositions = new();
+
+        // Card Resizing
+        private bool _isResizingCard = false;
+        private CardItem? _resizingCard = null;
+        private ResizeCorner _activeCorner = ResizeCorner.None;
+        private Point _resizeStartMousePoint;
+        private Rect _resizeInitialBounds;
+
+        // Crop Mode
+        private bool _isCropping = false;
+        private CardItem? _activeCroppingCard = null;
+        private Grid? _activeCropOverlay = null;
+
+        // Layout Spacing Gap & Project
+        private double _currentGap = 24.0;
+        private string _currentFilePath = "";
+        private string _projectName = "untitled";
+        private bool _isDockAutoHide = false;
+        private bool _isDockRevealed = true;
+        private string _dockPosition = "top";
+        private EventHandler? _activeZoomAnimation = null;
+        private int _gridArrangeCount = 0;
+        private int _pipelineArrangeCount = 0;
+        private readonly Dictionary<string, TaskCompletionSource<string>> _pendingCleanFrameRequests = new();
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOZORDER = 0x0004;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private const uint SWP_NOCOPYBITS = 0x0100;
+        private const uint SWP_NOOWNERZORDER = 0x0200;
+        private const uint SWP_NOSENDCHANGING = 0x0400;
+
+        private void SyncActiveHwndPositions(bool updateSize = false)
+        {
+            PresentationSource? source = PresentationSource.FromVisual(this);
+            if (source?.CompositionTarget == null) return;
+
+            Matrix dpiMatrix = source.CompositionTarget.TransformToDevice;
+
+            for (int i = 0; i < _cards.Count; i++)
+            {
+                var card = _cards[i];
+                if (card.PlayerControl != null && card.PlayerControl.IsVisible && card.Container.IsDescendantOf(this))
+                {
+                    try
+                    {
+                        IntPtr handle = card.PlayerControl.Handle;
+                        if (handle != IntPtr.Zero)
+                        {
+                            GeneralTransform transform = card.Container.TransformToAncestor(this);
+                            Point topLeftDip = transform.Transform(new Point(0, 0));
+                            Point bottomRightDip = transform.Transform(new Point(card.Width, card.Height));
+
+                            int pixelX = (int)Math.Round(topLeftDip.X * dpiMatrix.M11);
+                            int pixelY = (int)Math.Round(topLeftDip.Y * dpiMatrix.M22);
+                            int pixelW = Math.Max(1, (int)Math.Round((bottomRightDip.X - topLeftDip.X) * dpiMatrix.M11));
+                            int pixelH = Math.Max(1, (int)Math.Round((bottomRightDip.Y - topLeftDip.Y) * dpiMatrix.M22));
+
+                            bool posChanged = (pixelX != card.LastPixelX || pixelY != card.LastPixelY);
+                            bool sizeChanged = updateSize || (pixelW != card.LastPixelW || pixelH != card.LastPixelH);
+
+                            if (!posChanged && !sizeChanged) continue;
+
+                            const uint baseFlags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING | SWP_NOCOPYBITS;
+
+                            if (sizeChanged)
+                            {
+                                SetWindowPos(handle, IntPtr.Zero, pixelX, pixelY, pixelW, pixelH, baseFlags);
+                                card.LastPixelW = pixelW;
+                                card.LastPixelH = pixelH;
+                            }
+                            else
+                            {
+                                SetWindowPos(handle, IntPtr.Zero, pixelX, pixelY, 0, 0, baseFlags | SWP_NOSIZE);
+                            }
+
+                            card.LastPixelX = pixelX;
+                            card.LastPixelY = pixelY;
+                        }
+                    }
+                    catch { }
+                }
+            }
+        }
+
+        private void SetWebViewHitTesting(bool enable)
+        {
+            for (int i = 0; i < _cards.Count; i++)
+            {
+                var card = _cards[i];
+                if (card.PlayerControl != null)
+                {
+                    card.PlayerControl.IsHitTestVisible = enable;
+                }
+            }
+        }
+
+        private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Space && !_isPanning)
+            {
+                SetWebViewHitTesting(false);
+            }
+            else if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.None && !_isPanning && !_isDraggingCards && !_isResizingCard)
+            {
+                if (!(FocusManager.GetFocusedElement(this) is TextBox))
+                {
+                    BtnAddNote_Click(sender, e);
+                    e.Handled = true;
+                }
+            }
+        }
+
+        private void Window_PreviewKeyUp(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Space && !_isPanning)
+            {
+                SetWebViewHitTesting(true);
+            }
+        }
+
+        private static string FormatGapText(double gap) => gap == 0 ? "Gap: No Gap" : $"Gap: {(int)gap}px";
+
+        public MainWindow(string? initialFilePath = null)
+        {
+            InitializeComponent();
+
+            // Hook CompositionTarget.Rendering so HwndHost child windows stay 100% lockstep with DirectX frames
+            CompositionTarget.Rendering += (s, e) =>
+            {
+                SyncActiveHwndPositions(updateSize: false);
+            };
+
+            // Restore persistent window metrics, opacity, and pin state
+            ApplyCanvasTransparency(_settings.OpacityPercent);
+            CanvasBgSlider.Value = _settings.OpacityPercent;
+            _currentGap = _settings.ArrangeGap >= 0 ? _settings.ArrangeGap : 24.0;
+            TxtGap.Text = FormatGapText(_currentGap);
+
+            if (_settings.IsPinned)
+            {
+                Topmost = true;
+                PinDot.Fill = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+            }
+
+            _dockPosition = string.IsNullOrEmpty(_settings.DockPosition) ? "top" : _settings.DockPosition;
+            _isDockAutoHide = _settings.AutoHideDock;
+            ApplyDockLayout();
+            UpdateDockAutoHideUI();
+
+            if (_settings.WindowWidth >= 400 && _settings.WindowHeight >= 300)
+            {
+                Width = _settings.WindowWidth;
+                Height = _settings.WindowHeight;
+            }
+
+            if (_settings.WindowLeft >= 0 && _settings.WindowTop >= 0 &&
+                _settings.WindowLeft < SystemParameters.VirtualScreenWidth &&
+                _settings.WindowTop < SystemParameters.VirtualScreenHeight)
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual;
+                Left = _settings.WindowLeft;
+                Top = _settings.WindowTop;
+            }
+
+            if (_settings.WindowState == "Maximized")
+            {
+                WindowState = WindowState.Maximized;
+            }
+
+            InitAutoSave();
+
+            // Start Local HTTP server on port 28888 for Chrome/Edge extension bridge
+            _httpServer = new LocalHttpServer(28888, (url, title) =>
+            {
+                Dispatcher.InvokeAsync(async () =>
+                {
+                    await AddImageFromUrlAsync(url, title);
+                });
+            });
+            _httpServer.Start();
+
+            Loaded += (s, e) =>
+            {
+                InitializeSession(initialFilePath);
+                UpdateResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width);
+                UpdateStorageStats();
+            };
+        }
+
+        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        {
+            _autoSaveTimer.Stop();
+            PerformAutoSave(isClosing: true);
+
+            // Save persistent app settings
+            if (WindowState == WindowState.Normal)
+            {
+                _settings.WindowLeft = Left;
+                _settings.WindowTop = Top;
+                _settings.WindowWidth = Width;
+                _settings.WindowHeight = Height;
+            }
+            _settings.WindowState = WindowState.ToString();
+            _settings.OpacityPercent = (int)CanvasBgSlider.Value;
+            _settings.IsPinned = Topmost;
+            _settings.ArrangeGap = _currentGap;
+            _settings.Save();
+
+            _httpServer?.Stop();
+
+            base.OnClosing(e);
+        }
+
+        private void InitAutoSave()
+        {
+            _autoSaveTimer.Tick += (s, e) =>
+            {
+                _autoSaveTimer.Stop();
+                PerformAutoSave(isClosing: false);
+            };
+        }
+
+        private void ScheduleAutoSave()
+        {
+            if (_isRestoringSession) return;
+            _autoSaveTimer.Stop();
+            _autoSaveTimer.Start();
+        }
+
+        #region Canvas Background Transparency
+
+        private void CanvasBgSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (CanvasBgText == null) return;
+            int percent = (int)e.NewValue;
+            ApplyCanvasTransparency(percent);
+            _settings.OpacityPercent = percent;
+            _settings.Save();
+        }
+
+        private void ApplyCanvasTransparency(int percent)
+        {
+            byte alpha = (byte)(percent * 255 / 100);
+            RootGrid.Background = new SolidColorBrush(Color.FromArgb(alpha, 13, 15, 20));
+
+            if (percent == 0)
+                CanvasBgText.Text = "0% BG";
+            else if (percent == 100)
+                CanvasBgText.Text = "100% BG";
+            else
+                CanvasBgText.Text = $"{percent}% BG";
+        }
+
+        private void BtnOpacityToggle_Click(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            CanvasBgSlider.Value = CanvasBgSlider.Value > 0 ? 0 : 100;
+        }
+
+        private void CanvasBgSlider_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            CanvasBgSlider.Value = CanvasBgSlider.Value > 0 ? 0 : 100;
+        }
+
+        private void MenuOpacityPreset_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuItem item && item.Tag is string tagStr && double.TryParse(tagStr, out double val))
+            {
+                CanvasBgSlider.Value = val;
+            }
+        }
+
+        #endregion
+
+        #region Infinite Canvas Navigation (Pan & Zoom)
+
+        private void CanvasContainer_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            // Right-click or Middle-click or Space+Left-click to pan
+            if (e.ChangedButton == MouseButton.Right || e.ChangedButton == MouseButton.Middle || 
+               (e.ChangedButton == MouseButton.Left && Keyboard.IsKeyDown(Key.Space)))
+            {
+                _isPanning = true;
+                _lastPanPoint = e.GetPosition(CanvasContainer);
+                SetWebViewHitTesting(false);
+                CanvasContainer.CaptureMouse();
+                Cursor = Cursors.Hand;
+                e.Handled = true;
+                return;
+            }
+
+            // Left-click on empty canvas: Start Marquee Selection
+            if (e.ChangedButton == MouseButton.Left)
+            {
+                if ((Keyboard.Modifiers & ModifierKeys.Shift) == 0)
+                {
+                    DeselectAllCards();
+                }
+
+                _isMarqueeSelecting = true;
+                Point mouseScreen = e.GetPosition(CanvasContainer);
+                _marqueeStartWorldPoint = ScreenToWorld(mouseScreen);
+
+                Canvas.SetLeft(MarqueeSelectionBox, _marqueeStartWorldPoint.X);
+                Canvas.SetTop(MarqueeSelectionBox, _marqueeStartWorldPoint.Y);
+                MarqueeSelectionBox.Width = 0;
+                MarqueeSelectionBox.Height = 0;
+                MarqueeSelectionBox.Visibility = Visibility.Visible;
+
+                CanvasContainer.CaptureMouse();
+                e.Handled = true;
+            }
+        }
+
+        private void CanvasContainer_MouseMove(object sender, MouseEventArgs e)
+        {
+            // 1. Panning Canvas
+            if (_isPanning)
+            {
+                Point current = e.GetPosition(CanvasContainer);
+                Vector delta = current - _lastPanPoint;
+                _lastPanPoint = current;
+
+                Matrix matrix = CanvasMatrixTransform.Matrix;
+                matrix.Translate(delta.X, delta.Y);
+                CanvasMatrixTransform.Matrix = matrix;
+                SyncActiveHwndPositions(updateSize: false);
+                e.Handled = true;
+                return;
+            }
+
+            // 2. Marquee Box Selection
+            if (_isMarqueeSelecting)
+            {
+                Point mouseScreen = e.GetPosition(CanvasContainer);
+                Point currentWorld = ScreenToWorld(mouseScreen);
+
+                double x = Math.Min(_marqueeStartWorldPoint.X, currentWorld.X);
+                double y = Math.Min(_marqueeStartWorldPoint.Y, currentWorld.Y);
+                double w = Math.Abs(_marqueeStartWorldPoint.X - currentWorld.X);
+                double h = Math.Abs(_marqueeStartWorldPoint.Y - currentWorld.Y);
+
+                Canvas.SetLeft(MarqueeSelectionBox, x);
+                Canvas.SetTop(MarqueeSelectionBox, y);
+                MarqueeSelectionBox.Width = w;
+                MarqueeSelectionBox.Height = h;
+
+                // Hit test cards in marquee box
+                Rect marqueeRect = new Rect(x, y, w, h);
+                foreach (CardItem card in _cards)
+                {
+                    Rect cardRect = new Rect(card.X, card.Y, card.Width, card.Height);
+                    if (marqueeRect.IntersectsWith(cardRect))
+                    {
+                        SelectCard(card, addToSelection: true);
+                    }
+                }
+                e.Handled = true;
+                return;
+            }
+
+            // 3. Resizing Card via Corner Handle
+            if (_isResizingCard && _resizingCard != null)
+            {
+                Point currentMouse = e.GetPosition(CanvasContainer);
+                Matrix matrix = CanvasMatrixTransform.Matrix;
+                double zoom = matrix.M11;
+
+                double deltaX = (currentMouse.X - _resizeStartMousePoint.X) / zoom;
+                double deltaY = (currentMouse.Y - _resizeStartMousePoint.Y) / zoom;
+
+                ApplyCardResize(_resizingCard, _activeCorner, _resizeInitialBounds, deltaX, deltaY);
+                SyncActiveHwndPositions(updateSize: true);
+                e.Handled = true;
+                return;
+            }
+
+            // 4. Dragging Selected Cards (Single or Multi)
+            if (_isDraggingCards)
+            {
+                Point currentMouse = e.GetPosition(CanvasContainer);
+                Matrix matrix = CanvasMatrixTransform.Matrix;
+                double zoom = matrix.M11;
+
+                double deltaX = (currentMouse.X - _cardDragStartMousePoint.X) / zoom;
+                double deltaY = (currentMouse.Y - _cardDragStartMousePoint.Y) / zoom;
+
+                foreach (var kvp in _cardsInitialPositions)
+                {
+                    kvp.Key.X = kvp.Value.X + deltaX;
+                    kvp.Key.Y = kvp.Value.Y + deltaY;
+                }
+                SyncActiveHwndPositions(updateSize: false);
+                e.Handled = true;
+                return;
+            }
+
+            // 5. Dragging Group by Header
+            if (_isDraggingGroup && _draggingGroup != null)
+            {
+                Point currentMouse = e.GetPosition(CanvasContainer);
+                Matrix matrix = CanvasMatrixTransform.Matrix;
+                double zoom = matrix.M11;
+
+                double deltaX = (currentMouse.X - _groupDragStartMousePoint.X) / zoom;
+                double deltaY = (currentMouse.Y - _groupDragStartMousePoint.Y) / zoom;
+
+                _draggingGroup.X = _groupDragStartPos.X + deltaX;
+                _draggingGroup.Y = _groupDragStartPos.Y + deltaY;
+                Canvas.SetLeft(_draggingGroup.Container, _draggingGroup.X);
+                Canvas.SetTop(_draggingGroup.Container, _draggingGroup.Y);
+
+                foreach (var kvp in _groupCardsInitialPositions)
+                {
+                    kvp.Key.X = kvp.Value.X + deltaX;
+                    kvp.Key.Y = kvp.Value.Y + deltaY;
+                }
+                SyncActiveHwndPositions(updateSize: false);
+                e.Handled = true;
+                return;
+            }
+
+            // 6. Resizing Group from any of the 4 corner handles (like note cards!)
+            if (_isResizingGroup && _resizingGroup != null)
+            {
+                Point currentMouse = e.GetPosition(CanvasContainer);
+                Matrix matrix = CanvasMatrixTransform.Matrix;
+                double zoom = matrix.M11;
+
+                double deltaX = (currentMouse.X - _groupResizeStartMousePoint.X) / zoom;
+                double deltaY = (currentMouse.Y - _groupResizeStartMousePoint.Y) / zoom;
+
+                ApplyGroupResize(_resizingGroup, _activeGroupCorner, _groupResizeInitialBounds, deltaX, deltaY);
+
+                e.Handled = true;
+                return;
+            }
+        }
+
+        private void CanvasContainer_MouseUp(object sender, MouseButtonEventArgs e)
+        {
+            bool stateChanged = false;
+
+            if (_isPanning)
+            {
+                _isPanning = false;
+                SetWebViewHitTesting(true);
+                CanvasContainer.ReleaseMouseCapture();
+                Cursor = Cursors.Arrow;
+                SyncActiveHwndPositions(updateSize: false);
+                e.Handled = true;
+                stateChanged = true;
+            }
+
+            if (_isMarqueeSelecting)
+            {
+                _isMarqueeSelecting = false;
+                MarqueeSelectionBox.Visibility = Visibility.Collapsed;
+                CanvasContainer.ReleaseMouseCapture();
+                e.Handled = true;
+            }
+
+            if (_isResizingCard)
+            {
+                _isResizingCard = false;
+                SetWebViewHitTesting(true);
+                if (_resizingCard != null)
+                {
+                    _resizingCard.Container.UpdateLayout();
+                }
+                _resizingCard = null;
+                CanvasContainer.ReleaseMouseCapture();
+                SyncActiveHwndPositions(updateSize: true);
+                e.Handled = true;
+                stateChanged = true;
+            }
+
+            if (_isDraggingCards)
+            {
+                _isDraggingCards = false;
+                SetWebViewHitTesting(true);
+                foreach (var card in _cardsInitialPositions.Keys)
+                {
+                    CheckCardGroupAffiliation(card);
+                }
+                _cardsInitialPositions.Clear();
+                CanvasContainer.ReleaseMouseCapture();
+                SyncActiveHwndPositions(updateSize: false);
+                e.Handled = true;
+                stateChanged = true;
+            }
+
+            if (_isDraggingGroup)
+            {
+                _isDraggingGroup = false;
+                _draggingGroup = null;
+                _groupCardsInitialPositions.Clear();
+                CanvasContainer.ReleaseMouseCapture();
+                e.Handled = true;
+                stateChanged = true;
+            }
+
+            if (_isResizingGroup)
+            {
+                _isResizingGroup = false;
+                _resizingGroup = null;
+                _groupResizeMemberCards.Clear();
+                CanvasContainer.ReleaseMouseCapture();
+                e.Handled = true;
+                stateChanged = true;
+            }
+
+            if (stateChanged)
+            {
+                ScheduleAutoSave();
+            }
+        }
+
+        private void CanvasContainer_MouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            Point mousePos = e.GetPosition(CanvasContainer);
+            PerformCanvasZoom(e.Delta, mousePos);
+            e.Handled = true;
+        }
+
+        private void PerformCanvasZoom(int delta, Point? centerPos = null)
+        {
+            Point mousePos = centerPos ?? new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2);
+            double zoomFactor = delta > 0 ? 1.15 : (1.0 / 1.15);
+
+            Matrix matrix = CanvasMatrixTransform.Matrix;
+
+            // Clamp zoom level between 5% and 2500%
+            if ((matrix.M11 * zoomFactor < 0.05 && delta < 0) || (matrix.M11 * zoomFactor > 25.0 && delta > 0))
+                return;
+
+            matrix.ScaleAt(zoomFactor, zoomFactor, mousePos.X, mousePos.Y);
+            CanvasMatrixTransform.Matrix = matrix;
+
+            int zoomPercent = (int)Math.Round(matrix.M11 * 100);
+            TxtZoom.Text = $"Zoom: {zoomPercent}%";
+
+            SyncActiveHwndPositions(updateSize: true);
+
+            ScheduleAutoSave();
+        }
+
+        private Point ScreenToWorld(Point screenPoint)
+        {
+            Matrix inv = CanvasMatrixTransform.Matrix;
+            inv.Invert();
+            return inv.Transform(screenPoint);
+        }
+
+        #endregion
+
+        #region Card Creation, Selection & Resizing
+
+        private CardItem AddImageCard(
+            BitmapSource bitmap,
+            Point? worldPosition = null,
+            double? customWidth = null,
+            double? customHeight = null,
+            string localPath = "",
+            string base64Data = "",
+            bool autoSelect = true,
+            BitmapSource? originalBitmap = null,
+            double? baseWidth = null,
+            double? baseHeight = null,
+            double? cropLeft = null,
+            double? cropTop = null,
+            double? cropRight = null,
+            double? cropBottom = null,
+            bool isYouTube = false,
+            string youTubeId = "",
+            string youTubeUrl = "")
+        {
+            EmptyStateOverlay.Visibility = Visibility.Collapsed;
+
+            BitmapSource origSource = originalBitmap ?? bitmap;
+            double cL = cropLeft ?? 0;
+            double cT = cropTop ?? 0;
+            double cR = cropRight ?? 0;
+            double cB = cropBottom ?? 0;
+            bool isCropped = (cL > 0 || cT > 0 || cR > 0 || cB > 0);
+
+            // If cropped, compute CroppedBitmap from original
+            BitmapSource displayBitmap = bitmap;
+            if (isCropped && origSource != null)
+            {
+                int imgW = origSource.PixelWidth;
+                int imgH = origSource.PixelHeight;
+                int pxX = (int)Math.Round((cL / 100.0) * imgW);
+                int pxY = (int)Math.Round((cT / 100.0) * imgH);
+                int pxW = (int)Math.Round(((100.0 - cL - cR) / 100.0) * imgW);
+                int pxH = (int)Math.Round(((100.0 - cT - cB) / 100.0) * imgH);
+                pxX = Math.Clamp(pxX, 0, Math.Max(0, imgW - 1));
+                pxY = Math.Clamp(pxY, 0, Math.Max(0, imgH - 1));
+                pxW = Math.Clamp(pxW, 1, imgW - pxX);
+                pxH = Math.Clamp(pxH, 1, imgH - pxY);
+
+                try
+                {
+                    displayBitmap = new CroppedBitmap(origSource, new Int32Rect(pxX, pxY, pxW, pxH));
+                }
+                catch
+                {
+                    displayBitmap = origSource;
+                }
+            }
+
+            double origW = displayBitmap.PixelWidth;
+            double origH = displayBitmap.PixelHeight;
+            double aspect = origW / Math.Max(1.0, origH);
+
+            if (isYouTube)
+            {
+                aspect = 16.0 / 9.0;
+            }
+
+            double w = customWidth ?? origW;
+            double h = customHeight ?? origH;
+
+            if (isYouTube && !customHeight.HasValue)
+            {
+                h = Math.Round(w / aspect);
+            }
+
+            if (!customWidth.HasValue && !customHeight.HasValue)
+            {
+                // Initial dimension clamped to max 380px
+                double maxDim = 380.0;
+                if (w > maxDim || h > maxDim)
+                {
+                    double scale = Math.Min(maxDim / w, maxDim / h);
+                    w = Math.Round(w * scale);
+                    h = Math.Round(h * scale);
+                }
+            }
+
+            // Image display
+            Image image = new Image
+            {
+                Source = displayBitmap,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Stretch = isYouTube ? Stretch.UniformToFill : Stretch.Uniform
+            };
+            RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+
+            // Card solid background border with shadow (sharp rectangular)
+            Border contentBorder = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(22, 27, 36)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(0),
+                Padding = new Thickness(0),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Effect = new DropShadowEffect
+                {
+                    BlurRadius = 25,
+                    ShadowDepth = 8,
+                    Direction = 270,
+                    Opacity = 0.65,
+                    Color = Colors.Black
+                },
+                Child = image
+            };
+
+            // Container Grid hosting content + 4 resize handles
+            Grid container = new Grid
+            {
+                Width = w,
+                Height = h,
+                Cursor = Cursors.SizeAll
+            };
+            Panel.SetZIndex(container, 10);
+            container.Children.Add(contentBorder);
+
+            // 4 Corner Handles
+            Border handleTL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Top, Cursors.SizeNWSE);
+            Border handleTR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Top, Cursors.SizeNESW);
+            Border handleBL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Bottom, Cursors.SizeNESW);
+            Border handleBR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Bottom, Cursors.SizeNWSE);
+
+            container.Children.Add(handleTL);
+            container.Children.Add(handleTR);
+            container.Children.Add(handleBL);
+            container.Children.Add(handleBR);
+
+            CardItem item = new CardItem
+            {
+                Container = container,
+                ContentBorder = contentBorder,
+                ImageControl = image,
+                Bitmap = displayBitmap,
+                OriginalBitmap = origSource!,
+                BaseWidth = baseWidth ?? (isCropped ? Math.Round(w / Math.Max(0.05, (100.0 - cL - cR) / 100.0)) : w),
+                BaseHeight = baseHeight ?? (isCropped ? Math.Round(h / Math.Max(0.05, (100.0 - cT - cB) / 100.0)) : h),
+                CropLeft = cL,
+                CropTop = cT,
+                CropRight = cR,
+                CropBottom = cB,
+                AspectRatio = aspect,
+                LocalPath = localPath,
+                Base64Data = base64Data,
+                HandleTL = handleTL,
+                HandleTR = handleTR,
+                HandleBL = handleBL,
+                HandleBR = handleBR,
+                IsYouTube = isYouTube,
+                YouTubeId = youTubeId,
+                YouTubeUrl = youTubeUrl
+            };
+
+            // Attach Hover Quick-Action Toolbar (:: Move | [YT buttons] | Ae Import | ✂ Crop | Copy | ✕)
+            Border hoverToolbar = CreateCardHoverToolbar(item);
+            item.HoverToolbar = hoverToolbar;
+            Canvas toolbarHost = new Canvas
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                Width = 0,
+                Height = 0,
+                ClipToBounds = false
+            };
+            Panel.SetZIndex(toolbarHost, 9999);
+            Canvas.SetTop(hoverToolbar, -38.0);
+            toolbarHost.Children.Add(hoverToolbar);
+            container.Children.Add(toolbarHost);
+
+            hoverToolbar.SizeChanged += (s, e) =>
+            {
+                if (e.NewSize.Width > 0)
+                {
+                    Canvas.SetLeft(hoverToolbar, -e.NewSize.Width / 2.0);
+                    Canvas.SetTop(hoverToolbar, -38.0);
+                }
+            };
+
+            container.SizeChanged += (s, e) =>
+            {
+                if (item.IsPaletteMode)
+                {
+                    UpdateCanvasPaletteLayout(item);
+                }
+            };
+
+            // Red YouTube Tag Badge & Direct Play Button if this card is a YouTube reference
+            if (item.IsYouTube)
+            {
+                Border ytBadge = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(220, 220, 38, 38)), // Red accent
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(6, 2, 6, 2),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Margin = new Thickness(8, 0, 0, 8),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Click to Play Video",
+                    Child = new TextBlock
+                    {
+                        Text = "▶ YouTube",
+                        FontSize = 9.5,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = Brushes.White
+                    }
+                };
+                ytBadge.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    ToggleYouTubePlayback(item);
+                };
+                item.YouTubeTagBadge = ytBadge;
+                container.Children.Add(ytBadge);
+
+                // Prominent YouTube Center Play Button overlay
+                Border centerPlayBtn = new Border
+                {
+                    Width = 58,
+                    Height = 40,
+                    Background = new SolidColorBrush(Color.FromArgb(235, 220, 38, 38)),
+                    CornerRadius = new CornerRadius(10),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Play Video",
+                    Effect = new DropShadowEffect { BlurRadius = 14, ShadowDepth = 3, Opacity = 0.65, Color = Colors.Black },
+                    Child = new TextBlock
+                    {
+                        Text = "▶",
+                        FontSize = 18,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = Brushes.White,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(3, 0, 0, 0)
+                    }
+                };
+                centerPlayBtn.MouseEnter += (s, e) => centerPlayBtn.Background = new SolidColorBrush(Color.FromRgb(255, 30, 30));
+                centerPlayBtn.MouseLeave += (s, e) => centerPlayBtn.Background = new SolidColorBrush(Color.FromArgb(235, 220, 38, 38));
+                centerPlayBtn.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    ToggleYouTubePlayback(item);
+                };
+                item.CenterPlayBtn = centerPlayBtn;
+                container.Children.Add(centerPlayBtn);
+            }
+
+            container.MouseEnter += (s, e) =>
+            {
+                if (_isCropping) return;
+                if (Panel.GetZIndex(container) < 500 && !item.IsSelected)
+                {
+                    Panel.SetZIndex(container, 500);
+                }
+                hoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
+                hoverToolbar.Opacity = 1.0;
+                hoverToolbar.IsHitTestVisible = true;
+            };
+            container.MouseLeave += (s, e) =>
+            {
+                if (!item.IsSelected && !item.IsPlayingYouTube && !item.IsPaletteMode)
+                {
+                    if (Panel.GetZIndex(container) == 500)
+                    {
+                        Panel.SetZIndex(container, 10);
+                    }
+                }
+                if (item.IsPlayingYouTube || item.IsSelected || _isCardSubMenuOpen || item.IsPaletteMode) return;
+                DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                anim.Completed += (s2, e2) =>
+                {
+                    if (!container.IsMouseOver && !hoverToolbar.IsMouseOver && !item.IsPlayingYouTube && !item.IsSelected && !_isCardSubMenuOpen && !item.IsPaletteMode)
+                    {
+                        hoverToolbar.IsHitTestVisible = false;
+                    }
+                };
+                hoverToolbar.BeginAnimation(UIElement.OpacityProperty, anim);
+            };
+
+            // Attach Right-Click Context Menu
+            container.ContextMenu = CreateCardContextMenu(item);
+            container.MouseRightButtonDown += (s, e) =>
+            {
+                if (!item.IsSelected)
+                {
+                    SelectCard(item, addToSelection: false);
+                }
+                // Prevent bubbling to CanvasContainer which would trigger canvas panning and capture mouse
+                e.Handled = true;
+            };
+            container.MouseRightButtonUp += (s, e) =>
+            {
+                if (container.ContextMenu != null)
+                {
+                    container.ContextMenu.PlacementTarget = container;
+                    container.ContextMenu.IsOpen = true;
+                }
+                e.Handled = true;
+            };
+
+            // Card drag interaction
+            container.MouseLeftButtonDown += (s, e) =>
+            {
+                if (Keyboard.IsKeyDown(Key.Space)) return;
+
+                if (e.ClickCount == 2)
+                {
+                    if (item.IsYouTube)
+                    {
+                        ToggleYouTubePlayback(item);
+                        e.Handled = true;
+                        return;
+                    }
+
+                    SelectCard(item, addToSelection: false);
+                    ZoomToCard(item);
+                    e.Handled = true;
+                    return;
+                }
+
+                RecordUndo("Move Card");
+
+                bool isShift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+                if (isShift)
+                {
+                    if (item.IsSelected)
+                        DeselectCard(item);
+                    else
+                        SelectCard(item, addToSelection: true);
+                }
+                else
+                {
+                    if (!item.IsSelected)
+                    {
+                        SelectCard(item, addToSelection: false);
+                    }
+                }
+
+                // Prepare multi-drag
+                _isDraggingCards = true;
+                _cardDragStartMousePoint = e.GetPosition(CanvasContainer);
+                _cardsInitialPositions.Clear();
+                foreach (CardItem sel in _selectedCards)
+                {
+                    _cardsInitialPositions[sel] = new Point(sel.X, sel.Y);
+                }
+                SetWebViewHitTesting(false);
+
+                CanvasContainer.CaptureMouse();
+                e.Handled = true;
+            };
+
+            // Resize handle events
+            AttachResizeHandleEvents(item, handleTL, ResizeCorner.TopLeft);
+            AttachResizeHandleEvents(item, handleTR, ResizeCorner.TopRight);
+            AttachResizeHandleEvents(item, handleBL, ResizeCorner.BottomLeft);
+            AttachResizeHandleEvents(item, handleBR, ResizeCorner.BottomRight);
+
+            // Determine World placement
+            Point pos;
+            if (worldPosition.HasValue)
+            {
+                pos = worldPosition.Value;
+            }
+            else
+            {
+                Matrix matrix = CanvasMatrixTransform.Matrix;
+                matrix.Invert();
+                Point centerScreen = new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2);
+                pos = matrix.Transform(centerScreen);
+                pos.X += (_cards.Count % 5) * 35 - (w / 2);
+                pos.Y += (_cards.Count % 5) * 35 - (h / 2);
+            }
+
+            item.X = pos.X;
+            item.Y = pos.Y;
+
+            if (!_isRestoringSession && !_isApplyingSnapshot)
+            {
+                RecordUndo("Add Card");
+            }
+
+            _cards.Add(item);
+            WorldCanvas.Children.Add(container);
+
+            EnsureLocalCache(item);
+            if (!_isRestoringSession && !_isApplyingSnapshot)
+            {
+                CheckCardGroupAffiliation(item);
+            }
+
+            UpdateStatusCounts();
+            if (autoSelect)
+            {
+                SelectCard(item, addToSelection: false);
+            }
+
+            if (!_isRestoringSession)
+            {
+                ScheduleAutoSave();
+            }
+
+            ApplyGifAnimationIfNeeded(item);
+
+            return item;
+        }
+
+        private void ApplyGifAnimationIfNeeded(CardItem item)
+        {
+            if (item.IsCropped) return;
+
+            try
+            {
+                if (!string.IsNullOrEmpty(item.LocalPath) && item.LocalPath.EndsWith(".gif", StringComparison.OrdinalIgnoreCase) && File.Exists(item.LocalPath))
+                {
+                    AnimationBehavior.SetSourceUri(item.ImageControl, new Uri(item.LocalPath, UriKind.Absolute));
+                }
+                else if (!string.IsNullOrEmpty(item.Base64Data) && (item.Base64Data.StartsWith("data:image/gif", StringComparison.OrdinalIgnoreCase) || IsGifData(item.Base64Data)))
+                {
+                    string clean = item.Base64Data.Contains(",") ? item.Base64Data.Substring(item.Base64Data.IndexOf(",") + 1) : item.Base64Data;
+                    byte[] raw = Convert.FromBase64String(clean);
+                    var ms = new MemoryStream(raw);
+                    AnimationBehavior.SetSourceStream(item.ImageControl, ms);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to animate GIF: {ex.Message}");
+            }
+        }
+
+        private static bool IsGifData(string base64Data)
+        {
+            if (string.IsNullOrEmpty(base64Data)) return false;
+            try
+            {
+                string clean = base64Data.Contains(",") ? base64Data.Substring(base64Data.IndexOf(",") + 1) : base64Data;
+                if (clean.Length < 8) return false;
+                byte[] bytes = Convert.FromBase64String(clean.Substring(0, Math.Min(clean.Length, 16)));
+                return bytes.Length >= 3 && bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46; // "GIF"
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void EnsureLocalCache(CardItem item)
+        {
+            if (item.IsNote) return;
+            if (!string.IsNullOrEmpty(item.LocalPath) && File.Exists(item.LocalPath))
+                return;
+
+            try
+            {
+                Directory.CreateDirectory(CacheDir);
+                string cleanId = string.IsNullOrEmpty(item.Id) ? Guid.NewGuid().ToString("N") : item.Id.Replace(" ", "_");
+                string prefix = item.IsPaletteCard ? "pal_" : (item.IsYouTube ? "snap_yt_" : "ref_");
+                string filename = $"{prefix}{cleanId}.png";
+                string targetPath = System.IO.Path.Combine(CacheDir, filename);
+
+                // If already generated and valid, reuse it immediately (no duplication!)
+                if (File.Exists(targetPath) && new FileInfo(targetPath).Length > 0)
+                {
+                    item.LocalPath = targetPath;
+                    return;
+                }
+
+                if (item.Bitmap != null)
+                {
+                    PngBitmapEncoder encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(item.Bitmap));
+                    using FileStream fs = new FileStream(targetPath, FileMode.Create, FileAccess.Write);
+                    encoder.Save(fs);
+                    item.LocalPath = targetPath;
+                }
+            }
+            catch
+            {
+                // Fallback to memory and base64 if disk cache write encounters an issue
+            }
+        }
+
+        private void ApplyNoteBackground(CardItem card, string bgMode)
+        {
+            card.NoteBgColor = bgMode;
+            card.ContentBorder.CornerRadius = new CornerRadius(6);
+
+            switch (bgMode)
+            {
+                case "Transparent":
+                    // Alpha 1 makes it visually 100% transparent while remaining fully hit-testable in WPF DWM
+                    card.ContentBorder.Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
+                    card.ContentBorder.BorderBrush = card.IsSelected 
+                        ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) 
+                        : Brushes.Transparent;
+                    card.ContentBorder.BorderThickness = card.IsSelected ? new Thickness(1.5) : new Thickness(0);
+                    card.ContentBorder.Effect = null;
+                    break;
+
+                case "Dark Glass":
+                    card.ContentBorder.Background = new SolidColorBrush(Color.FromArgb(190, 20, 24, 33));
+                    card.ContentBorder.BorderBrush = card.IsSelected 
+                        ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) 
+                        : new SolidColorBrush(Color.FromArgb(60, 255, 255, 255));
+                    card.ContentBorder.BorderThickness = card.IsSelected ? new Thickness(2) : new Thickness(1);
+                    card.ContentBorder.Effect = new DropShadowEffect { BlurRadius = 20, ShadowDepth = 6, Opacity = 0.5, Color = Colors.Black };
+                    break;
+
+                case "Solid Dark":
+                    card.ContentBorder.Background = new SolidColorBrush(Color.FromRgb(22, 27, 36));
+                    card.ContentBorder.BorderBrush = card.IsSelected 
+                        ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) 
+                        : new SolidColorBrush(Color.FromArgb(50, 255, 255, 255));
+                    card.ContentBorder.BorderThickness = card.IsSelected ? new Thickness(2) : new Thickness(1);
+                    card.ContentBorder.Effect = new DropShadowEffect { BlurRadius = 25, ShadowDepth = 8, Opacity = 0.65, Color = Colors.Black };
+                    break;
+
+                case "Yellow Sticky":
+                    card.ContentBorder.Background = new SolidColorBrush(Color.FromArgb(250, 254, 240, 138));
+                    card.ContentBorder.BorderBrush = card.IsSelected 
+                        ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) 
+                        : new SolidColorBrush(Color.FromArgb(120, 202, 138, 4));
+                    card.ContentBorder.BorderThickness = card.IsSelected ? new Thickness(2) : new Thickness(1);
+                    card.ContentBorder.Effect = new DropShadowEffect { BlurRadius = 18, ShadowDepth = 5, Opacity = 0.35, Color = Colors.Black };
+                    break;
+
+                case "Cyan Sticky":
+                    card.ContentBorder.Background = new SolidColorBrush(Color.FromArgb(250, 165, 243, 252));
+                    card.ContentBorder.BorderBrush = card.IsSelected 
+                        ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) 
+                        : new SolidColorBrush(Color.FromArgb(120, 14, 165, 233));
+                    card.ContentBorder.BorderThickness = card.IsSelected ? new Thickness(2) : new Thickness(1);
+                    card.ContentBorder.Effect = new DropShadowEffect { BlurRadius = 18, ShadowDepth = 5, Opacity = 0.35, Color = Colors.Black };
+                    break;
+
+                default:
+                    card.ContentBorder.Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
+                    card.ContentBorder.BorderBrush = card.IsSelected 
+                        ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) 
+                        : new SolidColorBrush(Color.FromArgb(20, 255, 255, 255));
+                    card.ContentBorder.BorderThickness = card.IsSelected ? new Thickness(2) : new Thickness(1);
+                    card.ContentBorder.Effect = null;
+                    break;
+            }
+        }
+
+        private CardItem AddNoteCard(
+            string text = "Type your note here...",
+            Point? worldPosition = null,
+            double? customWidth = null,
+            double? customHeight = null,
+            string fontFamily = "Segoe UI",
+            double fontSize = 16.0,
+            string textColor = "#FFFFFF",
+            string bgColor = "Transparent",
+            TextAlignment alignment = TextAlignment.Left,
+            bool autoSelect = true)
+        {
+            EmptyStateOverlay.Visibility = Visibility.Collapsed;
+
+            double w = customWidth ?? 280.0;
+            double h = customHeight ?? 180.0;
+
+            // 1x1 frozen transparent BitmapSource as dummy bitmap for CardItem requirements
+            BitmapSource dummyBmp = BitmapSource.Create(1, 1, 96, 96, PixelFormats.Bgra32, null, new byte[4], 4);
+            dummyBmp.Freeze();
+
+            Image dummyImg = new Image
+            {
+                Source = dummyBmp,
+                Visibility = Visibility.Collapsed
+            };
+
+            TextBox editor = new TextBox
+            {
+                Text = text,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                TextAlignment = alignment,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(14, 2, 14, 12),
+                FontFamily = new FontFamily(string.IsNullOrWhiteSpace(fontFamily) ? "Segoe UI" : fontFamily),
+                FontSize = fontSize > 0 ? fontSize : 16.0,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                CaretBrush = Brushes.White,
+                Cursor = Cursors.SizeAll
+            };
+
+            editor.GotKeyboardFocus += (s, e) => { editor.Cursor = Cursors.IBeam; };
+            editor.LostKeyboardFocus += (s, e) => { editor.Cursor = Cursors.SizeAll; };
+
+            try
+            {
+                editor.Foreground = (Brush)new BrushConverter().ConvertFromString(textColor)!;
+            }
+            catch
+            {
+                editor.Foreground = Brushes.White;
+            }
+
+            if ((bgColor == "Yellow Sticky" || bgColor == "Cyan Sticky") && textColor == "#FFFFFF")
+            {
+                textColor = "#111827";
+                editor.Foreground = new SolidColorBrush(Color.FromRgb(17, 24, 39));
+                editor.CaretBrush = Brushes.Black;
+            }
+
+            // Note layout with top drag/pan strip above text
+            Grid noteLayout = new Grid
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch
+            };
+            noteLayout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(20) });
+            noteLayout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            Border dragHeader = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)), // hit-testable
+                Cursor = Cursors.SizeAll,
+                ToolTip = "Drag to move note"
+            };
+
+            Border gripPill = new Border
+            {
+                Width = 28,
+                Height = 3.5,
+                CornerRadius = new CornerRadius(1.75),
+                Background = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Opacity = 0.22,
+                IsHitTestVisible = false
+            };
+            dragHeader.Child = gripPill;
+
+            dragHeader.MouseEnter += (s, e) => { gripPill.Opacity = 0.85; };
+            dragHeader.MouseLeave += (s, e) => { gripPill.Opacity = 0.22; };
+
+            Grid.SetRow(dragHeader, 0);
+            Grid.SetRow(editor, 1);
+            noteLayout.Children.Add(dragHeader);
+            noteLayout.Children.Add(editor);
+
+            Border contentBorder = new Border
+            {
+                Width = w,
+                Height = h,
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(0),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Child = noteLayout
+            };
+
+            Grid container = new Grid
+            {
+                Width = w,
+                Height = h,
+                Cursor = Cursors.SizeAll
+            };
+            container.Children.Add(dummyImg);
+            container.Children.Add(contentBorder);
+
+            // 4 Corner Handles
+            Border handleTL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Top, Cursors.SizeNWSE);
+            Border handleTR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Top, Cursors.SizeNESW);
+            Border handleBL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Bottom, Cursors.SizeNESW);
+            Border handleBR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Bottom, Cursors.SizeNWSE);
+
+            container.Children.Add(handleTL);
+            container.Children.Add(handleTR);
+            container.Children.Add(handleBL);
+            container.Children.Add(handleBR);
+            Panel.SetZIndex(container, 10);
+
+            CardItem item = new CardItem
+            {
+                Container = container,
+                ContentBorder = contentBorder,
+                ImageControl = dummyImg,
+                Bitmap = dummyBmp,
+                OriginalBitmap = dummyBmp,
+                BaseWidth = w,
+                BaseHeight = h,
+                AspectRatio = w / Math.Max(1.0, h),
+                HandleTL = handleTL,
+                HandleTR = handleTR,
+                HandleBL = handleBL,
+                HandleBR = handleBR,
+                IsNote = true,
+                NoteText = text,
+                NoteFontFamily = fontFamily,
+                NoteFontSize = fontSize,
+                NoteTextColor = textColor,
+                NoteBgColor = bgColor,
+                NoteAlignment = alignment,
+                NoteEditor = editor
+            };
+
+            ApplyNoteBackground(item, bgColor);
+
+            editor.TextChanged += (s, e) =>
+            {
+                item.NoteText = editor.Text;
+                ScheduleAutoSave();
+            };
+
+            // Attach Hover Quick-Action Toolbar
+            Border hoverToolbar = CreateCardHoverToolbar(item);
+            item.HoverToolbar = hoverToolbar;
+            Canvas toolbarHost = new Canvas
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                Width = 0,
+                Height = 0,
+                ClipToBounds = false
+            };
+            Panel.SetZIndex(toolbarHost, 9999);
+            Canvas.SetTop(hoverToolbar, -38.0);
+            toolbarHost.Children.Add(hoverToolbar);
+            container.Children.Add(toolbarHost);
+
+            hoverToolbar.SizeChanged += (s, e) =>
+            {
+                if (e.NewSize.Width > 0)
+                {
+                    Canvas.SetLeft(hoverToolbar, -e.NewSize.Width / 2.0);
+                    Canvas.SetTop(hoverToolbar, -38.0);
+                }
+            };
+
+            container.MouseEnter += (s, e) =>
+            {
+                if (Panel.GetZIndex(container) < 500 && !item.IsSelected)
+                {
+                    Panel.SetZIndex(container, 500);
+                }
+                hoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
+                hoverToolbar.Opacity = 1.0;
+                hoverToolbar.IsHitTestVisible = true;
+            };
+            container.MouseLeave += (s, e) =>
+            {
+                if (!item.IsSelected)
+                {
+                    if (Panel.GetZIndex(container) == 500)
+                    {
+                        Panel.SetZIndex(container, 10);
+                    }
+                }
+                if (item.IsSelected || editor.IsFocused || _isCardSubMenuOpen) return;
+                DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                anim.Completed += (s2, e2) =>
+                {
+                    if (!container.IsMouseOver && !hoverToolbar.IsMouseOver && !item.IsSelected && !editor.IsFocused && !_isCardSubMenuOpen)
+                    {
+                        hoverToolbar.IsHitTestVisible = false;
+                    }
+                };
+                hoverToolbar.BeginAnimation(UIElement.OpacityProperty, anim);
+            };
+
+            // Attach Right-Click Context Menu
+            container.ContextMenu = CreateCardContextMenu(item);
+            container.MouseRightButtonDown += (s, e) =>
+            {
+                if (!item.IsSelected)
+                {
+                    SelectCard(item, addToSelection: false);
+                }
+                e.Handled = true;
+            };
+            container.MouseRightButtonUp += (s, e) =>
+            {
+                if (container.ContextMenu != null)
+                {
+                    container.ContextMenu.PlacementTarget = container;
+                    container.ContextMenu.IsOpen = true;
+                }
+                e.Handled = true;
+            };
+
+            // Mouse interaction for selection & drag
+            void TriggerNoteDrag(MouseEventArgs e)
+            {
+                if (Keyboard.IsKeyDown(Key.Space)) return;
+
+                if (e is MouseButtonEventArgs mbe && mbe.ClickCount == 2)
+                {
+                    SelectCard(item, addToSelection: false);
+                    ZoomToCard(item);
+                    e.Handled = true;
+                    return;
+                }
+
+                RecordUndo("Move Note");
+
+                bool isShift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+                if (isShift)
+                {
+                    if (item.IsSelected)
+                        DeselectCard(item);
+                    else
+                        SelectCard(item, addToSelection: true);
+                }
+                else
+                {
+                    if (!item.IsSelected)
+                    {
+                        SelectCard(item, addToSelection: false);
+                    }
+                }
+
+                // Prepare multi-drag
+                _isDraggingCards = true;
+                _cardDragStartMousePoint = e.GetPosition(CanvasContainer);
+                _cardsInitialPositions.Clear();
+                foreach (CardItem sel in _selectedCards)
+                {
+                    _cardsInitialPositions[sel] = new Point(sel.X, sel.Y);
+                }
+                SetWebViewHitTesting(false);
+
+                CanvasContainer.CaptureMouse();
+                e.Handled = true;
+            }
+
+            dragHeader.MouseLeftButtonDown += (s, e) =>
+            {
+                TriggerNoteDrag(e);
+            };
+
+            container.MouseLeftButtonDown += (s, e) =>
+            {
+                // If user clicked inside editor, let them edit directly
+                if (e.OriginalSource is DependencyObject dep && FindVisualParent<TextBox>(dep) != null)
+                {
+                    return;
+                }
+
+                TriggerNoteDrag(e);
+            };
+
+            Point editorMouseDownPos = new Point(0, 0);
+            bool isEditorMouseDown = false;
+
+            editor.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                if (Keyboard.IsKeyDown(Key.Space)) return;
+
+                // Alt key forces move drag directly even when editing
+                if (Keyboard.IsKeyDown(Key.LeftAlt) || Keyboard.IsKeyDown(Key.RightAlt))
+                {
+                    TriggerNoteDrag(e);
+                    return;
+                }
+
+                if (!editor.IsKeyboardFocused)
+                {
+                    isEditorMouseDown = true;
+                    editorMouseDownPos = e.GetPosition(CanvasContainer);
+                    if (!item.IsSelected)
+                    {
+                        SelectCard(item, addToSelection: false);
+                    }
+                }
+            };
+
+            editor.PreviewMouseMove += (s, e) =>
+            {
+                if (isEditorMouseDown && e.LeftButton == MouseButtonState.Pressed && !editor.IsKeyboardFocused)
+                {
+                    Point currentPos = e.GetPosition(CanvasContainer);
+                    Vector diff = currentPos - editorMouseDownPos;
+                    if (Math.Abs(diff.X) > 4 || Math.Abs(diff.Y) > 4)
+                    {
+                        isEditorMouseDown = false;
+                        TriggerNoteDrag(e);
+                    }
+                }
+            };
+
+            editor.PreviewMouseLeftButtonUp += (s, e) =>
+            {
+                if (isEditorMouseDown)
+                {
+                    isEditorMouseDown = false;
+                    editor.Focus();
+                    int charIndex = editor.GetCharacterIndexFromPoint(e.GetPosition(editor), true);
+                    if (charIndex >= 0)
+                    {
+                        editor.CaretIndex = charIndex;
+                    }
+                }
+            };
+
+            editor.PreviewKeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Escape)
+                {
+                    Keyboard.ClearFocus();
+                    Focus();
+                    e.Handled = true;
+                }
+            };
+
+            // Resize handle events
+            AttachResizeHandleEvents(item, handleTL, ResizeCorner.TopLeft);
+            AttachResizeHandleEvents(item, handleTR, ResizeCorner.TopRight);
+            AttachResizeHandleEvents(item, handleBL, ResizeCorner.BottomLeft);
+            AttachResizeHandleEvents(item, handleBR, ResizeCorner.BottomRight);
+
+            // Determine World placement
+            Point pos;
+            if (worldPosition.HasValue)
+            {
+                pos = worldPosition.Value;
+            }
+            else
+            {
+                Matrix matrix = CanvasMatrixTransform.Matrix;
+                matrix.Invert();
+                Point centerScreen = new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2);
+                pos = matrix.Transform(centerScreen);
+                pos.X += (_cards.Count % 5) * 35 - (w / 2);
+                pos.Y += (_cards.Count % 5) * 35 - (h / 2);
+            }
+
+            item.X = pos.X;
+            item.Y = pos.Y;
+
+            if (!_isRestoringSession && !_isApplyingSnapshot)
+            {
+                RecordUndo("Add Note");
+            }
+
+            _cards.Add(item);
+            WorldCanvas.Children.Add(container);
+
+            UpdateStatusCounts();
+            if (autoSelect)
+            {
+                SelectCard(item, addToSelection: false);
+            }
+
+            if (!_isRestoringSession)
+            {
+                ScheduleAutoSave();
+            }
+
+            return item;
+        }
+
+        private static T? FindVisualParent<T>(DependencyObject child) where T : DependencyObject
+        {
+            DependencyObject? parentObject = VisualTreeHelper.GetParent(child);
+            if (parentObject == null) return null;
+            if (parentObject is T parent) return parent;
+            return FindVisualParent<T>(parentObject);
+        }
+
+        private Border CreateResizeHandle(HorizontalAlignment hAlign, VerticalAlignment vAlign, Cursor cursor)
+        {
+            Border handle = new Border
+            {
+                Width = 14,
+                Height = 14,
+                Background = new SolidColorBrush(Colors.White),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                BorderThickness = new Thickness(2.0),
+                CornerRadius = new CornerRadius(7), // Circular dot
+                HorizontalAlignment = hAlign,
+                VerticalAlignment = vAlign,
+                Margin = new Thickness(
+                    hAlign == HorizontalAlignment.Left ? -7 : 0,
+                    vAlign == VerticalAlignment.Top ? -7 : 0,
+                    hAlign == HorizontalAlignment.Right ? -7 : 0,
+                    vAlign == VerticalAlignment.Bottom ? -7 : 0),
+                Cursor = cursor,
+                Visibility = Visibility.Collapsed
+            };
+            Panel.SetZIndex(handle, 10000);
+            return handle;
+        }
+
+        private void AttachResizeHandleEvents(CardItem card, Border handle, ResizeCorner corner)
+        {
+            handle.MouseLeftButtonDown += (s, e) =>
+            {
+                RecordUndo("Resize Card");
+
+                _isResizingCard = true;
+                _resizingCard = card;
+                _activeCorner = corner;
+                _resizeStartMousePoint = e.GetPosition(CanvasContainer);
+                _resizeInitialBounds = new Rect(card.X, card.Y, card.Width, card.Height);
+                SetWebViewHitTesting(false);
+
+                CanvasContainer.CaptureMouse();
+                e.Handled = true;
+            };
+        }
+
+        private void ApplyCardResize(CardItem card, ResizeCorner corner, Rect initial, double deltaX, double deltaY)
+        {
+            if (card.IsYouTube)
+            {
+                card.AspectRatio = 16.0 / 9.0;
+            }
+
+            double newW = initial.Width;
+            double newH = initial.Height;
+            double newX = initial.X;
+            double newY = initial.Y;
+
+            if (card.IsPaletteCard || card.IsNote)
+            {
+                // Unconstrained free-form 2D resize for palettes and notes (can be stretched wide, gepeng, tall, etc.)
+                switch (corner)
+                {
+                    case ResizeCorner.BottomRight:
+                        newW = Math.Max(80, initial.Width + deltaX);
+                        newH = Math.Max(50, initial.Height + deltaY);
+                        break;
+
+                    case ResizeCorner.BottomLeft:
+                        newW = Math.Max(80, initial.Width - deltaX);
+                        newH = Math.Max(50, initial.Height + deltaY);
+                        newX = initial.Right - newW;
+                        break;
+
+                    case ResizeCorner.TopRight:
+                        newW = Math.Max(80, initial.Width + deltaX);
+                        newH = Math.Max(50, initial.Height - deltaY);
+                        newY = initial.Bottom - newH;
+                        break;
+
+                    case ResizeCorner.TopLeft:
+                        newW = Math.Max(80, initial.Width - deltaX);
+                        newH = Math.Max(50, initial.Height - deltaY);
+                        newX = initial.Right - newW;
+                        newY = initial.Bottom - newH;
+                        break;
+                }
+                card.AspectRatio = newW / Math.Max(1.0, newH);
+            }
+            else
+            {
+                switch (corner)
+                {
+                    case ResizeCorner.BottomRight:
+                        newW = Math.Max(60, initial.Width + deltaX);
+                        newH = newW / card.AspectRatio;
+                        break;
+
+                    case ResizeCorner.BottomLeft:
+                        newW = Math.Max(60, initial.Width - deltaX);
+                        newH = newW / card.AspectRatio;
+                        newX = initial.Right - newW;
+                        break;
+
+                    case ResizeCorner.TopRight:
+                        newW = Math.Max(60, initial.Width + deltaX);
+                        newH = newW / card.AspectRatio;
+                        newY = initial.Bottom - newH;
+                        break;
+
+                    case ResizeCorner.TopLeft:
+                        newW = Math.Max(60, initial.Width - deltaX);
+                        newH = newW / card.AspectRatio;
+                        newX = initial.Right - newW;
+                        newY = initial.Bottom - newH;
+                        break;
+                }
+            }
+
+            card.Width = newW;
+            card.Height = newH;
+            card.X = newX;
+            card.Y = newY;
+
+            if (card.IsCropped)
+            {
+                double visW_pct = Math.Max(0.05, (100.0 - card.CropLeft - card.CropRight) / 100.0);
+                double visH_pct = Math.Max(0.05, (100.0 - card.CropTop - card.CropBottom) / 100.0);
+                card.BaseWidth = Math.Round(newW / visW_pct);
+                card.BaseHeight = Math.Round(newH / visH_pct);
+                card.BaseX = Math.Round(newX - card.BaseWidth * (card.CropLeft / 100.0));
+                card.BaseY = Math.Round(newY - card.BaseHeight * (card.CropTop / 100.0));
+            }
+            else
+            {
+                card.BaseWidth = newW;
+                card.BaseHeight = newH;
+                card.BaseX = newX;
+                card.BaseY = newY;
+            }
+
+            if (!string.IsNullOrEmpty(card.GroupId))
+            {
+                var g = _groups.FirstOrDefault(grp => grp.Id == card.GroupId);
+                if (g != null)
+                {
+                    FitGroupToCards(g, recordUndo: false);
+                }
+            }
+        }
+
+        private void SelectCard(CardItem card, bool addToSelection)
+        {
+            if (!addToSelection)
+            {
+                DeselectAllCards();
+            }
+
+            card.IsSelected = true;
+            _selectedCards.Add(card);
+
+            if (card.IsNote)
+            {
+                ApplyNoteBackground(card, card.NoteBgColor);
+            }
+            else if (card.IsPaletteCard)
+            {
+                card.ContentBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)); // Blue border
+                card.ContentBorder.BorderThickness = new Thickness(1.5);
+                card.ContentBorder.CornerRadius = new CornerRadius(12);
+            }
+            else
+            {
+                card.ContentBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)); // Blue border
+                card.ContentBorder.BorderThickness = new Thickness(2);
+                card.ContentBorder.CornerRadius = new CornerRadius(0);
+            }
+
+            // Reveal 4 corner handles
+            card.HandleTL.Visibility = Visibility.Visible;
+            card.HandleTR.Visibility = Visibility.Visible;
+            card.HandleBL.Visibility = Visibility.Visible;
+            card.HandleBR.Visibility = Visibility.Visible;
+
+            _highestZ++;
+            Panel.SetZIndex(card.Container, _highestZ + 1000);
+
+            if (card.HoverToolbar != null)
+            {
+                card.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
+                card.HoverToolbar.Opacity = 1.0;
+                card.HoverToolbar.IsHitTestVisible = true;
+            }
+
+            UpdateStatusCounts();
+        }
+
+        private void DeselectCard(CardItem card)
+        {
+            card.IsSelected = false;
+            _selectedCards.Remove(card);
+
+            if (card.IsNote)
+            {
+                ApplyNoteBackground(card, card.NoteBgColor);
+            }
+            else if (card.IsPaletteCard)
+            {
+                card.ContentBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255));
+                card.ContentBorder.BorderThickness = new Thickness(1);
+                card.ContentBorder.CornerRadius = new CornerRadius(12);
+            }
+            else
+            {
+                card.ContentBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                card.ContentBorder.BorderThickness = new Thickness(1);
+                card.ContentBorder.CornerRadius = new CornerRadius(0);
+            }
+
+            card.HandleTL.Visibility = Visibility.Collapsed;
+            card.HandleTR.Visibility = Visibility.Collapsed;
+            card.HandleBL.Visibility = Visibility.Collapsed;
+            card.HandleBR.Visibility = Visibility.Collapsed;
+
+            if (card.HoverToolbar != null && !card.IsPlayingYouTube && !card.Container.IsMouseOver)
+            {
+                card.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
+                card.HoverToolbar.Opacity = 0.0;
+                card.HoverToolbar.IsHitTestVisible = false;
+            }
+
+            Panel.SetZIndex(card.Container, 10);
+            UpdateStatusCounts();
+        }
+
+        private void DeselectAllCards()
+        {
+            foreach (CardItem card in _selectedCards.ToList())
+            {
+                DeselectCard(card);
+            }
+        }
+
+        private void UpdateStatusCounts()
+        {
+            TxtRefCount.Text = $"{_cards.Count} References";
+            TxtRefCountTop.Text = $"{_cards.Count} References";
+            TxtSelectionCount.Text = $"{_selectedCards.Count} Selected";
+        }
+
+        #endregion
+
+        #region Auto-Arrange Grid Engine (Grid & Pipeline)
+
+        private void BtnGridArrange_Click(object sender, RoutedEventArgs e)
+        {
+            var targetCards = _selectedCards.Count > 0 ? _selectedCards.ToList() : _cards.ToList();
+            if (targetCards.Count == 0) return;
+
+            RecordUndo("Arrange Grid");
+            _gridArrangeCount++;
+
+            int total = targetCards.Count;
+            int baseCols = total <= 3 ? total : (total <= 6 ? 3 : (total <= 12 ? 4 : 5));
+
+            // On consecutive spam clicks, cycle column counts and shuffle card sequence!
+            int colVariation = (_gridArrangeCount - 1) % 3;
+            int cols = colVariation == 0 ? baseCols : (colVariation == 1 ? Math.Max(2, baseCols - 1) : Math.Min(6, baseCols + 1));
+
+            if (_gridArrangeCount > 1)
+            {
+                var rng = new Random();
+                targetCards = targetCards.OrderBy(_ => rng.Next()).ToList();
+            }
+
+            double gap = _currentGap;
+            double avgW = targetCards.Average(c => c.Width);
+            double colWidth = Math.Clamp(avgW, 240.0, 420.0);
+            double totalGridWidth = (cols * colWidth) + ((cols - 1) * gap);
+
+            double startX, startY;
+            if (_selectedCards.Count > 0)
+            {
+                startX = targetCards.Min(c => c.X);
+                startY = targetCards.Min(c => c.Y);
+            }
+            else
+            {
+                Matrix matrix = CanvasMatrixTransform.Matrix;
+                matrix.Invert();
+                Point centerScreen = new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2);
+                Point centerWorld = matrix.Transform(centerScreen);
+
+                startX = centerWorld.X - (totalGridWidth / 2);
+                startY = centerWorld.Y - 200;
+            }
+
+            // PureRef Masonry Column Tracking: pack into the shortest column to eliminate gaps
+            double[] colHeights = new double[cols];
+            for (int c = 0; c < cols; c++) colHeights[c] = startY;
+
+            foreach (var card in targetCards)
+            {
+                double newW = colWidth;
+                double newH = Math.Round(colWidth / Math.Max(0.1, card.AspectRatio));
+                card.Width = newW;
+                card.Height = newH;
+
+                int bestCol = 0;
+                for (int c = 1; c < cols; c++)
+                {
+                    if (colHeights[c] < colHeights[bestCol])
+                    {
+                        bestCol = c;
+                    }
+                }
+
+                double cardX = startX + bestCol * (colWidth + gap);
+                double cardY = colHeights[bestCol];
+
+                AnimateCardPosition(card, cardX, cardY);
+                colHeights[bestCol] += newH + gap;
+            }
+
+            ScheduleAutoSave();
+            string msg = _selectedCards.Count > 0 
+                ? $"Grid Layout #{_gridArrangeCount}: {targetCards.Count} selected cards ({cols} Columns)" 
+                : $"Grid Layout #{_gridArrangeCount}: {cols} Columns (Gap: {(int)_currentGap}px)";
+            ShowToast(msg, ToastType.Success);
+
+            if (_selectedCards.Count == 0)
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    ZoomToFitAllCards(animated: true, showToast: false);
+                }), System.Windows.Threading.DispatcherPriority.Background);
+            }
+        }
+
+        private void BtnPipelineArrange_Click(object sender, RoutedEventArgs e)
+        {
+            var targetCards = _selectedCards.Count > 0 ? _selectedCards.ToList() : _cards.ToList();
+            if (targetCards.Count == 0) return;
+
+            RecordUndo("Arrange Pipeline");
+            _pipelineArrangeCount++;
+
+            int mode = (_pipelineArrangeCount - 1) % 4;
+            // Mode 0: Horizontal Storyboard (Linear order)
+            // Mode 1: Horizontal Storyboard (Shuffled sequence)
+            // Mode 2: 2-Row Storyboard (Top & Bottom tracks)
+            // Mode 3: Vertical Reel / Feed
+
+            if (mode == 1 || mode == 2)
+            {
+                var rng = new Random();
+                targetCards = targetCards.OrderBy(_ => rng.Next()).ToList();
+            }
+
+            double gap = _currentGap;
+            double startX, startY;
+
+            if (_selectedCards.Count > 0)
+            {
+                startX = targetCards.Min(c => c.X);
+                startY = targetCards.Min(c => c.Y);
+            }
+            else
+            {
+                Matrix matrix = CanvasMatrixTransform.Matrix;
+                if (matrix.HasInverse)
+                {
+                    matrix.Invert();
+                    double viewW = CanvasContainer.ActualWidth > 0 ? CanvasContainer.ActualWidth : ActualWidth;
+                    double viewH = CanvasContainer.ActualHeight > 0 ? CanvasContainer.ActualHeight : ActualHeight;
+                    Point centerScreen = new Point(viewW / 2.0, (viewH + 40.0) / 2.0);
+                    Point centerWorld = matrix.Transform(centerScreen);
+
+                    startX = centerWorld.X - (targetCards.Count * 220.0 / 2.0);
+                    startY = centerWorld.Y - 130.0;
+                }
+                else
+                {
+                    startX = 100;
+                    startY = 100;
+                }
+            }
+
+            string modeDesc;
+
+            if (mode == 3) // Vertical Reel / Feed
+            {
+                double targetW = 320.0;
+                double curY = startY;
+                foreach (CardItem card in targetCards)
+                {
+                    double newW = targetW;
+                    double newH = Math.Round(targetW / Math.Max(0.1, card.AspectRatio));
+                    card.Width = newW;
+                    card.Height = newH;
+                    AnimateCardPosition(card, startX, curY);
+                    curY += newH + gap;
+                }
+                modeDesc = "Vertical Reel";
+            }
+            else if (mode == 2) // 2-Row Storyboard
+            {
+                double targetH = 220.0;
+                double curX1 = startX;
+                double curX2 = startX;
+                double row1Y = startY;
+                double row2Y = startY + targetH + gap;
+
+                for (int i = 0; i < targetCards.Count; i++)
+                {
+                    CardItem card = targetCards[i];
+                    double newH = targetH;
+                    double newW = Math.Round(targetH * card.AspectRatio);
+                    card.Width = newW;
+                    card.Height = newH;
+
+                    if (i % 2 == 0)
+                    {
+                        AnimateCardPosition(card, curX1, row1Y);
+                        curX1 += newW + gap;
+                    }
+                    else
+                    {
+                        AnimateCardPosition(card, curX2, row2Y);
+                        curX2 += newW + gap;
+                    }
+                }
+                modeDesc = "2-Row Storyboard";
+            }
+            else // Mode 0 or 1: Horizontal Storyboard (Linear or Shuffled)
+            {
+                double targetH = 260.0;
+                double curX = startX;
+                foreach (CardItem card in targetCards)
+                {
+                    double newH = targetH;
+                    double newW = Math.Round(targetH * card.AspectRatio);
+                    card.Width = newW;
+                    card.Height = newH;
+
+                    AnimateCardPosition(card, curX, startY);
+                    curX += newW + gap;
+                }
+                modeDesc = mode == 1 ? "Shuffled Timeline" : "Linear Timeline";
+            }
+
+            ScheduleAutoSave();
+            string msg = _selectedCards.Count > 0
+                ? $"Pipeline #{_pipelineArrangeCount}: {modeDesc} ({targetCards.Count} selected)"
+                : $"Pipeline #{_pipelineArrangeCount}: {modeDesc}";
+            ShowToast(msg, ToastType.Success);
+
+            if (_selectedCards.Count == 0)
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    ZoomToFitAllCards(animated: true, showToast: false);
+                }), System.Windows.Threading.DispatcherPriority.Background);
+            }
+        }
+
+        private void BtnGapToggle_Click(object sender, RoutedEventArgs e)
+        {
+            _currentGap = _currentGap switch
+            {
+                0.0 => 8.0,
+                8.0 => 16.0,
+                16.0 => 24.0,
+                24.0 => 32.0,
+                32.0 => 48.0,
+                _ => 0.0
+            };
+            TxtGap.Text = FormatGapText(_currentGap);
+            _settings.ArrangeGap = _currentGap;
+            _settings.Save();
+            ScheduleAutoSave();
+            ShowToast(_currentGap == 0 ? "Arrange gap set to No Gap (0px)" : $"Arrange gap set to {(int)_currentGap}px", ToastType.Info);
+        }
+
+        private void AnimateCardPosition(CardItem card, double targetX, double targetY)
+        {
+            DoubleAnimation animX = new DoubleAnimation(card.X, targetX, TimeSpan.FromMilliseconds(280))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            DoubleAnimation animY = new DoubleAnimation(card.Y, targetY, TimeSpan.FromMilliseconds(280))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+
+            // CRITICAL FIX: Release animation hold on completed so card can be moved freely with mouse!
+            animX.Completed += (s, e) =>
+            {
+                card.Container.BeginAnimation(Canvas.LeftProperty, null);
+                card.X = targetX;
+            };
+            animY.Completed += (s, e) =>
+            {
+                card.Container.BeginAnimation(Canvas.TopProperty, null);
+                card.Y = targetY;
+            };
+
+            card.Container.BeginAnimation(Canvas.LeftProperty, animX);
+            card.Container.BeginAnimation(Canvas.TopProperty, animY);
+        }
+
+        #endregion
+
+        #region Duplication, Clipboard & Shortcuts
+
+        private void BtnDuplicate_Click(object sender, RoutedEventArgs e) => DuplicateSelectedCards();
+
+        private void DuplicateSelectedCards()
+        {
+            if (_selectedCards.Count == 0) return;
+
+            RecordUndo("Duplicate Cards");
+
+            var cardsToDuplicate = _selectedCards.ToList();
+            DeselectAllCards();
+
+            foreach (CardItem card in cardsToDuplicate)
+            {
+                Point newPos = new Point(card.X + 30, card.Y + 30);
+                AddImageCard(
+                    card.Bitmap,
+                    newPos,
+                    customWidth: card.Width,
+                    customHeight: card.Height,
+                    localPath: card.LocalPath,
+                    base64Data: card.Base64Data,
+                    originalBitmap: card.OriginalBitmap,
+                    baseWidth: card.BaseWidth,
+                    baseHeight: card.BaseHeight,
+                    cropLeft: card.CropLeft,
+                    cropTop: card.CropTop,
+                    cropRight: card.CropRight,
+                    cropBottom: card.CropBottom);
+            }
+
+            ScheduleAutoSave();
+            ShowToast($"Duplicated {cardsToDuplicate.Count} item(s)", ToastType.Success);
+        }
+
+        private void DeleteSelectedCards()
+        {
+            if (_selectedCards.Count == 0) return;
+
+            RecordUndo("Delete Cards");
+
+            int count = _selectedCards.Count;
+            foreach (CardItem card in _selectedCards.ToList())
+            {
+                CleanupCard(card);
+                WorldCanvas.Children.Remove(card.Container);
+                _cards.Remove(card);
+            }
+            _selectedCards.Clear();
+
+            UpdateStatusCounts();
+            if (_cards.Count == 0)
+            {
+                EmptyStateOverlay.Visibility = Visibility.Visible;
+            }
+
+            ScheduleAutoSave();
+            ShowToast($"Deleted {count} reference(s)", ToastType.Info);
+        }
+
+        private void BringSelectedToFront()
+        {
+            if (_selectedCards.Count == 0) return;
+            RecordUndo("Bring to Front");
+            foreach (var card in _selectedCards)
+            {
+                Panel.SetZIndex(card.Container, ++_highestZ);
+            }
+            ScheduleAutoSave();
+            ShowToast("Brought to front (Ctrl + ])", ToastType.Info, 1200);
+        }
+
+        private void SendSelectedToBack()
+        {
+            if (_selectedCards.Count == 0) return;
+            RecordUndo("Send to Back");
+            foreach (var card in _selectedCards)
+            {
+                Panel.SetZIndex(card.Container, --_lowestZ);
+            }
+            ScheduleAutoSave();
+            ShowToast("Sent to back (Ctrl + [)", ToastType.Info, 1200);
+        }
+
+        private void Window_KeyDown(object sender, KeyEventArgs e)
+        {
+            // Undo (Ctrl+Z)
+            if (e.Key == Key.Z && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
+            {
+                Undo();
+                e.Handled = true;
+            }
+            // Redo (Ctrl+Y or Ctrl+Shift+Z)
+            else if ((e.Key == Key.Y && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control) ||
+                     (e.Key == Key.Z && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == (ModifierKeys.Control | ModifierKeys.Shift)))
+            {
+                Redo();
+                e.Handled = true;
+            }
+            // Bring to Front (Ctrl + ])
+            else if (e.Key == Key.OemCloseBrackets && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                BringSelectedToFront();
+                e.Handled = true;
+            }
+            // Send to Back (Ctrl + [)
+            else if (e.Key == Key.OemOpenBrackets && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                SendSelectedToBack();
+                e.Handled = true;
+            }
+            // Group Selected (Ctrl + G)
+            else if (e.Key == Key.G && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                BtnAddGroup_Click(this, new RoutedEventArgs());
+                e.Handled = true;
+            }
+            // Copy (Ctrl+C)
+            else if (e.Key == Key.C && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                BtnCopy_Click(this, new RoutedEventArgs());
+                e.Handled = true;
+            }
+            // Select All (Ctrl+A)
+            else if (e.Key == Key.A && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                foreach (CardItem card in _cards)
+                {
+                    SelectCard(card, addToSelection: true);
+                }
+                e.Handled = true;
+            }
+            // Duplicate (Ctrl+D)
+            else if (e.Key == Key.D && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                DuplicateSelectedCards();
+                e.Handled = true;
+            }
+            // Paste (Ctrl+V)
+            else if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                PasteFromClipboard();
+                e.Handled = true;
+            }
+            // Save (Ctrl+S)
+            else if (e.Key == Key.S && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                if ((Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift)
+                    SaveProjectAs();
+                else
+                    SaveProject();
+                e.Handled = true;
+            }
+            // Open (Ctrl+O)
+            else if (e.Key == Key.O && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                BtnOpenDropboard_Click(this, new RoutedEventArgs());
+                e.Handled = true;
+            }
+            // New (Ctrl+N)
+            else if (e.Key == Key.N && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
+            {
+                BtnNew_Click(this, new RoutedEventArgs());
+                e.Handled = true;
+            }
+            // Delete / Backspace
+            else if (e.Key == Key.Delete || e.Key == Key.Back)
+            {
+                DeleteSelectedCards();
+                e.Handled = true;
+            }
+            // Fit All in View (Home / F key)
+            else if (e.Key == Key.Home || (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.None))
+            {
+                ZoomToFitAllCards(animated: true);
+                e.Handled = true;
+            }
+            // Escape to Deselect All
+            else if (e.Key == Key.Escape)
+            {
+                DeselectAllCards();
+                e.Handled = true;
+            }
+        }
+
+        private void PasteFromClipboard()
+        {
+            // 1. Check if clipboard has HTML with image source (e.g. copying GIF or image from browser)
+            if (Clipboard.ContainsData(DataFormats.Html))
+            {
+                try
+                {
+                    string html = Clipboard.GetData(DataFormats.Html) as string ?? "";
+                    var match = System.Text.RegularExpressions.Regex.Match(html, @"<img\s+[^>]*src=[""']([^""']+)[""']", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (match.Success)
+                    {
+                        string src = match.Groups[1].Value;
+                        if (!string.IsNullOrEmpty(src))
+                        {
+                            src = System.Net.WebUtility.HtmlDecode(src);
+                            if (src.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                                src.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                                (src.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) && src.Contains(";base64,")))
+                            {
+                                _ = AddImageFromUrlAsync(src, "Pasted Reference");
+                                return;
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            // 2. Check if clipboard has file drop list (e.g. copied from File Explorer)
+            if (Clipboard.ContainsFileDropList())
+            {
+                var files = Clipboard.GetFileDropList();
+                if (files != null)
+                {
+                    int count = 0;
+                    foreach (string? file in files)
+                    {
+                        if (string.IsNullOrEmpty(file)) continue;
+                        string ext = System.IO.Path.GetExtension(file).ToLower();
+                        if (ext is ".jpg" or ".jpeg" or ".png" or ".webp" or ".bmp" or ".gif")
+                        {
+                            BitmapImage bmp = new BitmapImage();
+                            bmp.BeginInit();
+                            bmp.UriSource = new Uri(file, UriKind.Absolute);
+                            bmp.CacheOption = BitmapCacheOption.OnLoad;
+                            bmp.EndInit();
+                            bmp.Freeze();
+
+                            AddImageCard(bmp, localPath: file);
+                            count++;
+                        }
+                    }
+                    if (count > 0)
+                    {
+                        ShowToast($"Pasted {count} image file(s)", ToastType.Success);
+                        return;
+                    }
+                }
+            }
+
+            // 3. Check if clipboard has plain text (URL, YouTube link, or data:image)
+            if (Clipboard.ContainsText())
+            {
+                string text = Clipboard.GetText()?.Trim() ?? "";
+                if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                    text.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                    (text.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase) && text.Contains(";base64,")))
+                {
+                    _ = AddImageFromUrlAsync(text, "Pasted Reference");
+                    return;
+                }
+            }
+
+            // 4. Fallback to direct raw clipboard bitmap (e.g. Snipping Tool, screenshot, PrintScreen)
+            if (Clipboard.ContainsImage())
+            {
+                BitmapSource image = Clipboard.GetImage();
+                if (image != null)
+                {
+                    AddImageCard(image);
+                    ShowToast("Pasted image from clipboard", ToastType.Success);
+                }
+            }
+        }
+
+        #endregion
+
+        #region Drag & Drop and File Loading / Saving
+
+        private void Window_DragOver(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(DataFormats.FileDrop) ||
+                e.Data.GetDataPresent(DataFormats.UnicodeText) ||
+                e.Data.GetDataPresent(DataFormats.Text))
+                e.Effects = DragDropEffects.Copy;
+            else
+                e.Effects = DragDropEffects.None;
+            e.Handled = true;
+        }
+
+        private void Window_Drop(object sender, DragEventArgs e)
+        {
+            Point dropScreenPos = e.GetPosition(CanvasContainer);
+            Point worldPos = ScreenToWorld(dropScreenPos);
+
+            if (e.Data.GetDataPresent(DataFormats.FileDrop))
+            {
+                string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+                foreach (string file in files)
+                {
+                    string ext = System.IO.Path.GetExtension(file).ToLower();
+                    if (ext == ".dropboard")
+                    {
+                        LoadDropboardFile(file);
+                    }
+                    else if (ext is ".jpg" or ".jpeg" or ".png" or ".webp" or ".bmp" or ".gif")
+                    {
+                        try
+                        {
+                            BitmapImage bmp = new BitmapImage();
+                            bmp.BeginInit();
+                            bmp.UriSource = new Uri(file, UriKind.Absolute);
+                            bmp.CacheOption = BitmapCacheOption.OnLoad;
+                            bmp.EndInit();
+                            bmp.Freeze();
+
+                            AddImageCard(bmp, worldPos, localPath: file);
+                            worldPos.X += 30;
+                            worldPos.Y += 30;
+                        }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show($"Could not load {System.IO.Path.GetFileName(file)}: {ex.Message}", "DropBoard", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        }
+                    }
+                }
+            }
+            else if (e.Data.GetDataPresent(DataFormats.UnicodeText) || e.Data.GetDataPresent(DataFormats.Text))
+            {
+                string text = ((string)(e.Data.GetData(DataFormats.UnicodeText) ?? e.Data.GetData(DataFormats.Text) ?? "")).Trim();
+                if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                    text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = AddImageFromUrlAsync(text, "Dropped Reference");
+                }
+                else if (!string.IsNullOrWhiteSpace(text))
+                {
+                    AddNoteCard(text: text, worldPosition: worldPos);
+                    ShowToast("Created note from dropped text", ToastType.Success);
+                }
+            }
+        }
+
+        private void BtnAddImage_Click(object sender, RoutedEventArgs e)
+        {
+            OpenFileDialog dlg = new OpenFileDialog
+            {
+                Filter = "Images (*.png;*.jpg;*.jpeg;*.webp)|*.png;*.jpg;*.jpeg;*.webp|All Files (*.*)|*.*",
+                Multiselect = true
+            };
+
+            if (dlg.ShowDialog() == true)
+            {
+                foreach (string filename in dlg.FileNames)
+                {
+                    BitmapImage bmp = new BitmapImage(new Uri(filename));
+                    AddImageCard(bmp, localPath: filename);
+                }
+            }
+        }
+
+        private void BtnAddUrl_Click(object sender, RoutedEventArgs e)
+        {
+            string clipText = "";
+            try
+            {
+                if (Clipboard.ContainsText())
+                    clipText = Clipboard.GetText()?.Trim() ?? "";
+            }
+            catch { }
+
+            string initialUrl = (clipText.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || clipText.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                ? clipText : "";
+
+            string? input = ShowUrlInputDialog(initialUrl);
+            if (!string.IsNullOrWhiteSpace(input))
+            {
+                _ = AddImageFromUrlAsync(input.Trim(), "Web Reference");
+            }
+        }
+
+        private void BtnAddNote_Click(object sender, RoutedEventArgs e)
+        {
+            var note = AddNoteCard();
+            ShowToast("Added sticky note (Press N)", ToastType.Success);
+
+            // Focus editor
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                note.NoteEditor?.Focus();
+                note.NoteEditor?.SelectAll();
+            }), System.Windows.Threading.DispatcherPriority.Input);
+        }
+
+        private string? ShowUrlInputDialog(string initialUrl = "")
+        {
+            Window dialog = new Window
+            {
+                Title = "Add Web Reference",
+                Width = 460,
+                Height = 185,
+                WindowStyle = WindowStyle.None,
+                AllowsTransparency = true,
+                Background = Brushes.Transparent,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this,
+                ResizeMode = ResizeMode.NoResize,
+                ShowInTaskbar = false
+            };
+
+            Border root = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(242, 18, 21, 29)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(20, 18, 20, 18),
+                Effect = new DropShadowEffect { BlurRadius = 30, ShadowDepth = 8, Opacity = 0.7, Color = Colors.Black }
+            };
+
+            StackPanel sp = new StackPanel();
+
+            TextBlock title = new TextBlock
+            {
+                Text = "Add Web Reference",
+                FontSize = 14,
+                FontWeight = FontWeights.Bold,
+                Foreground = Brushes.White,
+                Margin = new Thickness(0, 0, 0, 4)
+            };
+            sp.Children.Add(title);
+
+            TextBlock desc = new TextBlock
+            {
+                Text = "Supports Pinterest, YouTube (video/shorts), and direct image links:",
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            sp.Children.Add(desc);
+
+            TextBox input = new TextBox
+            {
+                Text = initialUrl,
+                Background = new SolidColorBrush(Color.FromRgb(26, 32, 44)),
+                Foreground = Brushes.White,
+                CaretBrush = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(8, 6, 8, 6),
+                FontSize = 12,
+                Margin = new Thickness(0, 0, 0, 14)
+            };
+            sp.Children.Add(input);
+
+            StackPanel btnPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            Button btnCancel = new Button
+            {
+                Content = "Cancel",
+                Style = (Style)FindResource("TbButton"),
+                Margin = new Thickness(0, 0, 8, 0),
+                Width = 75,
+                Height = 28
+            };
+            btnCancel.Click += (s, e) => { dialog.DialogResult = false; dialog.Close(); };
+            btnPanel.Children.Add(btnCancel);
+
+            Button btnAdd = new Button
+            {
+                Content = "Add Reference",
+                Style = (Style)FindResource("TbButton"),
+                Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                FontWeight = FontWeights.Bold,
+                Width = 110,
+                Height = 28
+            };
+            btnAdd.Click += (s, e) => { dialog.DialogResult = true; dialog.Close(); };
+            btnPanel.Children.Add(btnAdd);
+
+            sp.Children.Add(btnPanel);
+            root.Child = sp;
+            dialog.Content = root;
+
+            input.SelectAll();
+            dialog.Loaded += (s, e) => input.Focus();
+            input.KeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Enter)
+                {
+                    dialog.DialogResult = true;
+                    dialog.Close();
+                }
+                else if (e.Key == Key.Escape)
+                {
+                    dialog.DialogResult = false;
+                    dialog.Close();
+                }
+            };
+
+            bool? result = dialog.ShowDialog();
+            return result == true ? input.Text.Trim() : null;
+        }
+
+        private void ApplyDockLayout()
+        {
+            bool isLeft = _dockPosition == "left";
+
+            if (isLeft)
+            {
+                FloatingDock.HorizontalAlignment = HorizontalAlignment.Left;
+                FloatingDock.VerticalAlignment = VerticalAlignment.Center;
+                FloatingDock.Margin = new Thickness(12, 0, 0, 0);
+                DockStackPanel.Orientation = Orientation.Vertical;
+
+                foreach (UIElement child in DockStackPanel.Children)
+                {
+                    if (child is Button btn)
+                    {
+                        btn.Width = 34;
+                        btn.Height = 34;
+                        btn.Padding = new Thickness(0);
+                        if (btn.Content is StackPanel sp)
+                        {
+                            foreach (UIElement item in sp.Children)
+                            {
+                                if (item is TextBlock tb)
+                                    tb.Visibility = Visibility.Collapsed;
+                                else if (item is FrameworkElement fe)
+                                    fe.Margin = new Thickness(0);
+                            }
+                        }
+                    }
+                    else if (child is System.Windows.Shapes.Rectangle rect)
+                    {
+                        rect.Width = 20;
+                        rect.Height = 1;
+                        rect.Margin = new Thickness(0, 4, 0, 4);
+                    }
+                }
+
+                TxtDockPos.Text = "Top Bar";
+                BtnDockPosToggle.ToolTip = "Switch Toolbar Position (Top Bar Horizontal)";
+            }
+            else
+            {
+                FloatingDock.HorizontalAlignment = HorizontalAlignment.Center;
+                FloatingDock.VerticalAlignment = VerticalAlignment.Top;
+                FloatingDock.Margin = new Thickness(0, 52, 0, 0);
+                DockStackPanel.Orientation = Orientation.Horizontal;
+
+                foreach (UIElement child in DockStackPanel.Children)
+                {
+                    if (child is Button btn)
+                    {
+                        btn.Width = double.NaN;
+                        btn.Height = double.NaN;
+                    }
+                    else if (child is System.Windows.Shapes.Rectangle rect)
+                    {
+                        rect.Width = 1;
+                        rect.Height = 16;
+                        rect.Margin = new Thickness(5, 0, 5, 0);
+                    }
+                }
+
+                TxtDockPos.Text = "Sidebar";
+                BtnDockPosToggle.ToolTip = "Switch Toolbar Position (Left Sidebar 1x Mode)";
+
+                UpdateResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width);
+            }
+        }
+
+        private void RevealDock()
+        {
+            if (!_isDockAutoHide || _isDockRevealed) return;
+            _isDockRevealed = true;
+
+            FloatingDock.IsHitTestVisible = true;
+            DoubleAnimation animOpacity = new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(180))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+            };
+            FloatingDock.BeginAnimation(UIElement.OpacityProperty, animOpacity);
+
+            if (_dockPosition == "left")
+            {
+                DoubleAnimation animX = new DoubleAnimation(0, TimeSpan.FromMilliseconds(180))
+                {
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+                };
+                DockTranslateTransform.BeginAnimation(TranslateTransform.XProperty, animX);
+            }
+            else
+            {
+                DoubleAnimation animY = new DoubleAnimation(0, TimeSpan.FromMilliseconds(180))
+                {
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+                };
+                DockTranslateTransform.BeginAnimation(TranslateTransform.YProperty, animY);
+            }
+        }
+
+        private void HideDock()
+        {
+            if (!_isDockAutoHide || !_isDockRevealed) return;
+            _isDockRevealed = false;
+
+            DoubleAnimation animOpacity = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(220))
+            {
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+            };
+            animOpacity.Completed += (s, e) =>
+            {
+                if (_isDockAutoHide && !_isDockRevealed)
+                {
+                    FloatingDock.IsHitTestVisible = false;
+                    FloatingDock.Opacity = 0.0;
+                }
+            };
+            FloatingDock.BeginAnimation(UIElement.OpacityProperty, animOpacity);
+
+            if (_dockPosition == "left")
+            {
+                DoubleAnimation animX = new DoubleAnimation(-75, TimeSpan.FromMilliseconds(220))
+                {
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+                };
+                DockTranslateTransform.BeginAnimation(TranslateTransform.XProperty, animX);
+            }
+            else
+            {
+                // Slide up behind the 40px TitleBar (Top: 52 - 55 = -3px, Bottom: ~37px < 40px)
+                DoubleAnimation animY = new DoubleAnimation(-55, TimeSpan.FromMilliseconds(220))
+                {
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+                };
+                DockTranslateTransform.BeginAnimation(TranslateTransform.YProperty, animY);
+            }
+        }
+
+        private void DockHoverZone_MouseEnter(object sender, MouseEventArgs e)
+        {
+            if (_isDockAutoHide) RevealDock();
+        }
+
+        private void DockHoverZone_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isDockAutoHide && !_isDockRevealed) RevealDock();
+        }
+
+        private void FloatingDock_MouseEnter(object sender, MouseEventArgs e) => RevealDock();
+
+        private void FloatingDock_MouseLeave(object sender, MouseEventArgs e)
+        {
+            if (_isDockAutoHide)
+            {
+                Point pt = e.GetPosition(this);
+                if (_dockPosition == "top" && pt.Y <= 105)
+                {
+                    // Still in top hover zone
+                    return;
+                }
+                HideDock();
+            }
+        }
+
+        private void Window_PreviewMouseMove(object sender, MouseEventArgs e)
+        {
+            if (!_isDockAutoHide) return;
+            if (_isPanning || _isMarqueeSelecting || _isDraggingCards || _isResizingCard || _isCropping) return;
+
+            Point pt = e.GetPosition(this);
+            if (_dockPosition == "left")
+            {
+                if ((pt.X <= 60 && pt.Y > 40) || FloatingDock.IsMouseOver)
+                {
+                    RevealDock();
+                }
+                else if ((pt.X > 140 || pt.Y <= 40) && !FloatingDock.IsMouseOver)
+                {
+                    HideDock();
+                }
+            }
+            else // top
+            {
+                // Hover zone is anywhere in top area (Y <= 105) or over the dock itself
+                if (FloatingDock.IsMouseOver || pt.Y <= 105)
+                {
+                    RevealDock();
+                }
+                else if (pt.Y > 125 && !FloatingDock.IsMouseOver)
+                {
+                    HideDock();
+                }
+            }
+        }
+
+        private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            UpdateResponsiveLayout(e.NewSize.Width);
+            SyncActiveHwndPositions(updateSize: false);
+        }
+
+        private void UpdateResponsiveLayout(double width)
+        {
+            if (width <= 0) return;
+
+            // 1. Dock Toolbar (when top horizontal mode)
+            if (_dockPosition == "top")
+            {
+                bool compactDock = width <= 1080;
+                foreach (UIElement child in DockStackPanel.Children)
+                {
+                    if (child is Button btn)
+                    {
+                        btn.Padding = compactDock ? new Thickness(6, 4, 6, 4) : new Thickness(7, 4, 7, 4);
+                        if (btn.Content is StackPanel sp)
+                        {
+                            foreach (UIElement item in sp.Children)
+                            {
+                                if (item is TextBlock tb)
+                                {
+                                    tb.Visibility = compactDock ? Visibility.Collapsed : Visibility.Visible;
+                                }
+                                else if (item is FrameworkElement fe)
+                                {
+                                    fe.Margin = compactDock ? new Thickness(0) : new Thickness(0, 0, 5, 0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Titlebar Responsive Collapsing
+            // Threshold 920px: Titlebar action buttons collapse labels to icon-only
+            bool compactTitleBtns = width <= 920;
+            if (TxtBtnNew != null) TxtBtnNew.Visibility = compactTitleBtns ? Visibility.Collapsed : Visibility.Visible;
+            if (TxtBtnOpen != null) TxtBtnOpen.Visibility = compactTitleBtns ? Visibility.Collapsed : Visibility.Visible;
+            if (TxtBtnSave != null) TxtBtnSave.Visibility = compactTitleBtns ? Visibility.Collapsed : Visibility.Visible;
+            if (TxtBtnSaveAs != null) TxtBtnSaveAs.Visibility = compactTitleBtns ? Visibility.Collapsed : Visibility.Visible;
+            if (TxtBtnPin != null) TxtBtnPin.Visibility = compactTitleBtns ? Visibility.Collapsed : Visibility.Visible;
+            if (TxtBtnAbout != null) TxtBtnAbout.Visibility = compactTitleBtns ? Visibility.Collapsed : Visibility.Visible;
+
+            // Zero out right margin on icons and adjust button padding when in icon-only mode so icons are 100% centered
+            Thickness iconMargin = compactTitleBtns ? new Thickness(0) : new Thickness(0, 0, 5, 0);
+            Thickness iconMarginPinAbout = compactTitleBtns ? new Thickness(0) : new Thickness(0, 0, 4, 0);
+            Thickness btnPadding = compactTitleBtns ? new Thickness(6, 4, 6, 4) : new Thickness(8, 4, 8, 4);
+
+            if (IconBtnNew != null) IconBtnNew.Margin = iconMargin;
+            if (IconBtnOpen != null) IconBtnOpen.Margin = iconMargin;
+            if (IconBtnSave != null) IconBtnSave.Margin = iconMargin;
+            if (IconBtnSaveAs != null) IconBtnSaveAs.Margin = iconMargin;
+            if (IconBtnPin != null) IconBtnPin.Margin = iconMarginPinAbout;
+            if (IconBtnAbout != null) IconBtnAbout.Margin = iconMarginPinAbout;
+
+            if (BtnNew != null) BtnNew.Padding = btnPadding;
+            if (BtnOpenDropboard != null) BtnOpenDropboard.Padding = btnPadding;
+            if (BtnSave != null) BtnSave.Padding = btnPadding;
+            if (BtnSaveAs != null) BtnSaveAs.Padding = btnPadding;
+            if (BtnPin != null) BtnPin.Padding = btnPadding;
+            if (BtnAbout != null) BtnAbout.Padding = btnPadding;
+
+            // Threshold 760px: Hide ref counter & meta divider, hide Save As, hide About button
+            bool hide760 = width <= 760;
+            if (TxtRefCountTop != null) TxtRefCountTop.Visibility = hide760 ? Visibility.Collapsed : Visibility.Visible;
+            if (TxtMetaDivider != null) TxtMetaDivider.Visibility = hide760 ? Visibility.Collapsed : Visibility.Visible;
+            if (BtnSaveAs != null) BtnSaveAs.Visibility = hide760 ? Visibility.Collapsed : Visibility.Visible;
+            if (BtnAbout != null) BtnAbout.Visibility = hide760 ? Visibility.Collapsed : Visibility.Visible;
+            if (TxtProjectTitle != null) TxtProjectTitle.MaxWidth = hide760 ? 60 : 160;
+
+            // Threshold 620px: Hide Studio badge, folder icon, project title
+            bool hide620 = width <= 620;
+            if (BrandBadgeStudio != null) BrandBadgeStudio.Visibility = hide620 ? Visibility.Collapsed : Visibility.Visible;
+            if (IconFolder != null) IconFolder.Visibility = hide620 ? Visibility.Collapsed : Visibility.Visible;
+            if (TxtProjectTitle != null) TxtProjectTitle.Visibility = hide620 ? Visibility.Collapsed : Visibility.Visible;
+
+            // Threshold 520px: Hide Settings button, hide New button (keep primary Open & Save)
+            bool hide520 = width <= 520;
+            if (BtnSettings != null) BtnSettings.Visibility = hide520 ? Visibility.Collapsed : Visibility.Visible;
+            if (BtnNew != null) BtnNew.Visibility = hide520 ? Visibility.Collapsed : Visibility.Visible;
+
+            // Threshold 450px: Hide Pin button, hide brand title text "DropBoard" (leaves clean vector Brand Icon)
+            bool hide450 = width <= 450;
+            if (BtnPin != null) BtnPin.Visibility = hide450 ? Visibility.Collapsed : Visibility.Visible;
+            if (TxtBrandTitle != null) TxtBrandTitle.Visibility = hide450 ? Visibility.Collapsed : Visibility.Visible;
+
+            // Opacity slider container: ALWAYS VISIBLE across all window sizes down to 360px!
+            if (BorderOpacityContainer != null) BorderOpacityContainer.Visibility = Visibility.Visible;
+
+            // On ultra-compact window (<= 410px), collapse text badge "0% BG" and shorten slider track
+            bool compactOpacity = width <= 410;
+            if (CanvasBgText != null) CanvasBgText.Visibility = compactOpacity ? Visibility.Collapsed : Visibility.Visible;
+            if (CanvasBgSlider != null) CanvasBgSlider.Width = compactOpacity ? 42 : 60;
+        }
+
+        private void UpdateDockAutoHideUI()
+        {
+            TxtFloat.Text = _isDockAutoHide ? "Float" : "Pin";
+            BtnDockPin.ToolTip = _isDockAutoHide 
+                ? "Toolbar is in Auto-Hide (Float) mode. Click to Pin permanently." 
+                : "Toolbar is Pinned. Click to enable Auto-Hide (Float).";
+
+            if (_isDockAutoHide)
+            {
+                if (!FloatingDock.IsMouseOver)
+                {
+                    _isDockRevealed = true; // force HideDock to execute transition
+                    HideDock();
+                }
+                else
+                {
+                    _isDockRevealed = true;
+                }
+            }
+            else
+            {
+                _isDockRevealed = true;
+                FloatingDock.BeginAnimation(UIElement.OpacityProperty, null);
+                DockTranslateTransform.BeginAnimation(TranslateTransform.XProperty, null);
+                DockTranslateTransform.BeginAnimation(TranslateTransform.YProperty, null);
+                DockTranslateTransform.X = 0;
+                DockTranslateTransform.Y = 0;
+                FloatingDock.Opacity = 1.0;
+                FloatingDock.IsHitTestVisible = true;
+            }
+        }
+
+        private void BtnDockPosToggle_Click(object sender, RoutedEventArgs e)
+        {
+            _dockPosition = _dockPosition == "left" ? "top" : "left";
+            _settings.DockPosition = _dockPosition;
+            _settings.Save();
+            ApplyDockLayout();
+            UpdateDockAutoHideUI();
+            ShowToast(_dockPosition == "left" ? "Toolbar switched to Left Sidebar (1x Mode)" : "Toolbar switched to Top Bar (Horizontal)", ToastType.Info);
+        }
+
+        private void BtnAddGroup_Click(object sender, RoutedEventArgs e)
+        {
+            if (_selectedCards.Count > 0)
+            {
+                RecordUndo("Group Selected Cards");
+                double minX = _selectedCards.Min(c => c.X);
+                double minY = _selectedCards.Min(c => c.Y);
+                double maxX = _selectedCards.Max(c => c.X + c.Width);
+                double maxY = _selectedCards.Max(c => c.Y + c.Height);
+
+                double pad = 16.0;
+                double headerH = 34.0;
+                double gx = minX - pad;
+                double gy = minY - headerH - pad;
+                double gw = Math.Max(260, (maxX - minX) + (pad * 2));
+                double gh = Math.Max(180, (maxY - minY) + headerH + (pad * 2));
+
+                var grp = AddSceneGroup(
+                    title: $"Scene {(_groups.Count + 1):D2}",
+                    customX: gx,
+                    customY: gy,
+                    width: gw,
+                    height: gh,
+                    recordUndo: false);
+
+                foreach (var c in _selectedCards)
+                {
+                    c.GroupId = grp.Id;
+                }
+                AutoLayoutGroup(grp, animated: true, recordUndo: false);
+                UpdateGroupCounts();
+                ShowToast($"Grouped {_selectedCards.Count} references into {grp.Title}", ToastType.Success);
+            }
+            else
+            {
+                Point centerWorld = ScreenToWorld(new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2));
+                AddSceneGroup(
+                    title: $"Scene {(_groups.Count + 1):D2}",
+                    customX: centerWorld.X - 230,
+                    customY: centerWorld.Y - 190);
+                ShowToast("Added Scene Group Frame", ToastType.Success);
+            }
+        }
+
+        #region Scene Groups System
+
+        public static UIElement CreateSvgIcon(string pathData, string strokeColor = "#94A3B8", double size = 12.0, double strokeThickness = 1.8)
+        {
+            Viewbox vb = new Viewbox { Width = size, Height = size };
+            Canvas cv = new Canvas { Width = 24, Height = 24 };
+            System.Windows.Shapes.Path p = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse(pathData),
+                Stroke = (Brush)new BrushConverter().ConvertFromString(strokeColor)!,
+                StrokeThickness = strokeThickness,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                Fill = Brushes.Transparent
+            };
+            cv.Children.Add(p);
+            vb.Child = cv;
+            return vb;
+        }
+
+        public GroupItem AddSceneGroup(
+            string title = "Scene 01",
+            string notes = "",
+            double? customX = null,
+            double? customY = null,
+            double width = 460,
+            double height = 380,
+            string color = "#3B82F6",
+            string? customId = null,
+            bool recordUndo = true)
+        {
+            if (recordUndo && !_isApplyingSnapshot && !_isRestoringSession)
+            {
+                RecordUndo("Add Scene Group");
+            }
+
+            double x = customX ?? 100;
+            double y = customY ?? 100;
+            width = Math.Max(200, width);
+            height = Math.Max(140, height);
+            string id = customId ?? ("grp_" + Guid.NewGuid().ToString("N")[..8]);
+
+            Color grpCol;
+            try { grpCol = (Color)ColorConverter.ConvertFromString(color); }
+            catch { grpCol = Color.FromRgb(59, 130, 246); }
+
+            // 1. Ultra-clean Frame Border (identical feel to a Note Card)
+            Border frameBorder = new Border
+            {
+                Width = width,
+                Height = height,
+                Background = new SolidColorBrush(Color.FromArgb(8, grpCol.R, grpCol.G, grpCol.B)),
+                BorderBrush = new SolidColorBrush(grpCol),
+                BorderThickness = new Thickness(1.5),
+                CornerRadius = new CornerRadius(8),
+                SnapsToDevicePixels = true,
+                Cursor = Cursors.SizeAll
+            };
+
+            // 2. Minimalist In-Frame Label at top-left (like text on a note card!)
+            StackPanel labelSp = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(12, 10, 0, 0),
+                VerticalAlignment = VerticalAlignment.Top,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+
+            Border colorDot = new Border
+            {
+                Width = 8,
+                Height = 8,
+                CornerRadius = new CornerRadius(4),
+                Background = new SolidColorBrush(grpCol),
+                Margin = new Thickness(0, 0, 7, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            labelSp.Children.Add(colorDot);
+
+            TextBlock titleText = new TextBlock
+            {
+                Text = title,
+                FontSize = 12.0,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0),
+                ToolTip = "Double-click to rename group"
+            };
+            labelSp.Children.Add(titleText);
+
+            TextBox titleBox = new TextBox
+            {
+                Text = title,
+                FontSize = 12.0,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Brushes.White,
+                Background = new SolidColorBrush(Color.FromRgb(30, 41, 59)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(4, 1, 4, 1),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0),
+                Visibility = Visibility.Collapsed
+            };
+            labelSp.Children.Add(titleBox);
+
+            TextBlock countBadge = new TextBlock
+            {
+                Text = "(0 refs)",
+                FontSize = 10.5,
+                Foreground = new SolidColorBrush(Color.FromArgb(160, 148, 163, 184)),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            labelSp.Children.Add(countBadge);
+
+            frameBorder.Child = labelSp;
+
+            Grid container = new Grid
+            {
+                Width = width,
+                Height = height,
+                Cursor = Cursors.SizeAll
+            };
+            Canvas.SetLeft(container, x);
+            Canvas.SetTop(container, y);
+            Panel.SetZIndex(container, 0);
+
+            container.Children.Add(frameBorder);
+
+            // 3. Four Corner Resize Handles (exactly like Note Cards!)
+            Border handleTL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Top, Cursors.SizeNWSE);
+            Border handleTR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Top, Cursors.SizeNESW);
+            Border handleBL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Bottom, Cursors.SizeNESW);
+            Border handleBR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Bottom, Cursors.SizeNWSE);
+
+            handleTL.BorderBrush = new SolidColorBrush(grpCol);
+            handleTR.BorderBrush = new SolidColorBrush(grpCol);
+            handleBL.BorderBrush = new SolidColorBrush(grpCol);
+            handleBR.BorderBrush = new SolidColorBrush(grpCol);
+
+            container.Children.Add(handleTL);
+            container.Children.Add(handleTR);
+            container.Children.Add(handleBL);
+            container.Children.Add(handleBR);
+
+            TextBox notesBox = new TextBox { Text = notes, Visibility = Visibility.Collapsed };
+
+            GroupItem item = new GroupItem
+            {
+                Id = id,
+                Title = title,
+                Color = color,
+                Notes = notes,
+                X = x,
+                Y = y,
+                Width = width,
+                Height = height,
+                Container = container,
+                FrameBorder = frameBorder,
+                NotesBox = notesBox,
+                TitleText = titleText,
+                CountBadge = countBadge,
+                ColorDot = colorDot,
+                HandleTL = handleTL,
+                HandleTR = handleTR,
+                HandleBL = handleBL,
+                HandleBR = handleBR
+            };
+
+            AttachGroupResizeHandleEvents(item, handleTL, ResizeCorner.TopLeft);
+            AttachGroupResizeHandleEvents(item, handleTR, ResizeCorner.TopRight);
+            AttachGroupResizeHandleEvents(item, handleBL, ResizeCorner.BottomLeft);
+            AttachGroupResizeHandleEvents(item, handleBR, ResizeCorner.BottomRight);
+
+            // 4. Floating Hover Toolbar on top of group (like Note Card hover toolbar!)
+            Border hoverToolbar = CreateGroupHoverToolbar(item);
+            container.Children.Add(hoverToolbar);
+            item.HoverToolbar = hoverToolbar;
+
+            // Hover effects for revealing corner handles and floating toolbar
+            container.MouseEnter += (s, e) =>
+            {
+                handleTL.Visibility = Visibility.Visible;
+                handleTR.Visibility = Visibility.Visible;
+                handleBL.Visibility = Visibility.Visible;
+                handleBR.Visibility = Visibility.Visible;
+
+                hoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
+                hoverToolbar.Opacity = 1.0;
+                hoverToolbar.IsHitTestVisible = true;
+            };
+
+            container.MouseLeave += (s, e) =>
+            {
+                if (!item.IsSelected && !container.IsMouseOver && !hoverToolbar.IsMouseOver)
+                {
+                    handleTL.Visibility = Visibility.Collapsed;
+                    handleTR.Visibility = Visibility.Collapsed;
+                    handleBL.Visibility = Visibility.Collapsed;
+                    handleBR.Visibility = Visibility.Collapsed;
+
+                    DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                    anim.Completed += (s2, e2) =>
+                    {
+                        if (!item.IsSelected && !container.IsMouseOver && !hoverToolbar.IsMouseOver)
+                        {
+                            hoverToolbar.IsHitTestVisible = false;
+                        }
+                    };
+                    hoverToolbar.BeginAnimation(UIElement.OpacityProperty, anim);
+                }
+            };
+
+            // In-frame double click to rename
+            titleText.MouseLeftButtonDown += (s, e) =>
+            {
+                if (e.ClickCount == 2)
+                {
+                    titleBox.Text = item.Title;
+                    titleText.Visibility = Visibility.Collapsed;
+                    titleBox.Visibility = Visibility.Visible;
+                    titleBox.Focus();
+                    titleBox.SelectAll();
+                    e.Handled = true;
+                }
+            };
+
+            void FinishRename()
+            {
+                if (titleBox.Visibility == Visibility.Visible)
+                {
+                    string newTitle = string.IsNullOrWhiteSpace(titleBox.Text) ? "Scene 01" : titleBox.Text.Trim();
+                    item.Title = newTitle;
+                    titleText.Text = newTitle;
+                    titleBox.Visibility = Visibility.Collapsed;
+                    titleText.Visibility = Visibility.Visible;
+                    ScheduleAutoSave();
+                }
+            }
+
+            titleBox.LostFocus += (s, e) => FinishRename();
+            titleBox.KeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Enter) FinishRename();
+                else if (e.Key == Key.Escape)
+                {
+                    titleBox.Text = item.Title;
+                    titleBox.Visibility = Visibility.Collapsed;
+                    titleText.Visibility = Visibility.Visible;
+                }
+            };
+
+            // Drag group + member cards by clicking on frameBorder or label
+            MouseButtonEventHandler startGroupDrag = (s, e) =>
+            {
+                if (e.ClickCount == 1 && e.LeftButton == MouseButtonState.Pressed)
+                {
+                    RecordUndo("Move Group");
+                    _isDraggingGroup = true;
+                    _draggingGroup = item;
+                    _groupDragStartMousePoint = e.GetPosition(CanvasContainer);
+                    _groupDragStartPos = new Point(item.X, item.Y);
+
+                    _groupCardsInitialPositions.Clear();
+                    foreach (var card in _cards.Where(c => c.GroupId == item.Id))
+                    {
+                        _groupCardsInitialPositions[card] = new Point(card.X, card.Y);
+                    }
+
+                    CanvasContainer.CaptureMouse();
+                    e.Handled = true;
+                }
+            };
+
+            frameBorder.MouseLeftButtonDown += startGroupDrag;
+            labelSp.MouseLeftButtonDown += startGroupDrag;
+
+            _groups.Add(item);
+            WorldCanvas.Children.Add(container);
+
+            UpdateGroupCounts();
+            UpdateStorageStats();
+            ScheduleAutoSave();
+
+            return item;
+        }
+
+        private Border CreateGroupHoverToolbar(GroupItem item)
+        {
+            Color grpCol;
+            try { grpCol = (Color)ColorConverter.ConvertFromString(item.Color); }
+            catch { grpCol = Color.FromRgb(59, 130, 246); }
+
+            Border pill = new Border
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, -36, 0, 0),
+                Background = new SolidColorBrush(Color.FromArgb(235, 20, 24, 34)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(6, 2, 6, 2),
+                Opacity = 0.0,
+                IsHitTestVisible = false,
+                Effect = new DropShadowEffect
+                {
+                    BlurRadius = 12,
+                    ShadowDepth = 3,
+                    Direction = 270,
+                    Opacity = 0.6,
+                    Color = Colors.Black
+                }
+            };
+            Panel.SetZIndex(pill, 10001);
+
+            pill.MouseEnter += (s, e) =>
+            {
+                pill.BeginAnimation(UIElement.OpacityProperty, null);
+                pill.Opacity = 1.0;
+                pill.IsHitTestVisible = true;
+            };
+
+            StackPanel sp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+            // 1. Move grip
+            StackPanel moveSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            moveSp.Children.Add(new TextBlock
+            {
+                Text = "::",
+                FontFamily = new FontFamily("Consolas, Segoe UI"),
+                FontSize = 11,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                Margin = new Thickness(0, 0, 4, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            moveSp.Children.Add(new TextBlock
+            {
+                Text = "Move",
+                FontSize = 10.5,
+                Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+            Border btnMove = new Border
+            {
+                Background = Brushes.Transparent,
+                Padding = new Thickness(6, 3, 6, 3),
+                CornerRadius = new CornerRadius(4),
+                Cursor = Cursors.SizeAll,
+                ToolTip = "Drag to Move Group & References",
+                Child = moveSp
+            };
+            btnMove.MouseLeftButtonDown += (s, e) =>
+            {
+                RecordUndo("Move Group");
+                _isDraggingGroup = true;
+                _draggingGroup = item;
+                _groupDragStartMousePoint = e.GetPosition(CanvasContainer);
+                _groupDragStartPos = new Point(item.X, item.Y);
+
+                _groupCardsInitialPositions.Clear();
+                foreach (var card in _cards.Where(c => c.GroupId == item.Id))
+                {
+                    _groupCardsInitialPositions[card] = new Point(card.X, card.Y);
+                }
+
+                CanvasContainer.CaptureMouse();
+                e.Handled = true;
+            };
+            sp.Children.Add(btnMove);
+
+            Border CreateDiv() => new Border { Width = 1, Height = 12, Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)), Margin = new Thickness(3, 0, 3, 0), VerticalAlignment = VerticalAlignment.Center };
+
+            sp.Children.Add(CreateDiv());
+
+            // 2. Title Label
+            TextBlock titleLabel = new TextBlock
+            {
+                Text = item.Title,
+                FontSize = 11.0,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Brushes.White,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0, 6, 0)
+            };
+            sp.Children.Add(titleLabel);
+
+            sp.Children.Add(CreateDiv());
+
+            // 3. Auto-Fit Button (SVG)
+            Border btnFit = new Border
+            {
+                Background = Brushes.Transparent,
+                Padding = new Thickness(5, 3, 5, 3),
+                CornerRadius = new CornerRadius(4),
+                Cursor = Cursors.Hand,
+                ToolTip = "Auto-Fit Group Frame to Member References",
+                Child = CreateSvgIcon("M 15,3 h 6 v 6 M 9,21 H 3 v -6 M 21,3 L 14,10 M 3,21 L 10,14", "#38BDF8", 12)
+            };
+            btnFit.MouseEnter += (s, e) => btnFit.Background = new SolidColorBrush(Color.FromArgb(35, 255, 255, 255));
+            btnFit.MouseLeave += (s, e) => btnFit.Background = Brushes.Transparent;
+            btnFit.MouseLeftButtonDown += (s, e) => { e.Handled = true; FitGroupToCards(item); };
+            sp.Children.Add(btnFit);
+
+            // 4. Tidy Grid Button (SVG)
+            Border btnTidy = new Border
+            {
+                Background = Brushes.Transparent,
+                Padding = new Thickness(5, 3, 5, 3),
+                CornerRadius = new CornerRadius(4),
+                Cursor = Cursors.Hand,
+                ToolTip = "Tidy & Auto-arrange references in clean grid",
+                Child = CreateSvgIcon("M 4,4 H 20 V 20 H 4 Z M 9,9 H 15 V 15 H 9 Z", "#A7F3D0", 12)
+            };
+            btnTidy.MouseEnter += (s, e) => btnTidy.Background = new SolidColorBrush(Color.FromArgb(35, 255, 255, 255));
+            btnTidy.MouseLeave += (s, e) => btnTidy.Background = Brushes.Transparent;
+            btnTidy.MouseLeftButtonDown += (s, e) => { e.Handled = true; TidyGroup(item); };
+            sp.Children.Add(btnTidy);
+
+            sp.Children.Add(CreateDiv());
+
+            // 5. Color Picker Dots
+            string[] paletteColors = new[] { "#3b82f6", "#8b5cf6", "#ec4899", "#10b981", "#f59e0b" };
+            StackPanel colorSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 4, 0) };
+            foreach (string colHex in paletteColors)
+            {
+                Color c = (Color)ColorConverter.ConvertFromString(colHex);
+                Border dot = new Border
+                {
+                    Width = 9,
+                    Height = 9,
+                    CornerRadius = new CornerRadius(4.5),
+                    Background = new SolidColorBrush(c),
+                    Margin = new Thickness(2, 0, 2, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = $"Set group color to {colHex}"
+                };
+                dot.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    item.Color = colHex;
+                    Color newC = (Color)ColorConverter.ConvertFromString(colHex);
+                    item.FrameBorder.BorderBrush = new SolidColorBrush(newC);
+                    item.FrameBorder.Background = new SolidColorBrush(Color.FromArgb(8, newC.R, newC.G, newC.B));
+                    if (item.ColorDot != null) item.ColorDot.Background = new SolidColorBrush(newC);
+                    if (item.HandleTL != null) item.HandleTL.BorderBrush = new SolidColorBrush(newC);
+                    if (item.HandleTR != null) item.HandleTR.BorderBrush = new SolidColorBrush(newC);
+                    if (item.HandleBL != null) item.HandleBL.BorderBrush = new SolidColorBrush(newC);
+                    if (item.HandleBR != null) item.HandleBR.BorderBrush = new SolidColorBrush(newC);
+                    ScheduleAutoSave();
+                };
+                colorSp.Children.Add(dot);
+            }
+            sp.Children.Add(colorSp);
+
+            sp.Children.Add(CreateDiv());
+
+            // 6. Delete Button (SVG)
+            Border btnDel = new Border
+            {
+                Background = Brushes.Transparent,
+                Padding = new Thickness(5, 3, 5, 3),
+                CornerRadius = new CornerRadius(4),
+                Cursor = Cursors.Hand,
+                ToolTip = "Delete Group Frame (keeps reference cards on canvas)",
+                Child = CreateSvgIcon("M 18,6 L 6,18 M 6,6 L 18,18", "#EF4444", 11.5, 2.0)
+            };
+            btnDel.MouseEnter += (s, e) => btnDel.Background = new SolidColorBrush(Color.FromArgb(35, 255, 255, 255));
+            btnDel.MouseLeave += (s, e) => btnDel.Background = Brushes.Transparent;
+            btnDel.MouseLeftButtonDown += (s, e) => { e.Handled = true; RemoveGroup(item); };
+            sp.Children.Add(btnDel);
+
+            pill.Child = sp;
+            return pill;
+        }
+
+        private void AttachGroupResizeHandleEvents(GroupItem group, Border handle, ResizeCorner corner)
+        {
+            handle.MouseLeftButtonDown += (s, e) =>
+            {
+                RecordUndo("Resize Group");
+
+                _isResizingGroup = true;
+                _resizingGroup = group;
+                _activeGroupCorner = corner;
+                _groupResizeStartMousePoint = e.GetPosition(CanvasContainer);
+                _groupResizeInitialBounds = new Rect(group.X, group.Y, group.Width, group.Height);
+
+                _groupResizeMemberCards.Clear();
+                foreach (var card in _cards.Where(c => c.GroupId == group.Id))
+                {
+                    _groupResizeMemberCards.Add(new GroupResizeMemberState
+                    {
+                        Card = card,
+                        InitWidth = card.Width,
+                        InitHeight = card.Height,
+                        RelX = card.X - group.X,
+                        RelY = card.Y - group.Y
+                    });
+                }
+
+                CanvasContainer.CaptureMouse();
+                e.Handled = true;
+            };
+        }
+
+        private void ApplyGroupResize(GroupItem group, ResizeCorner corner, Rect initial, double deltaX, double deltaY)
+        {
+            double newW = initial.Width;
+            double newH = initial.Height;
+            double newX = initial.X;
+            double newY = initial.Y;
+
+            switch (corner)
+            {
+                case ResizeCorner.BottomRight:
+                    newW = Math.Max(140, initial.Width + deltaX);
+                    newH = Math.Max(100, initial.Height + deltaY);
+                    break;
+
+                case ResizeCorner.BottomLeft:
+                    newW = Math.Max(140, initial.Width - deltaX);
+                    newH = Math.Max(100, initial.Height + deltaY);
+                    newX = initial.Right - newW;
+                    break;
+
+                case ResizeCorner.TopRight:
+                    newW = Math.Max(140, initial.Width + deltaX);
+                    newH = Math.Max(100, initial.Height - deltaY);
+                    newY = initial.Bottom - newH;
+                    break;
+
+                case ResizeCorner.TopLeft:
+                    newW = Math.Max(140, initial.Width - deltaX);
+                    newH = Math.Max(100, initial.Height - deltaY);
+                    newX = initial.Right - newW;
+                    newY = initial.Bottom - newH;
+                    break;
+            }
+
+            group.X = newX;
+            group.Y = newY;
+            group.Width = newW;
+            group.Height = newH;
+
+            Canvas.SetLeft(group.Container, newX);
+            Canvas.SetTop(group.Container, newY);
+            group.Container.Width = newW;
+            group.Container.Height = newH;
+            group.FrameBorder.Width = newW;
+            group.FrameBorder.Height = newH;
+
+            // Proportional scaling for all member cards inside group!
+            if (_groupResizeMemberCards.Count > 0 && initial.Width > 0 && initial.Height > 0)
+            {
+                double scaleX = newW / initial.Width;
+                double scaleY = newH / initial.Height;
+                double uniformScale = (scaleX + scaleY) / 2.0;
+
+                foreach (var cs in _groupResizeMemberCards)
+                {
+                    cs.Card.Width = Math.Max(20, cs.InitWidth * uniformScale);
+                    cs.Card.Height = Math.Max(20, cs.InitHeight * uniformScale);
+                    cs.Card.X = newX + (cs.RelX * scaleX);
+                    cs.Card.Y = newY + (cs.RelY * scaleY);
+                }
+                SyncActiveHwndPositions(updateSize: true);
+            }
+        }
+
+        public void FitGroupToCards(GroupItem group, bool recordUndo = true)
+        {
+            var memberCards = _cards.Where(c => c.GroupId == group.Id).ToList();
+            if (memberCards.Count == 0)
+            {
+                if (recordUndo) ShowToast("Group is empty", ToastType.Info, 1500);
+                return;
+            }
+
+            if (recordUndo) RecordUndo("Fit Group");
+
+            double minX = memberCards.Min(c => c.X);
+            double minY = memberCards.Min(c => c.Y);
+            double maxX = memberCards.Max(c => c.X + c.Width);
+            double maxY = memberCards.Max(c => c.Y + c.Height);
+
+            double pad = 16.0;
+            double topPad = 32.0;
+
+            double newX = minX - pad;
+            double newY = minY - topPad;
+            double newW = Math.Max(200, (maxX - minX) + (pad * 2));
+            double newH = Math.Max(140, (maxY - minY) + topPad + pad);
+
+            group.X = newX;
+            group.Y = newY;
+            group.Width = newW;
+            group.Height = newH;
+
+            Canvas.SetLeft(group.Container, newX);
+            Canvas.SetTop(group.Container, newY);
+            group.Container.Width = newW;
+            group.Container.Height = newH;
+            group.FrameBorder.Width = newW;
+            group.FrameBorder.Height = newH;
+
+            UpdateGroupCounts();
+            ScheduleAutoSave();
+            if (recordUndo)
+            {
+                ShowToast($"Fitted {group.Title} to {memberCards.Count} reference(s)", ToastType.Success, 2000);
+            }
+        }
+
+        public void AutoLayoutGroup(GroupItem group, bool animated = true, bool recordUndo = false)
+        {
+            var memberCards = _cards.Where(c => c.GroupId == group.Id).ToList();
+            if (memberCards.Count == 0) return;
+
+            if (recordUndo) RecordUndo("Auto-Arrange Group");
+
+            int count = memberCards.Count;
+            double pad = 16.0;
+            double topPad = 34.0;
+            double gap = 14.0;
+
+            if (count == 1)
+            {
+                FitGroupToCards(group, recordUndo: false);
+                return;
+            }
+
+            // Target height for harmonious row / grid alignment
+            double targetH = count switch
+            {
+                2 => 300.0,
+                3 => 260.0,
+                4 => 240.0,
+                _ => 220.0
+            };
+
+            // Scale member cards to uniform target height while preserving natural aspect ratio
+            foreach (var card in memberCards)
+            {
+                double aspect = card.AspectRatio > 0.05 ? card.AspectRatio : (card.Width / Math.Max(1.0, card.Height));
+                double newH = targetH;
+                double newW = Math.Round(newH * aspect);
+                card.Width = newW;
+                card.Height = newH;
+                if (card.IsCropped)
+                {
+                    double visW_pct = Math.Max(0.05, (100.0 - card.CropLeft - card.CropRight) / 100.0);
+                    double visH_pct = Math.Max(0.05, (100.0 - card.CropTop - card.CropBottom) / 100.0);
+                    card.BaseWidth = Math.Round(newW / visW_pct);
+                    card.BaseHeight = Math.Round(newH / visH_pct);
+                }
+                else
+                {
+                    card.BaseWidth = newW;
+                    card.BaseHeight = newH;
+                }
+            }
+
+            // Decide columns: 2 cards = 2 cols, 3 cards = 3 cols (if total width <= 960) else 2 cols, 4 cards = 2 cols
+            int cols = count switch
+            {
+                2 => 2,
+                3 => 3,
+                4 => 2,
+                5 or 6 => 3,
+                _ => Math.Min(4, (int)Math.Ceiling(Math.Sqrt(count)))
+            };
+
+            if (cols == 3 && memberCards.Sum(c => c.Width) + (2 * gap) > 960)
+            {
+                cols = 2;
+            }
+
+            double startX = group.X + pad;
+            double startY = group.Y + topPad;
+
+            // Track column X positions and running Y heights
+            double[] colWidths = new double[cols];
+            for (int i = 0; i < count; i++)
+            {
+                int c = i % cols;
+                colWidths[c] = Math.Max(colWidths[c], memberCards[i].Width);
+            }
+
+            double[] colX = new double[cols];
+            double[] colY = new double[cols];
+
+            colX[0] = startX;
+            for (int c = 1; c < cols; c++)
+            {
+                colX[c] = colX[c - 1] + colWidths[c - 1] + gap;
+            }
+            for (int c = 0; c < cols; c++)
+            {
+                colY[c] = startY;
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                var card = memberCards[i];
+                int c = i % cols;
+
+                double targetX = colX[c];
+                double targetY = colY[c];
+
+                if (animated)
+                {
+                    AnimateCardPosition(card, targetX, targetY);
+                }
+                else
+                {
+                    card.X = targetX;
+                    card.Y = targetY;
+                }
+
+                colY[c] += card.Height + gap;
+            }
+
+            double totalW = (colX[cols - 1] + colWidths[cols - 1] + pad) - group.X;
+            double maxColH = colY.Max() - gap + pad - group.Y;
+
+            group.Width = Math.Max(200, totalW);
+            group.Height = Math.Max(140, maxColH);
+
+            group.Container.Width = group.Width;
+            group.Container.Height = group.Height;
+            if (group.FrameBorder != null)
+            {
+                group.FrameBorder.Width = group.Width;
+                group.FrameBorder.Height = group.Height;
+            }
+
+            UpdateGroupCounts();
+            ScheduleAutoSave();
+            if (recordUndo)
+            {
+                ShowToast($"Auto-arranged {count} references in {group.Title}", ToastType.Success, 2000);
+            }
+        }
+
+        public void TidyGroup(GroupItem group)
+        {
+            AutoLayoutGroup(group, animated: true, recordUndo: true);
+        }
+
+        public void RemoveGroup(GroupItem group)
+        {
+            RecordUndo("Delete Group");
+            foreach (var card in _cards.Where(c => c.GroupId == group.Id))
+            {
+                card.GroupId = null;
+            }
+            WorldCanvas.Children.Remove(group.Container);
+            _groups.Remove(group);
+            _selectedGroups.Remove(group);
+            UpdateGroupCounts();
+            UpdateStorageStats();
+            ScheduleAutoSave();
+            ShowToast($"Deleted group: {group.Title}", ToastType.Info);
+        }
+
+        public void UpdateGroupCounts()
+        {
+            foreach (var group in _groups)
+            {
+                int count = _cards.Count(c => c.GroupId == group.Id);
+                if (group.CountBadge != null)
+                {
+                    group.CountBadge.Text = $"({count} {(count == 1 ? "ref" : "refs")})";
+                }
+            }
+        }
+
+        private void CheckCardGroupAffiliation(CardItem card)
+        {
+            Rect cardRect = new Rect(card.X, card.Y, card.Width, card.Height);
+            Point center = new Point(card.X + card.Width / 2, card.Y + card.Height / 2);
+            GroupItem? targetGroup = null;
+
+            for (int i = _groups.Count - 1; i >= 0; i--)
+            {
+                var g = _groups[i];
+                Rect groupRect = new Rect(g.X, g.Y, g.Width, g.Height);
+                if (groupRect.Contains(center) || groupRect.IntersectsWith(cardRect))
+                {
+                    targetGroup = g;
+                    break;
+                }
+            }
+
+            if (targetGroup != null)
+            {
+                string? prevGroupId = card.GroupId;
+                card.GroupId = targetGroup.Id;
+
+                var memberCards = _cards.Where(c => c.GroupId == targetGroup.Id).ToList();
+                if (memberCards.Count >= 2)
+                {
+                    // Check if newly added/moved card overlaps with existing cards
+                    Rect cardRectExact = new Rect(card.X, card.Y, card.Width, card.Height);
+                    bool overlaps = memberCards.Where(c => c != card).Any(other =>
+                    {
+                        Rect otherRect = new Rect(other.X, other.Y, other.Width, other.Height);
+                        return otherRect.IntersectsWith(cardRectExact);
+                    });
+
+                    if (overlaps || prevGroupId != targetGroup.Id)
+                    {
+                        AutoLayoutGroup(targetGroup, animated: true, recordUndo: false);
+                    }
+                    else
+                    {
+                        FitGroupToCards(targetGroup, recordUndo: false);
+                    }
+                }
+                else
+                {
+                    FitGroupToCards(targetGroup, recordUndo: false);
+                }
+
+                if (!string.IsNullOrEmpty(prevGroupId) && prevGroupId != targetGroup.Id)
+                {
+                    var prevG = _groups.FirstOrDefault(g => g.Id == prevGroupId);
+                    if (prevG != null) FitGroupToCards(prevG, recordUndo: false);
+                }
+
+                UpdateGroupCounts();
+            }
+            else
+            {
+                if (card.GroupId != null)
+                {
+                    string oldGroupId = card.GroupId;
+                    card.GroupId = null;
+                    var oldGroup = _groups.FirstOrDefault(g => g.Id == oldGroupId);
+                    if (oldGroup != null)
+                    {
+                        FitGroupToCards(oldGroup, recordUndo: false);
+                    }
+                    UpdateGroupCounts();
+                }
+            }
+        }
+
+        #endregion
+
+        #region About & Settings Modals
+
+        private void BtnAbout_Click(object sender, RoutedEventArgs e)
+        {
+            AboutModalOverlay.Visibility = Visibility.Visible;
+        }
+
+        private void BtnCloseAboutModal_Click(object sender, RoutedEventArgs e)
+        {
+            AboutModalOverlay.Visibility = Visibility.Collapsed;
+        }
+
+        private void BtnSettings_Click(object sender, RoutedEventArgs e)
+        {
+            ChkAutoSave.IsChecked = _settings.AutoSaveEnabled;
+            TxtAutoSaveStatus.Text = _settings.AutoSaveEnabled ? "Status: Auto-Save Active" : "Status: Auto-Save Paused";
+            TxtAutoSaveStatus.Foreground = new SolidColorBrush(_settings.AutoSaveEnabled ? Color.FromRgb(52, 211, 153) : Color.FromRgb(248, 113, 113));
+
+            SliderPanSens.Value = _settings.PanSensitivity;
+            TxtPanSens.Text = $"{_settings.PanSensitivity:0.0}x";
+
+            SliderZoomSens.Value = _settings.ZoomSensitivity;
+            TxtZoomSens.Text = $"{_settings.ZoomSensitivity:0.0}x";
+
+            ChkInvertPan.IsChecked = _settings.InvertPan;
+
+            ChkAutoHideDock.IsChecked = _settings.AutoHideDock;
+
+            UpdateNavModeVisuals(_settings.NavMode);
+            UpdateDockPosVisuals(_settings.DockPosition);
+            UpdateStorageStats();
+
+            SettingsModalOverlay.Visibility = Visibility.Visible;
+        }
+
+        private void BtnCloseSettingsModal_Click(object sender, RoutedEventArgs e)
+        {
+            SettingsModalOverlay.Visibility = Visibility.Collapsed;
+        }
+
+        private void ModalBackdrop_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.OriginalSource == sender)
+            {
+                AboutModalOverlay.Visibility = Visibility.Collapsed;
+                SettingsModalOverlay.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private void SettingsTab_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is string tabName)
+            {
+                PaneGeneral.Visibility = tabName == "General" ? Visibility.Visible : Visibility.Collapsed;
+                PaneNavigation.Visibility = tabName == "Navigation" ? Visibility.Visible : Visibility.Collapsed;
+                PaneToolbar.Visibility = tabName == "Toolbar" ? Visibility.Visible : Visibility.Collapsed;
+                PaneShortcuts.Visibility = tabName == "Shortcuts" ? Visibility.Visible : Visibility.Collapsed;
+                PaneStorage.Visibility = tabName == "Storage" ? Visibility.Visible : Visibility.Collapsed;
+                PaneAbout.Visibility = tabName == "About" ? Visibility.Visible : Visibility.Collapsed;
+
+                Button[] allTabs = new[] { TabBtnGeneral, TabBtnNav, TabBtnToolbar, TabBtnShortcuts, TabBtnStorage, TabBtnAbout };
+                foreach (var t in allTabs)
+                {
+                    if (t == null) continue;
+                    bool isActive = (t.Tag as string) == tabName;
+                    t.Background = isActive ? new SolidColorBrush(Color.FromArgb(40, 56, 189, 248)) : Brushes.Transparent;
+                    t.Foreground = isActive ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(148, 163, 184));
+                }
+            }
+        }
+
+        private void SettingAutoSave_Changed(object sender, RoutedEventArgs e)
+        {
+            if (ChkAutoSave == null || TxtAutoSaveStatus == null) return;
+            _settings.AutoSaveEnabled = ChkAutoSave.IsChecked == true;
+            _settings.Save();
+            TxtAutoSaveStatus.Text = _settings.AutoSaveEnabled ? "Status: Auto-Save Active" : "Status: Auto-Save Paused";
+            TxtAutoSaveStatus.Foreground = new SolidColorBrush(_settings.AutoSaveEnabled ? Color.FromRgb(52, 211, 153) : Color.FromRgb(248, 113, 113));
+            ShowToast(_settings.AutoSaveEnabled ? "Auto-Save Enabled" : "Auto-Save Paused (Manual Save Only)", ToastType.Info);
+        }
+
+        private void BtnSaveProject_Click(object sender, RoutedEventArgs e)
+        {
+            SaveProject();
+        }
+
+        private void SelectNavMode_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is FrameworkElement fe && fe.Tag is string mode)
+            {
+                _settings.NavMode = mode;
+                _settings.Save();
+                UpdateNavModeVisuals(mode);
+                ShowToast($"Navigation Mode: {mode.ToUpper()}", ToastType.Info);
+            }
+        }
+
+        private void UpdateNavModeVisuals(string mode)
+        {
+            if (CardNavMac == null || CardNavWin == null || CardNavMouse == null) return;
+            CardNavMac.BorderBrush = mode == "macos" ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(30, 41, 59));
+            CardNavMac.BorderThickness = new Thickness(mode == "macos" ? 1.5 : 1.0);
+
+            CardNavWin.BorderBrush = mode == "windows" ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(30, 41, 59));
+            CardNavWin.BorderThickness = new Thickness(mode == "windows" ? 1.5 : 1.0);
+
+            CardNavMouse.BorderBrush = mode == "mouse" ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(30, 41, 59));
+            CardNavMouse.BorderThickness = new Thickness(mode == "mouse" ? 1.5 : 1.0);
+        }
+
+        private void SliderPanSens_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (TxtPanSens == null) return;
+            _settings.PanSensitivity = e.NewValue;
+            TxtPanSens.Text = $"{e.NewValue:0.0}x";
+            _settings.Save();
+        }
+
+        private void SliderZoomSens_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (TxtZoomSens == null) return;
+            _settings.ZoomSensitivity = e.NewValue;
+            TxtZoomSens.Text = $"{e.NewValue:0.0}x";
+            _settings.Save();
+        }
+
+        private void ChkInvertPan_Changed(object sender, RoutedEventArgs e)
+        {
+            if (ChkInvertPan == null) return;
+            _settings.InvertPan = ChkInvertPan.IsChecked == true;
+            _settings.Save();
+            ShowToast(_settings.InvertPan ? "Invert Pan: On" : "Invert Pan: Off", ToastType.Info);
+        }
+
+        private void SelectDockPos_Click(object sender, MouseButtonEventArgs e)
+        {
+            if (sender is FrameworkElement fe && fe.Tag is string pos)
+            {
+                _dockPosition = pos;
+                _settings.DockPosition = pos;
+                _settings.Save();
+                ApplyDockLayout();
+                UpdateDockAutoHideUI();
+                UpdateDockPosVisuals(pos);
+                ShowToast(pos == "left" ? "Toolbar: Left Sidebar" : "Toolbar: Top Bar", ToastType.Info);
+            }
+        }
+
+        private void UpdateDockPosVisuals(string pos)
+        {
+            if (CardDockTop == null || CardDockLeft == null) return;
+            CardDockTop.BorderBrush = pos == "top" ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(30, 41, 59));
+            CardDockTop.BorderThickness = new Thickness(pos == "top" ? 1.5 : 1.0);
+
+            CardDockLeft.BorderBrush = pos == "left" ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(30, 41, 59));
+            CardDockLeft.BorderThickness = new Thickness(pos == "left" ? 1.5 : 1.0);
+        }
+
+        private void ChkAutoHideDock_Changed(object sender, RoutedEventArgs e)
+        {
+            if (ChkAutoHideDock == null) return;
+            _isDockAutoHide = ChkAutoHideDock.IsChecked == true;
+            _settings.AutoHideDock = _isDockAutoHide;
+            _settings.Save();
+            UpdateDockAutoHideUI();
+            ShowToast(_isDockAutoHide ? "Toolbar: Auto-Hide (Float)" : "Toolbar: Pinned", ToastType.Info);
+        }
+
+        private void BtnOpenCacheFolder_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Directory.CreateDirectory(CacheDir);
+                Process.Start(new ProcessStartInfo("explorer.exe", CacheDir) { UseShellExecute = true });
+                ShowToast("Opened cache folder in Explorer", ToastType.Info);
+            }
+            catch (Exception ex)
+            {
+                ShowToast("Could not open cache: " + ex.Message, ToastType.Error);
+            }
+        }
+
+        private void BtnClearCacheStorage_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (Directory.Exists(CacheDir))
+                {
+                    var files = Directory.GetFiles(CacheDir);
+                    foreach (var f in files)
+                    {
+                        try { File.Delete(f); } catch { }
+                    }
+                }
+                UpdateStorageStats();
+                ShowToast("Cache storage cleared", ToastType.Success);
+            }
+            catch (Exception ex)
+            {
+                ShowToast("Error clearing cache: " + ex.Message, ToastType.Error);
+            }
+        }
+
+        private void BtnCanvasQuickCleanCache_Click(object sender, MouseButtonEventArgs e)
+        {
+            e.Handled = true;
+            try
+            {
+                if (Directory.Exists(CacheDir))
+                {
+                    var di = new DirectoryInfo(CacheDir);
+                    long totalBytes = 0;
+                    int count = 0;
+                    foreach (var file in di.GetFiles())
+                    {
+                        try
+                        {
+                            totalBytes += file.Length;
+                            file.Delete();
+                            count++;
+                        }
+                        catch { }
+                    }
+                    double freedMb = totalBytes / (1024.0 * 1024.0);
+                    foreach (var c in _cards)
+                    {
+                        if (!string.IsNullOrEmpty(c.LocalPath) && c.LocalPath.StartsWith(CacheDir, StringComparison.OrdinalIgnoreCase))
+                        {
+                            c.LocalPath = "";
+                        }
+                    }
+                    UpdateStorageStats();
+                    ShowToast($"Cache cleaned ({count} files, {freedMb:F1} MB freed)", ToastType.Success, 2800);
+                }
+                else
+                {
+                    ShowToast("Cache is already empty", ToastType.Info, 2000);
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowToast($"Failed to clean cache: {ex.Message}", ToastType.Error);
+            }
+        }
+
+        private void UpdateStorageStats()
+        {
+            if (TxtStatCards != null) TxtStatCards.Text = _cards.Count.ToString();
+            if (TxtStatGroups != null) TxtStatGroups.Text = _groups.Count.ToString();
+            if (TxtStatNotes != null) TxtStatNotes.Text = _cards.Count(c => c.IsNote || c.IsPaletteCard).ToString();
+
+            try
+            {
+                if (Directory.Exists(CacheDir))
+                {
+                    var di = new DirectoryInfo(CacheDir);
+                    long totalBytes = di.EnumerateFiles().Sum(f => f.Length);
+                    double mb = totalBytes / (1024.0 * 1024.0);
+                    if (TxtCanvasCacheSize != null)
+                    {
+                        TxtCanvasCacheSize.Text = mb < 0.1 && totalBytes > 0 ? "Cache: <0.1 MB" : $"Cache: {mb:F1} MB";
+                    }
+                }
+                else if (TxtCanvasCacheSize != null)
+                {
+                    TxtCanvasCacheSize.Text = "Cache: 0 MB";
+                }
+            }
+            catch { }
+        }
+
+        private void BtnOpenX_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo("https://x.com/migi_gn") { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                ShowToast("Could not open browser: " + ex.Message, ToastType.Error);
+            }
+        }
+
+        private void BtnCopyEmail_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Clipboard.SetText("gnmigi@gmail.com");
+                ShowToast("Email copied: gnmigi@gmail.com", ToastType.Success);
+            }
+            catch
+            {
+                ShowToast("gnmigi@gmail.com", ToastType.Info);
+            }
+        }
+
+        private void BtnRefreshAssoc_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                string exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath))
+                {
+                    using (var key = Registry.CurrentUser.CreateSubKey(@"Software\Classes\.dropboard"))
+                    {
+                        key.SetValue("", "DropBoard.Project");
+                    }
+                    using (var key = Registry.CurrentUser.CreateSubKey(@"Software\Classes\DropBoard.Project\DefaultIcon"))
+                    {
+                        key.SetValue("", $"{exePath},0");
+                    }
+                    using (var key = Registry.CurrentUser.CreateSubKey(@"Software\Classes\DropBoard.Project\shell\open\command"))
+                    {
+                        key.SetValue("", $"\"{exePath}\" \"%1\"");
+                    }
+                }
+                ShowToast("File association (.dropboard) refreshed!", ToastType.Success);
+            }
+            catch (Exception ex)
+            {
+                ShowToast("Assoc error: " + ex.Message, ToastType.Error);
+            }
+        }
+
+        #endregion
+
+        private void BtnAddNode_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("Production Nodes (Note, Typography, VFX) will be available in Fase 2!", "DropBoard Nodes", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void BtnUndo_Click(object sender, RoutedEventArgs e)
+        {
+            Undo();
+        }
+
+        private void BtnRedo_Click(object sender, RoutedEventArgs e)
+        {
+            Redo();
+        }
+
+        private void BtnAeExport_Click(object sender, RoutedEventArgs e)
+        {
+            if (_selectedCards.Count > 0)
+            {
+                ExportCardsToAe(_selectedCards);
+            }
+            else if (_cards.Count > 0)
+            {
+                ExportCardsToAe(_cards);
+            }
+            else
+            {
+                ShowToast("Please add or select reference images to export to After Effects!", ToastType.Info);
+            }
+        }
+
+        private void BtnPsOpen_Click(object sender, RoutedEventArgs e)
+        {
+            if (_selectedCards.Count > 0)
+            {
+                SendCardToPs(_selectedCards.First());
+            }
+            else if (_cards.Count > 0)
+            {
+                SendCardToPs(_cards.First());
+            }
+            else
+            {
+                ShowToast("Please add or select an image to open in Photoshop!", ToastType.Info);
+            }
+        }
+
+        private void BtnCopy_Click(object sender, RoutedEventArgs e)
+        {
+            if (_selectedCards.Count > 0)
+            {
+                CardItem first = _selectedCards.First();
+                Clipboard.SetImage(first.Bitmap);
+                ShowToast("Copied image to clipboard!", ToastType.Success);
+            }
+        }
+
+        private void BtnFloatToggle_Click(object sender, RoutedEventArgs e)
+        {
+            _isDockAutoHide = !_isDockAutoHide;
+            _settings.AutoHideDock = _isDockAutoHide;
+            _settings.Save();
+            UpdateDockAutoHideUI();
+            ShowToast(_isDockAutoHide ? "Toolbar set to Auto-Hide (Float)" : "Toolbar Pinned (Always Visible)", ToastType.Info);
+        }
+
+        private void ClearCanvasItems()
+        {
+            foreach (CardItem card in _cards)
+            {
+                if (card.PlayerControl != null)
+                {
+                    try { card.PlayerControl.Dispose(); } catch { }
+                    card.PlayerControl = null;
+                }
+                WorldCanvas.Children.Remove(card.Container);
+            }
+            _cards.Clear();
+            _selectedCards.Clear();
+
+            foreach (GroupItem group in _groups)
+            {
+                WorldCanvas.Children.Remove(group.Container);
+            }
+            _groups.Clear();
+            _selectedGroups.Clear();
+
+            UpdateStatusCounts();
+            UpdateGroupCounts();
+            UpdateStorageStats();
+        }
+
+        private void BtnClear_Click(object sender, RoutedEventArgs e)
+        {
+            if (_cards.Count == 0) return;
+            if (MessageBox.Show("Clear all reference cards from board?", "DropBoard Clear", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+            {
+                RecordUndo("Clear Board");
+                ClearCanvasItems();
+                EmptyStateOverlay.Visibility = Visibility.Visible;
+                ScheduleAutoSave();
+                ShowToast("Canvas cleared", ToastType.Info);
+            }
+        }
+
+        #region Undo / Redo & ContextMenu Engine
+
+        private CanvasSnapshot CreateCurrentSnapshot(string actionName)
+        {
+            return new CanvasSnapshot
+            {
+                ActionName = actionName,
+                MatrixM11 = CanvasMatrixTransform.Matrix.M11,
+                MatrixOffsetX = CanvasMatrixTransform.Matrix.OffsetX,
+                MatrixOffsetY = CanvasMatrixTransform.Matrix.OffsetY,
+                Groups = _groups.Select(g => new GroupSnapshot
+                {
+                    Id = g.Id,
+                    Title = g.Title,
+                    Color = g.Color,
+                    Notes = g.Notes,
+                    X = g.X,
+                    Y = g.Y,
+                    Width = g.Width,
+                    Height = g.Height
+                }).ToList(),
+                Cards = _cards.Select(c => new CardSnapshot
+                {
+                    Id = c.Id,
+                    GroupId = c.GroupId,
+                    X = c.X,
+                    Y = c.Y,
+                    Width = c.Width,
+                    Height = c.Height,
+                    LocalPath = c.LocalPath,
+                    Base64Data = c.Base64Data,
+                    Bitmap = c.Bitmap,
+                    OriginalBitmap = c.OriginalBitmap ?? c.Bitmap,
+                    BaseWidth = c.BaseWidth,
+                    BaseHeight = c.BaseHeight,
+                    BaseX = c.BaseX,
+                    BaseY = c.BaseY,
+                    CropTop = c.CropTop,
+                    CropRight = c.CropRight,
+                    CropBottom = c.CropBottom,
+                    CropLeft = c.CropLeft,
+                    IsYouTube = c.IsYouTube,
+                    YouTubeId = c.YouTubeId,
+                    YouTubeUrl = c.YouTubeUrl,
+                    IsNote = c.IsNote,
+                    NoteText = c.NoteText,
+                    NoteFontFamily = c.NoteFontFamily,
+                    NoteFontSize = c.NoteFontSize,
+                    NoteTextColor = c.NoteTextColor,
+                    NoteBgColor = c.NoteBgColor,
+                    NoteAlignment = c.NoteAlignment,
+                    IsPaletteCard = c.IsPaletteCard,
+                    PaletteColorCount = c.PaletteColorCount,
+                    PaletteMood = c.PaletteMood,
+                    PaletteRows = c.PaletteRows,
+                    LinkedSourceCardId = c.IsPaletteCard ? c.LinkedSourceImageCard?.Id : null,
+                    PalettePinsData = c.IsPaletteCard && c.ActivePalettePins != null && c.ActivePalettePins.Count > 0
+                        ? JsonSerializer.Serialize(c.ActivePalettePins) : ""
+                }).ToList()
+            };
+        }
+
+        private void RecordUndo(string actionName)
+        {
+            if (_isApplyingSnapshot || _isRestoringSession) return;
+
+            var snap = CreateCurrentSnapshot(actionName);
+            _undoStack.Push(snap);
+            if (_undoStack.Count > 50)
+            {
+                var list = _undoStack.ToList();
+                list.RemoveAt(list.Count - 1);
+                _undoStack.Clear();
+                for (int i = list.Count - 1; i >= 0; i--) _undoStack.Push(list[i]);
+            }
+            _redoStack.Clear();
+        }
+
+        private void Undo()
+        {
+            if (_undoStack.Count == 0) return;
+
+            var currentSnap = CreateCurrentSnapshot("Current");
+            _redoStack.Push(currentSnap);
+
+            var snap = _undoStack.Pop();
+            ApplySnapshot(snap);
+            ShowToast($"Undo: {snap.ActionName}", ToastType.Info);
+        }
+
+        private void Redo()
+        {
+            if (_redoStack.Count == 0) return;
+
+            var currentSnap = CreateCurrentSnapshot("Current");
+            _undoStack.Push(currentSnap);
+
+            var snap = _redoStack.Pop();
+            ApplySnapshot(snap);
+            ShowToast($"Redo: {snap.ActionName}", ToastType.Info);
+        }
+
+        private void ApplySnapshot(CanvasSnapshot snap)
+        {
+            _isApplyingSnapshot = true;
+            try
+            {
+                var snapCardIds = snap.Cards.Select(c => c.Id).ToHashSet();
+
+                // 1. Remove only cards that no longer exist in this snapshot
+                for (int i = _cards.Count - 1; i >= 0; i--)
+                {
+                    var card = _cards[i];
+                    if (!snapCardIds.Contains(card.Id))
+                    {
+                        if (card.PlayerControl != null)
+                        {
+                            try { card.PlayerControl.Dispose(); } catch { }
+                            card.PlayerControl = null;
+                        }
+                        WorldCanvas.Children.Remove(card.Container);
+                        _cards.RemoveAt(i);
+                        _selectedCards.Remove(card);
+                    }
+                }
+
+                var existingMap = _cards.ToDictionary(c => c.Id);
+
+                // 2. Reconcile existing cards (smoothly restore pos/size) or create new ones
+                foreach (var cs in snap.Cards)
+                {
+                    if (existingMap.TryGetValue(cs.Id, out var existingCard))
+                    {
+                        // Existing card: restore position and dimensions WITHOUT rebuilding or pausing YouTube!
+                        existingCard.X = cs.X;
+                        existingCard.Y = cs.Y;
+                        existingCard.Width = cs.Width;
+                        existingCard.Height = cs.Height;
+                        existingCard.BaseX = cs.BaseX;
+                        existingCard.BaseY = cs.BaseY;
+                        existingCard.BaseWidth = cs.BaseWidth;
+                        existingCard.BaseHeight = cs.BaseHeight;
+                        existingCard.GroupId = cs.GroupId;
+
+                        if (existingCard.IsPaletteCard)
+                        {
+                            existingCard.PaletteMood = cs.PaletteMood;
+                            existingCard.PaletteColorCount = cs.PaletteColorCount;
+                            existingCard.PaletteRows = cs.PaletteRows;
+                            if (!string.IsNullOrEmpty(cs.LinkedSourceCardId) && existingMap.TryGetValue(cs.LinkedSourceCardId, out var linkedSrc))
+                            {
+                                existingCard.LinkedSourceImageCard = linkedSrc;
+                                linkedSrc.LinkedPaletteCard = existingCard;
+                            }
+                            if (!string.IsNullOrEmpty(cs.PalettePinsData))
+                            {
+                                try
+                                {
+                                    existingCard.ActivePalettePins = JsonSerializer.Deserialize<List<PalettePin>>(cs.PalettePinsData) ?? new();
+                                    UpdatePaletteCardContent(existingCard);
+                                }
+                                catch { }
+                            }
+                        }
+                        else if (existingCard.IsNote)
+                        {
+                            existingCard.NoteText = cs.NoteText;
+                            existingCard.NoteFontFamily = cs.NoteFontFamily;
+                            existingCard.NoteFontSize = cs.NoteFontSize;
+                            existingCard.NoteTextColor = cs.NoteTextColor;
+                            existingCard.NoteBgColor = cs.NoteBgColor;
+                            existingCard.NoteAlignment = cs.NoteAlignment;
+                            if (existingCard.NoteEditor != null)
+                            {
+                                existingCard.NoteEditor.Text = cs.NoteText;
+                                existingCard.NoteEditor.FontFamily = new FontFamily(cs.NoteFontFamily);
+                                existingCard.NoteEditor.FontSize = cs.NoteFontSize;
+                                existingCard.NoteEditor.TextAlignment = cs.NoteAlignment;
+                                try { existingCard.NoteEditor.Foreground = (Brush)new BrushConverter().ConvertFromString(cs.NoteTextColor)!; } catch { }
+                            }
+                            ApplyNoteBackground(existingCard, cs.NoteBgColor);
+                        }
+                        else if (cs.Bitmap != null && existingCard.Bitmap != cs.Bitmap && !existingCard.IsPlayingYouTube)
+                        {
+                            existingCard.Bitmap = cs.Bitmap;
+                            existingCard.ImageControl.Source = cs.Bitmap;
+                        }
+                    }
+                    else
+                    {
+                        if (cs.IsPaletteCard)
+                        {
+                            List<PalettePin>? pins = null;
+                            if (!string.IsNullOrEmpty(cs.PalettePinsData))
+                            {
+                                try { pins = JsonSerializer.Deserialize<List<PalettePin>>(cs.PalettePinsData); } catch { }
+                            }
+                            var newPaletteCard = AddPaletteCard(
+                                sourceCard: null,
+                                initialPins: pins,
+                                worldPosition: new Point(cs.X, cs.Y),
+                                customWidth: cs.Width,
+                                customHeight: cs.Height,
+                                mood: cs.PaletteMood,
+                                colorCount: cs.PaletteColorCount,
+                                rows: cs.PaletteRows,
+                                autoSelect: false);
+                            newPaletteCard.Id = cs.Id;
+                            newPaletteCard.GroupId = cs.GroupId;
+                            newPaletteCard.PendingLinkedSourceCardId = cs.LinkedSourceCardId;
+                        }
+                        else if (cs.IsNote)
+                        {
+                            var newNote = AddNoteCard(
+                                text: cs.NoteText,
+                                worldPosition: new Point(cs.X, cs.Y),
+                                customWidth: cs.Width,
+                                customHeight: cs.Height,
+                                fontFamily: cs.NoteFontFamily,
+                                fontSize: cs.NoteFontSize,
+                                textColor: cs.NoteTextColor,
+                                bgColor: cs.NoteBgColor,
+                                alignment: cs.NoteAlignment,
+                                autoSelect: false);
+                            newNote.Id = cs.Id;
+                            newNote.GroupId = cs.GroupId;
+                        }
+                        else
+                        {
+                            var newCard = AddImageCard(
+                                cs.Bitmap ?? cs.OriginalBitmap!,
+                                new Point(cs.X, cs.Y),
+                                customWidth: cs.Width,
+                                customHeight: cs.Height,
+                                localPath: cs.LocalPath,
+                                base64Data: cs.Base64Data,
+                                autoSelect: false,
+                                originalBitmap: cs.OriginalBitmap,
+                                baseWidth: cs.BaseWidth,
+                                baseHeight: cs.BaseHeight,
+                                cropLeft: cs.CropLeft,
+                                cropTop: cs.CropTop,
+                                cropRight: cs.CropRight,
+                                cropBottom: cs.CropBottom,
+                                isYouTube: cs.IsYouTube,
+                                youTubeId: cs.YouTubeId,
+                                youTubeUrl: cs.YouTubeUrl);
+                            newCard.Id = cs.Id;
+                            newCard.GroupId = cs.GroupId;
+                        }
+                    }
+                }
+
+                // Re-link newly created palette cards to their source image cards
+                foreach (var card in _cards)
+                {
+                    if (card.IsPaletteCard && !string.IsNullOrEmpty(card.PendingLinkedSourceCardId))
+                    {
+                        var src = _cards.FirstOrDefault(c => c.Id == card.PendingLinkedSourceCardId);
+                        if (src != null)
+                        {
+                            card.LinkedSourceImageCard = src;
+                            src.LinkedPaletteCard = card;
+                        }
+                    }
+                }
+
+                // Reconcile Groups
+                var snapGroupIds = (snap.Groups ?? new List<GroupSnapshot>()).Select(g => g.Id).ToHashSet();
+                for (int i = _groups.Count - 1; i >= 0; i--)
+                {
+                    var g = _groups[i];
+                    if (!snapGroupIds.Contains(g.Id))
+                    {
+                        WorldCanvas.Children.Remove(g.Container);
+                        _groups.RemoveAt(i);
+                        _selectedGroups.Remove(g);
+                    }
+                }
+
+                var existingGroupsMap = _groups.ToDictionary(g => g.Id);
+                if (snap.Groups != null)
+                {
+                    foreach (var gs in snap.Groups)
+                    {
+                        if (existingGroupsMap.TryGetValue(gs.Id, out var existingG))
+                        {
+                            existingG.X = gs.X;
+                            existingG.Y = gs.Y;
+                            existingG.Width = gs.Width;
+                            existingG.Height = gs.Height;
+                            existingG.Title = gs.Title;
+                            existingG.Color = gs.Color;
+                            existingG.Notes = gs.Notes;
+                            Canvas.SetLeft(existingG.Container, gs.X);
+                            Canvas.SetTop(existingG.Container, gs.Y);
+                            existingG.Container.Width = Math.Max(200, gs.Width);
+                            existingG.Container.Height = Math.Max(150, gs.Height);
+                            if (existingG.TitleText != null) existingG.TitleText.Text = gs.Title;
+                            if (existingG.NotesBox != null) existingG.NotesBox.Text = gs.Notes;
+                            if (existingG.FrameBorder != null)
+                            {
+                                try
+                                {
+                                    var bc = (Color)ColorConverter.ConvertFromString(gs.Color);
+                                    existingG.FrameBorder.BorderBrush = new SolidColorBrush(bc);
+                                }
+                                catch { }
+                            }
+                            if (existingG.ColorDot != null)
+                            {
+                                try
+                                {
+                                    var bc = (Color)ColorConverter.ConvertFromString(gs.Color);
+                                    existingG.ColorDot.Background = new SolidColorBrush(bc);
+                                }
+                                catch { }
+                            }
+                        }
+                        else
+                        {
+                            AddSceneGroup(
+                                title: gs.Title,
+                                notes: gs.Notes,
+                                customX: gs.X,
+                                customY: gs.Y,
+                                width: gs.Width,
+                                height: gs.Height,
+                                color: gs.Color,
+                                customId: gs.Id,
+                                recordUndo: false);
+                        }
+                    }
+                }
+                UpdateGroupCounts();
+
+                UpdateStatusCounts();
+                EmptyStateOverlay.Visibility = _cards.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+                SyncActiveHwndPositions(updateSize: true);
+                ScheduleAutoSave();
+            }
+            finally
+            {
+                _isApplyingSnapshot = false;
+            }
+        }
+
+        #region Toast Notification System
+
+        public void ShowToast(string message, ToastType type = ToastType.Info, int durationMs = 2800)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                // Prevent duplicate spam of identical toast message
+                if (ToastContainer.Children.Count > 0)
+                {
+                    var lastToast = ToastContainer.Children[^1] as FrameworkElement;
+                    if (lastToast?.Tag as string == message)
+                    {
+                        return;
+                    }
+                }
+
+                // Cap maximum visible toasts to 3 so it never stacks up to the top!
+                while (ToastContainer.Children.Count >= 3)
+                {
+                    ToastContainer.Children.RemoveAt(0);
+                }
+
+                Border toast = new Border
+                {
+                    Tag = message,
+                    Background = new SolidColorBrush(Color.FromArgb(242, 20, 24, 33)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(45, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8),
+                    Margin = new Thickness(0, 7, 0, 0),
+                    Opacity = 0,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    SnapsToDevicePixels = true,
+                    Effect = new DropShadowEffect
+                    {
+                        Color = Colors.Black,
+                        BlurRadius = 14,
+                        ShadowDepth = 3,
+                        Opacity = 0.5
+                    }
+                };
+
+                Color accentColor = type switch
+                {
+                    ToastType.Success => Color.FromRgb(16, 185, 129), // #10B981 emerald
+                    ToastType.Error => Color.FromRgb(239, 68, 68),     // #EF4444 red
+                    _ => Color.FromRgb(59, 130, 246)                  // #3B82F6 blue
+                };
+
+                Grid grid = new Grid();
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                // Accent indicator bar on left
+                Border accentBar = new Border
+                {
+                    Width = 4,
+                    Background = new SolidColorBrush(accentColor),
+                    CornerRadius = new CornerRadius(8, 0, 0, 8)
+                };
+                Grid.SetColumn(accentBar, 0);
+                grid.Children.Add(accentBar);
+
+                // Toast message text
+                TextBlock txt = new TextBlock
+                {
+                    Text = message,
+                    Foreground = Brushes.White,
+                    FontSize = 12.5,
+                    FontFamily = new FontFamily("Segoe UI, Inter, Sans-serif"),
+                    FontWeight = FontWeights.Normal,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(12, 8, 16, 8)
+                };
+                Grid.SetColumn(txt, 1);
+                grid.Children.Add(txt);
+
+                toast.Child = grid;
+
+                TranslateTransform translate = new TranslateTransform(0, 10);
+                toast.RenderTransform = translate;
+
+                ToastContainer.Children.Add(toast);
+
+                // Smooth slide-in & fade-in
+                DoubleAnimation animFadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(200))
+                {
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+                };
+                DoubleAnimation animSlideIn = new DoubleAnimation(10, 0, TimeSpan.FromMilliseconds(200))
+                {
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
+                };
+                toast.BeginAnimation(UIElement.OpacityProperty, animFadeIn);
+                translate.BeginAnimation(TranslateTransform.YProperty, animSlideIn);
+
+                // Auto dismiss timer
+                DispatcherTimer timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(durationMs) };
+                timer.Tick += (s, e) =>
+                {
+                    timer.Stop();
+                    DoubleAnimation animFadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(220));
+                    DoubleAnimation animSlideOut = new DoubleAnimation(0, 20, TimeSpan.FromMilliseconds(220))
+                    {
+                        EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
+                    };
+                    animFadeOut.Completed += (s2, e2) =>
+                    {
+                        ToastContainer.Children.Remove(toast);
+                    };
+                    toast.BeginAnimation(UIElement.OpacityProperty, animFadeOut);
+                    translate.BeginAnimation(TranslateTransform.XProperty, animSlideOut);
+                };
+                timer.Start();
+            });
+        }
+
+        #endregion
+
+        private static UIElement CreateMenuIcon(string pathData, string strokeColor = "#94A3B8")
+        {
+            Viewbox vb = new Viewbox { Width = 15, Height = 15, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            Canvas c = new Canvas { Width = 24, Height = 24 };
+            System.Windows.Shapes.Path p = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse(pathData),
+                Stroke = new SolidColorBrush((Color)ColorConverter.ConvertFromString(strokeColor)),
+                StrokeThickness = 2.0,
+                Fill = Brushes.Transparent,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round
+            };
+            c.Children.Add(p);
+            vb.Child = c;
+            return vb;
+        }
+
+        private static UIElement CreateBadgeIcon(string text, string textColor, string bgColor, string borderColor)
+        {
+            Border b = new Border
+            {
+                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(bgColor)),
+                BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(borderColor)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(3),
+                Padding = new Thickness(4, 1, 4, 1),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            TextBlock tb = new TextBlock
+            {
+                Text = text,
+                FontSize = 9.5,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString(textColor))
+            };
+            b.Child = tb;
+            return b;
+        }
+
+        private static MenuItem CreateRichMenuItem(UIElement icon, string title, string subtitle, RoutedEventHandler onClick, string? titleColor = null)
+        {
+            MenuItem mi = new MenuItem();
+            Grid grid = new Grid { Margin = new Thickness(2, 2, 10, 2) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            Grid.SetColumn((FrameworkElement)icon, 0);
+            grid.Children.Add(icon);
+
+            StackPanel sp = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
+            TextBlock tbTitle = new TextBlock
+            {
+                Text = title,
+                FontSize = 12.0,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = titleColor != null 
+                    ? new SolidColorBrush((Color)ColorConverter.ConvertFromString(titleColor)) 
+                    : new SolidColorBrush(Color.FromRgb(241, 245, 249))
+            };
+            sp.Children.Add(tbTitle);
+
+            if (!string.IsNullOrEmpty(subtitle))
+            {
+                TextBlock tbSub = new TextBlock
+                {
+                    Text = subtitle,
+                    FontSize = 10.0,
+                    Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                    Margin = new Thickness(0, 1, 0, 0)
+                };
+                sp.Children.Add(tbSub);
+            }
+
+            Grid.SetColumn(sp, 1);
+            grid.Children.Add(sp);
+
+            mi.Header = grid;
+            mi.Click += onClick;
+            return mi;
+        }
+
+        private ContextMenu CreateCardContextMenu(CardItem item)
+        {
+            ContextMenu cm = new ContextMenu();
+
+            if (item.IsNote)
+            {
+                // Category Header: "STICKY NOTE"
+                MenuItem miHeaderNote = new MenuItem
+                {
+                    Header = new TextBlock
+                    {
+                        Text = "STICKY NOTE",
+                        FontSize = 9.0,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                        Margin = new Thickness(8, 4, 8, 4)
+                    },
+                    IsEnabled = false,
+                    Focusable = false
+                };
+                cm.Items.Add(miHeaderNote);
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 16,4 h 2 a 2,2 0 0 1 2,2 v 14 a 2,2 0 0 1 -2,2 H 6 a 2,2 0 0 1 -2,-2 V 6 a 2,2 0 0 1 2,-2 h 2 M 9,2 h 6 a 1,1 0 0 1 1,1 v 2 a 1,1 0 0 1 -1,1 H 9 a 1,1 0 0 1 -1,-1 V 3 a 1,1 0 0 1 1,-1 z"),
+                    "Copy Text",
+                    "Copy note contents to clipboard",
+                    (s, e) =>
+                    {
+                        try
+                        {
+                            Clipboard.SetText(item.NoteText);
+                            ShowToast("Copied note text to clipboard", ToastType.Success);
+                        }
+                        catch (Exception ex)
+                        {
+                            ShowToast("Copy failed: " + ex.Message, ToastType.Error);
+                        }
+                    }
+                ));
+
+                MenuItem miBg = new MenuItem
+                {
+                    Header = "Background Style",
+                    Icon = CreateMenuIcon("M 12,2 L 2,7 L 12,12 L 22,7 Z M 2,17 L 12,22 L 22,17 M 2,12 L 12,17 L 22,12")
+                };
+                string[] styles = new[] { "Transparent", "Dark Glass", "Solid Dark", "Yellow Sticky", "Cyan Sticky" };
+                foreach (string st in styles)
+                {
+                    MenuItem sub = new MenuItem { Header = st };
+                    sub.Click += (s, e) =>
+                    {
+                        ApplyNoteBackground(item, st);
+                        ScheduleAutoSave();
+                    };
+                    miBg.Items.Add(sub);
+                }
+                cm.Items.Add(miBg);
+
+                cm.Items.Add(new Separator());
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 12,4 L 12,20 M 6,10 L 12,4 L 18,10"),
+                    "Bring to Front",
+                    "Stack above other items",
+                    (s, e) =>
+                    {
+                        _highestZ++;
+                        Panel.SetZIndex(item.Container, _highestZ);
+                    }
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 12,20 L 12,4 M 6,14 L 12,20 L 18,14"),
+                    "Send to Back",
+                    "Stack below other items (Ctrl + [)",
+                    (s, e) =>
+                    {
+                        Panel.SetZIndex(item.Container, --_lowestZ);
+                        ScheduleAutoSave();
+                    }
+                ));
+
+                cm.Items.Add(new Separator());
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 3,6 h 18 M 19,6 v 14 a 2,2 0 0 1 -2,2 H 7 a 2,2 0 0 1 -2,-2 V 6 M 8,6 V 4 a 2,2 0 0 1 2,-2 h 4 a 2,2 0 0 1 2,2 v 2", "#EF4444"),
+                    "Delete Note",
+                    "Remove from canvas",
+                    (s, e) => RemoveCard(item),
+                    titleColor: "#EF4444"
+                ));
+
+                return cm;
+            }
+            else if (item.IsPaletteCard)
+            {
+                // Category Header: "LIVE COLOR PALETTE"
+                MenuItem miHeaderPalette = new MenuItem
+                {
+                    Header = new TextBlock
+                    {
+                        Text = "LIVE COLOR PALETTE",
+                        FontSize = 9.0,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                        Margin = new Thickness(8, 4, 8, 4)
+                    },
+                    IsEnabled = false,
+                    Focusable = false
+                };
+                cm.Items.Add(miHeaderPalette);
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 4,4 L 10,4 M 4,10 L 10,10 M 14,14 L 20,14 M 14,20 L 20,20", "#FBBF24"),
+                    "Randomize Colors",
+                    "Re-extract random palette tones",
+                    (s, e) => RefreshPaletteCardFromSource(item, isRandom: true)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 12,2 A 7,7 0 0 0 5,9 c 0,5.25 7,13 7,13 s 7,-7.75 7,-13 a 7,7 0 0 0 -7,-7 z", "#38BDF8"),
+                    "Toggle Sampling Pins",
+                    "Show or hide live pins on image",
+                    (s, e) =>
+                    {
+                        if (item.LinkedSourceImageCard == null || !_cards.Contains(item.LinkedSourceImageCard))
+                        {
+                            var candidate = _selectedCards.FirstOrDefault(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null)
+                                         ?? _cards.FirstOrDefault(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null);
+                            if (candidate != null)
+                            {
+                                item.LinkedSourceImageCard = candidate;
+                                candidate.LinkedPaletteCard = item;
+                                if (candidate.ActivePalettePins == null || candidate.ActivePalettePins.Count == 0)
+                                    candidate.ActivePalettePins = item.ActivePalettePins;
+                                ScheduleAutoSave();
+                            }
+                        }
+
+                        if (item.LinkedSourceImageCard != null)
+                        {
+                            var src = item.LinkedSourceImageCard;
+                            src.LinkedPaletteCard = item;
+                            if (src.ActivePalettePins == null || src.ActivePalettePins.Count == 0)
+                                src.ActivePalettePins = item.ActivePalettePins;
+
+                            if (src.IsPaletteMode)
+                                CloseCanvasPaletteMode(src);
+                            else
+                                StartCanvasPaletteMode(src);
+                        }
+                        else
+                        {
+                            ShowToast("Click or select an image on the board first", ToastType.Info);
+                        }
+                    }
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 10,14 a 5,5 0 0 0 7.07,0 l 3.54,-3.54 a 5,5 0 0 0 -7.07,-7.07 l -1.49,1.49 M 14,10 a 5,5 0 0 0 -7.07,0 l -3.54,3.54 a 5,5 0 0 0 7.07,7.07 l 1.49,-1.49", "#34D399"),
+                    "Link to Selected Image",
+                    "Connect palette to currently selected reference image",
+                    (s, e) =>
+                    {
+                        var target = _selectedCards.FirstOrDefault(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null)
+                                  ?? _cards.FirstOrDefault(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null);
+                        if (target != null)
+                        {
+                            item.LinkedSourceImageCard = target;
+                            target.LinkedPaletteCard = item;
+                            target.ActivePalettePins = item.ActivePalettePins;
+                            ScheduleAutoSave();
+                            ShowToast("Palette connected to reference image!", ToastType.Success);
+                            StartCanvasPaletteMode(target);
+                        }
+                        else
+                        {
+                            ShowToast("Please select an image on the canvas first", ToastType.Info);
+                        }
+                    }
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateBadgeIcon("Ae", "#9999FF", "#2E284A", "#4A3F75"),
+                    "Export to After Effects",
+                    "Send palette graphic to AE composition",
+                    (s, e) => ExportCanvasPaletteToAe(item)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 16,4 h 2 a 2,2 0 0 1 2,2 v 14 a 2,2 0 0 1 -2,2 H 6 a 2,2 0 0 1 -2,-2 V 6 a 2,2 0 0 1 2,-2 h 2 M 9,2 h 6 a 1,1 0 0 1 1,1 v 2 a 1,1 0 0 1 -1,1 H 9 a 1,1 0 0 1 -1,-1 V 3 a 1,1 0 0 1 1,-1 z"),
+                    "Copy Palette Image",
+                    "Copy palette graphic to clipboard",
+                    (s, e) => CopyCardToClipboard(item)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 3,5 h 18 v 6 h -18 z M 3,13 h 18 v 6 h -18 z", "#93C5FD"),
+                    item.PaletteRows == 1 ? "Switch to 2 Rows" : "Switch to 1 Row",
+                    "Toggle 1 or 2 rows layout",
+                    (s, e) =>
+                    {
+                        item.PaletteRows = item.PaletteRows == 1 ? 2 : 1;
+                        UpdatePaletteCardContent(item);
+                        RebuildCardHoverToolbar(item);
+                        ScheduleAutoSave();
+                    }
+                ));
+
+                cm.Items.Add(new Separator());
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 12,4 L 12,20 M 6,10 L 12,4 L 18,10"),
+                    "Bring to Front",
+                    "Stack above other items",
+                    (s, e) =>
+                    {
+                        _highestZ++;
+                        Panel.SetZIndex(item.Container, _highestZ);
+                    }
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 12,20 L 12,4 M 6,14 L 12,20 L 18,14"),
+                    "Send to Back",
+                    "Stack below other items (Ctrl + [)",
+                    (s, e) =>
+                    {
+                        Panel.SetZIndex(item.Container, --_lowestZ);
+                        ScheduleAutoSave();
+                    }
+                ));
+
+                cm.Items.Add(new Separator());
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 3,6 h 18 M 19,6 v 14 a 2,2 0 0 1 -2,2 H 7 a 2,2 0 0 1 -2,-2 V 6 M 8,6 V 4 a 2,2 0 0 1 2,-2 h 4 a 2,2 0 0 1 2,2 v 2", "#EF4444"),
+                    "Delete Palette Card",
+                    "Remove palette from canvas",
+                    (s, e) => RemoveCard(item),
+                    titleColor: "#EF4444"
+                ));
+
+                return cm;
+            }
+
+            // Category Header: "REFERENCE"
+            MenuItem miHeader = new MenuItem
+            {
+                Header = new TextBlock
+                {
+                    Text = "REFERENCE",
+                    FontSize = 9.0,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                    Margin = new Thickness(8, 4, 8, 4)
+                },
+                IsEnabled = false,
+                Focusable = false
+            };
+            cm.Items.Add(miHeader);
+
+            // YouTube specific actions
+            if (item.IsYouTube)
+            {
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateBadgeIcon("YT", "#FF0000", "#3E1010", "#802020"),
+                    item.IsPlayingYouTube ? "Stop Video" : "Play Video",
+                    "Toggle in-card YouTube player",
+                    (s, e) => ToggleYouTubePlayback(item)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateBadgeIcon("Ae", "#9999FF", "#2E284A", "#4A3F75"),
+                    "Snap Frame to After Effects",
+                    "Capture video frame directly to AE comp",
+                    (s, e) => SnapYouTubeFrameToAE(item)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 18,13 v 6 a 2,2 0 0 1 -2,2 H 5 a 2,2 0 0 1 -2,-2 V 8 a 2,2 0 0 1 2,-2 h 6 M 15,3 h 6 v 6 M 10,14 L 21,3"),
+                    "Open in Browser",
+                    "View video on youtube.com",
+                    (s, e) =>
+                    {
+                        if (!string.IsNullOrEmpty(item.YouTubeUrl))
+                            Process.Start(new ProcessStartInfo { FileName = item.YouTubeUrl, UseShellExecute = true });
+                    }
+                ));
+
+                cm.Items.Add(new Separator());
+            }
+
+            // 1. Send to After Effects
+            cm.Items.Add(CreateRichMenuItem(
+                CreateBadgeIcon("Ae", "#9999FF", "#2E284A", "#4A3F75"),
+                "Send to After Effects",
+                "Auto-import footage to comp",
+                (s, e) =>
+                {
+                    if (_selectedCards.Contains(item) && _selectedCards.Count > 1)
+                        ExportCardsToAe(_selectedCards);
+                    else
+                        ExportCardsToAe(new[] { item });
+                }
+            ));
+
+            // 2. Open in Photoshop
+            cm.Items.Add(CreateRichMenuItem(
+                CreateBadgeIcon("Ps", "#31A8FF", "#16314A", "#1D4C75"),
+                "Open in Photoshop",
+                "Open high-res file",
+                (s, e) => SendCardToPs(item)
+            ));
+
+            // 3. Generate Color Palette (Adobe Style)
+            cm.Items.Add(CreateRichMenuItem(
+                CreateBadgeIcon("🎨", "#38BDF8", "#1E293B", "#38BDF8"),
+                "Extract Color Palette",
+                "Real-time canvas palette generator & interactive sample pins",
+                (s, e) => StartCanvasPaletteMode(item)
+            ));
+
+            cm.Items.Add(new Separator());
+
+            // 3. Copy Image File
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 9,9 L 22,9 L 22,22 L 9,22 Z M 5,15 L 4,15 A 2,2 0 0 1 2,13 L 2,4 A 2,2 0 0 1 4,2 L 13,2 A 2,2 0 0 1 15,4 L 15,5"),
+                "Copy Image File",
+                "Paste directly to any software",
+                (s, e) =>
+                {
+                    EnsureLocalCache(item);
+                    if (!string.IsNullOrEmpty(item.LocalPath) && File.Exists(item.LocalPath))
+                    {
+                        var col = new System.Collections.Specialized.StringCollection { item.LocalPath };
+                        Clipboard.SetFileDropList(col);
+                        ShowToast("Copied image file to clipboard!", ToastType.Success);
+                    }
+                    else
+                    {
+                        Clipboard.SetImage(item.Bitmap);
+                        ShowToast("Copied image to clipboard!", ToastType.Success);
+                    }
+                }
+            ));
+
+            // 4. Reveal in Explorer
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 22,19 A 2,2 0 0 1 20,21 L 4,21 A 2,2 0 0 1 2,19 L 2,5 A 2,2 0 0 1 4,3 L 9,3 L 11,6 L 20,6 A 2,2 0 0 1 22,8 Z"),
+                "Reveal in Explorer",
+                "Show cached source file",
+                (s, e) =>
+                {
+                    EnsureLocalCache(item);
+                    if (!string.IsNullOrEmpty(item.LocalPath) && File.Exists(item.LocalPath))
+                    {
+                        Process.Start("explorer.exe", $"/select,\"{item.LocalPath}\"");
+                    }
+                }
+            ));
+
+            cm.Items.Add(new Separator());
+
+            // 5. Crop / Mask Reference
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 6,2 L 6,16 A 2,2 0 0 0 8,18 L 22,18 M 18,22 L 18,8 A 2,2 0 0 0 16,6 L 2,6", "#38BDF8"),
+                "Crop / Mask Reference",
+                "Focus on specific area",
+                (s, e) => StartCropCard(item)
+            ));
+
+            // 6. Bring to Front
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 12,2 L 2,7 L 12,12 L 22,7 Z M 2,17 L 12,22 L 22,17 M 2,12 L 12,17 L 22,12"),
+                "Bring to Front",
+                "Stack above other items (Ctrl + ])",
+                (s, e) =>
+                {
+                    Panel.SetZIndex(item.Container, ++_highestZ);
+                    ScheduleAutoSave();
+                }
+            ));
+
+            // 6b. Send to Back
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 12,22 L 2,17 L 12,12 L 22,17 Z M 2,7 L 12,2 L 22,7 M 2,12 L 12,7 L 22,12"),
+                "Send to Back",
+                "Stack below other items (Ctrl + [)",
+                (s, e) =>
+                {
+                    Panel.SetZIndex(item.Container, --_lowestZ);
+                    ScheduleAutoSave();
+                }
+            ));
+
+            // 7. Reset 1:1 Scale
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 15,3 L 21,3 L 21,9 M 9,21 L 3,21 L 3,15 M 21,3 L 14,10 M 3,21 L 10,14", "#38BDF8"),
+                "Reset 1:1 Scale",
+                "",
+                (s, e) =>
+                {
+                    RecordUndo("Reset 1:1 Scale");
+                    item.Width = item.Bitmap.PixelWidth;
+                    item.Height = item.Bitmap.PixelHeight;
+                    ScheduleAutoSave();
+                    ShowToast("Reset 1:1 Scale", ToastType.Info);
+                }
+            ));
+
+            cm.Items.Add(new Separator());
+
+            // 8. Zoom to Reference
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 11,19 A 8,8 0 1 0 11,3 A 8,8 0 0 0 11,19 Z M 21,21 L 16.65,16.65"),
+                "Zoom to Reference",
+                "Focus canvas view on this image",
+                (s, e) => ZoomToCard(item)
+            ));
+
+            // 9. Delete Reference
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 3,6 L 5,6 L 21,6 M 19,6 L 19,20 A 2,2 0 0 1 17,22 L 7,22 A 2,2 0 0 1 5,20 L 5,6 M 8,6 L 8,4 A 2,2 0 0 1 10,2 L 14,2 A 2,2 0 0 1 16,4 L 16,6", "#EF4444"),
+                "Delete Reference",
+                "",
+                (s, e) =>
+                {
+                    DeleteSelectedCards();
+                    ShowToast("Deleted reference", ToastType.Info);
+                },
+                titleColor: "#EF4444"
+            ));
+
+            return cm;
+        }
+
+        #region Card Hover Quick-Action Toolbar & Interactive Crop
+
+        private Border CreateCardHoverToolbar(CardItem item)
+        {
+            Border pill = new Border
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0),
+                Background = new SolidColorBrush(Color.FromArgb(235, 24, 28, 38)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7),
+                Padding = new Thickness(5, 2, 5, 2),
+                Opacity = 0.0,
+                IsHitTestVisible = false,
+                Effect = new DropShadowEffect
+                {
+                    BlurRadius = 12,
+                    ShadowDepth = 3,
+                    Direction = 270,
+                    Opacity = 0.6,
+                    Color = Colors.Black
+                }
+            };
+
+            pill.MouseEnter += (s, e) =>
+            {
+                pill.BeginAnimation(UIElement.OpacityProperty, null);
+                pill.Opacity = 1.0;
+                pill.IsHitTestVisible = true;
+            };
+            pill.MouseLeave += (s, e) =>
+            {
+                if (item.IsPlayingYouTube || item.IsSelected || _isCardSubMenuOpen || item.IsPaletteMode) return;
+                DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                anim.Completed += (s2, e2) =>
+                {
+                    if (!item.Container.IsMouseOver && !pill.IsMouseOver && !item.IsPlayingYouTube && !item.IsSelected && !_isCardSubMenuOpen && !item.IsPaletteMode)
+                    {
+                        pill.IsHitTestVisible = false;
+                    }
+                };
+                pill.BeginAnimation(UIElement.OpacityProperty, anim);
+            };
+
+            StackPanel sp = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            // 1. Move grip button
+            StackPanel moveSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock moveGrip = new TextBlock
+            {
+                Text = item.IsNote ? "⋮⋮" : "::",
+                FontFamily = new FontFamily(item.IsNote ? "Segoe UI" : "Consolas, Segoe UI"),
+                FontSize = item.IsNote ? 12 : 11,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                Margin = item.IsNote ? new Thickness(0) : new Thickness(0, 0, 3, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            TextBlock moveTxt = new TextBlock
+            {
+                Text = "Move",
+                FontSize = 10.5,
+                Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = item.IsNote ? Visibility.Collapsed : Visibility.Visible
+            };
+            moveSp.Children.Add(moveGrip);
+            moveSp.Children.Add(moveTxt);
+
+            Border btnMove = new Border
+            {
+                Background = Brushes.Transparent,
+                Padding = item.IsNote ? new Thickness(4, 3, 4, 3) : new Thickness(6, 3, 6, 3),
+                CornerRadius = new CornerRadius(4),
+                Cursor = Cursors.SizeAll,
+                ToolTip = item.IsNote ? "Drag to Move Note" : "Drag to Move Reference Card",
+                Child = moveSp
+            };
+            btnMove.MouseLeftButtonDown += (s, e) =>
+            {
+                if (!item.IsSelected)
+                {
+                    SelectCard(item, addToSelection: false);
+                }
+                _isDraggingCards = true;
+                _cardDragStartMousePoint = e.GetPosition(CanvasContainer);
+                _cardsInitialPositions.Clear();
+                foreach (CardItem c in _selectedCards)
+                {
+                    _cardsInitialPositions[c] = new Point(c.X, c.Y);
+                }
+                SetWebViewHitTesting(false);
+                btnMove.CaptureMouse();
+                e.Handled = true;
+            };
+            btnMove.MouseMove += (s, e) =>
+            {
+                if (_isDraggingCards && btnMove.IsMouseCaptured)
+                {
+                    Point curPos = e.GetPosition(CanvasContainer);
+                    double dx = (curPos.X - _cardDragStartMousePoint.X) / CanvasMatrixTransform.Matrix.M11;
+                    double dy = (curPos.Y - _cardDragStartMousePoint.Y) / CanvasMatrixTransform.Matrix.M22;
+
+                    foreach (CardItem c in _selectedCards)
+                    {
+                        if (_cardsInitialPositions.TryGetValue(c, out Point initPos))
+                        {
+                            c.X = initPos.X + dx;
+                            c.Y = initPos.Y + dy;
+                        }
+                    }
+                    SyncActiveHwndPositions(updateSize: false);
+                    e.Handled = true;
+                }
+            };
+            btnMove.MouseLeftButtonUp += (s, e) =>
+            {
+                if (_isDraggingCards && btnMove.IsMouseCaptured)
+                {
+                    _isDraggingCards = false;
+                    SetWebViewHitTesting(true);
+                    btnMove.ReleaseMouseCapture();
+                    SyncActiveHwndPositions(updateSize: false);
+                    RecordUndo("Move Reference");
+                    ScheduleAutoSave();
+                    e.Handled = true;
+                }
+            };
+
+            Border CreatePillButton(string label, Color color, string tooltip, Action onClick, bool isBold = false)
+            {
+                TextBlock tb = new TextBlock
+                {
+                    Text = label,
+                    FontSize = 10.5,
+                    FontWeight = isBold ? FontWeights.SemiBold : FontWeights.Normal,
+                    Foreground = new SolidColorBrush(color),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Border b = new Border
+                {
+                    Background = Brushes.Transparent,
+                    Padding = new Thickness(6, 3, 6, 3),
+                    CornerRadius = new CornerRadius(4),
+                    Cursor = Cursors.Hand,
+                    ToolTip = tooltip,
+                    Child = tb
+                };
+                b.MouseEnter += (s, e) => b.Background = new SolidColorBrush(Color.FromArgb(35, 255, 255, 255));
+                b.MouseLeave += (s, e) => b.Background = Brushes.Transparent;
+                b.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected)
+                    {
+                        SelectCard(item, addToSelection: false);
+                    }
+                    onClick();
+                };
+                return b;
+            }
+
+            sp.Children.Add(btnMove);
+
+            if (item.IsYouTube)
+            {
+                // Dedicated, clean YouTube card toolbar (no redundant Ae Import or static Crop)
+                Border btnPlay = CreatePillButton(item.IsPlayingYouTube ? "⏹ Stop" : "▶ Play", Color.FromRgb(239, 68, 68), "Play / Stop Video in DropBoard", () =>
+                {
+                    ToggleYouTubePlayback(item);
+                }, isBold: true);
+                item.BtnPlayOverlay = btnPlay;
+
+                Border btnSnapAe = CreatePillButton("📸 AE", Color.FromRgb(165, 180, 252), "Snapshot clean video frame directly to Adobe After Effects", () =>
+                {
+                    SnapYouTubeFrameToAE(item);
+                }, isBold: true);
+
+                Border btnSnapBoard = CreatePillButton("📋 Board", Color.FromRgb(52, 211, 153), "Snapshot clean video frame to DropBoard canvas", () =>
+                {
+                    SnapYouTubeFrameToBoard(item);
+                }, isBold: true);
+
+                Border btnBrowser = CreatePillButton("↗", Color.FromRgb(147, 197, 253), "Open in External Browser", () =>
+                {
+                    if (!string.IsNullOrEmpty(item.YouTubeUrl))
+                    {
+                        Process.Start(new ProcessStartInfo { FileName = item.YouTubeUrl, UseShellExecute = true });
+                    }
+                });
+
+                Border btnCopy = CreatePillButton("Copy", Color.FromRgb(209, 213, 219), "Copy Image to Clipboard", () =>
+                {
+                    CopyCardToClipboard(item);
+                });
+
+                Border btnDel = CreatePillButton("✕", Color.FromRgb(239, 68, 68), "Delete Reference (Del)", () =>
+                {
+                    RemoveCard(item);
+                }, isBold: true);
+
+                sp.Children.Add(btnPlay);
+                sp.Children.Add(btnSnapAe);
+                sp.Children.Add(btnSnapBoard);
+                sp.Children.Add(btnBrowser);
+                sp.Children.Add(btnCopy);
+                sp.Children.Add(btnDel);
+            }
+            else if (item.IsNote)
+            {
+                Border CreateDivider() => new Border
+                {
+                    Width = 1,
+                    Height = 12,
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    Margin = new Thickness(3, 0, 3, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                // 1. Searchable Dark Font Family Picker Button
+                TextBlock txtFontName = new TextBlock
+                {
+                    Text = string.IsNullOrEmpty(item.NoteFontFamily) ? "Segoe UI ▾" : $"{item.NoteFontFamily} ▾",
+                    FontSize = 10.5,
+                    Foreground = new SolidColorBrush(Color.FromRgb(241, 245, 249)),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    MaxWidth = 72,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+
+                Border btnFontPicker = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 2, 5, 2),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Search and Change Font",
+                    Child = txtFontName
+                };
+                btnFontPicker.MouseEnter += (s, e) => btnFontPicker.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+                btnFontPicker.MouseLeave += (s, e) => btnFontPicker.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                btnFontPicker.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnFontPicker.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected)
+                    {
+                        SelectCard(item, addToSelection: false);
+                    }
+                    Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+                    {
+                        ShowFontPickerPopup(btnFontPicker, item, chosenFont =>
+                        {
+                            item.NoteFontFamily = chosenFont;
+                            txtFontName.Text = $"{chosenFont} ▾";
+                            if (item.NoteEditor != null)
+                            {
+                                item.NoteEditor.FontFamily = new FontFamily(chosenFont);
+                            }
+                            ScheduleAutoSave();
+                        });
+                    }));
+                };
+
+                // 2. Compact Font Size Button (Scroll Wheel or Click for Presets)
+                TextBlock txtSize = new TextBlock
+                {
+                    Text = $"{(int)item.NoteFontSize} ▾",
+                    FontSize = 10.5,
+                    Foreground = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                void StepFontSize(double delta)
+                {
+                    double newSize = Math.Clamp(item.NoteFontSize + delta, 8, 96);
+                    item.NoteFontSize = newSize;
+                    if (item.NoteEditor != null) item.NoteEditor.FontSize = newSize;
+                    txtSize.Text = $"{(int)newSize} ▾";
+                    ScheduleAutoSave();
+                }
+
+                Border btnFontSize = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 2, 5, 2),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Font Size (Scroll Wheel or Click for Presets)",
+                    Child = txtSize
+                };
+                btnFontSize.MouseEnter += (s, e) => btnFontSize.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+                btnFontSize.MouseLeave += (s, e) => btnFontSize.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                btnFontSize.MouseWheel += (s, e) =>
+                {
+                    e.Handled = true;
+                    StepFontSize(e.Delta > 0 ? 2 : -2);
+                };
+                btnFontSize.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnFontSize.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    ShowFontSizeMenu(btnFontSize, item, newSize =>
+                    {
+                        item.NoteFontSize = newSize;
+                        if (item.NoteEditor != null) item.NoteEditor.FontSize = newSize;
+                        txtSize.Text = $"{(int)newSize} ▾";
+                        ScheduleAutoSave();
+                    });
+                };
+
+                // 3. Compact Paragraph Alignment Buttons (Left | Center | Right)
+                Border CreateAlignBtn(string type, TextAlignment align, string tooltip)
+                {
+                    string pathData = type switch
+                    {
+                        "Left" => "M 2.5,3.5 H 13.5 M 2.5,7.5 H 9 M 2.5,11.5 H 13.5 M 2.5,15.5 H 7",
+                        "Center" => "M 2.5,3.5 H 13.5 M 4.5,7.5 H 11.5 M 2.5,11.5 H 13.5 M 5.5,15.5 H 10.5",
+                        "Right" => "M 2.5,3.5 H 13.5 M 7,7.5 H 13.5 M 2.5,11.5 H 13.5 M 9,15.5 H 13.5",
+                        _ => "M 2.5,3.5 H 13.5 M 2.5,7.5 H 9 M 2.5,11.5 H 13.5 M 2.5,15.5 H 7"
+                    };
+
+                    System.Windows.Shapes.Path p = new System.Windows.Shapes.Path
+                    {
+                        Data = Geometry.Parse(pathData),
+                        Stroke = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                        StrokeThickness = 1.7,
+                        StrokeStartLineCap = PenLineCap.Round,
+                        StrokeEndLineCap = PenLineCap.Round,
+                        SnapsToDevicePixels = true
+                    };
+
+                    Viewbox vb = new Viewbox
+                    {
+                        Width = 12,
+                        Height = 12,
+                        Child = p,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        HorizontalAlignment = HorizontalAlignment.Center
+                    };
+
+                    Border b = new Border
+                    {
+                        Width = 20,
+                        Height = 20,
+                        Background = Brushes.Transparent,
+                        CornerRadius = new CornerRadius(3),
+                        Cursor = Cursors.Hand,
+                        ToolTip = tooltip,
+                        Margin = new Thickness(0.5, 0, 0.5, 0),
+                        Child = vb,
+                        Tag = p
+                    };
+                    return b;
+                }
+
+                Border btnAlignL = CreateAlignBtn("Left", TextAlignment.Left, "Align Left");
+                Border btnAlignC = CreateAlignBtn("Center", TextAlignment.Center, "Align Center");
+                Border btnAlignR = CreateAlignBtn("Right", TextAlignment.Right, "Align Right");
+
+                void RefreshAlignState()
+                {
+                    void UpdateBtn(Border btn, TextAlignment align)
+                    {
+                        bool isActive = item.NoteAlignment == align;
+                        if (btn.Tag is System.Windows.Shapes.Path p)
+                        {
+                            p.Stroke = isActive
+                                ? new SolidColorBrush(Color.FromRgb(56, 189, 248))
+                                : new SolidColorBrush(Color.FromRgb(148, 163, 184));
+                        }
+                        btn.Background = isActive
+                            ? new SolidColorBrush(Color.FromArgb(50, 56, 189, 248))
+                            : Brushes.Transparent;
+                    }
+
+                    UpdateBtn(btnAlignL, TextAlignment.Left);
+                    UpdateBtn(btnAlignC, TextAlignment.Center);
+                    UpdateBtn(btnAlignR, TextAlignment.Right);
+                }
+                RefreshAlignState();
+
+                void WireAlign(Border btn, TextAlignment align)
+                {
+                    btn.MouseEnter += (s, e) =>
+                    {
+                        if (item.NoteAlignment != align)
+                            btn.Background = new SolidColorBrush(Color.FromArgb(35, 255, 255, 255));
+                    };
+                    btn.MouseLeave += (s, e) =>
+                    {
+                        if (item.NoteAlignment != align)
+                            btn.Background = Brushes.Transparent;
+                        else
+                            btn.Background = new SolidColorBrush(Color.FromArgb(50, 56, 189, 248));
+                    };
+                    btn.MouseLeftButtonDown += (s, e) =>
+                    {
+                        e.Handled = true;
+                        if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                        item.NoteAlignment = align;
+                        if (item.NoteEditor != null) item.NoteEditor.TextAlignment = align;
+                        RefreshAlignState();
+                        ScheduleAutoSave();
+                    };
+                }
+
+                WireAlign(btnAlignL, TextAlignment.Left);
+                WireAlign(btnAlignC, TextAlignment.Center);
+                WireAlign(btnAlignR, TextAlignment.Right);
+
+                StackPanel alignGroup = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(1, 0, 1, 0)
+                };
+                alignGroup.Children.Add(btnAlignL);
+                alignGroup.Children.Add(btnAlignC);
+                alignGroup.Children.Add(btnAlignR);
+
+                // 4. Background Style Compact Button
+                Border bgMiniDot = new Border
+                {
+                    Width = 10,
+                    Height = 10,
+                    CornerRadius = new CornerRadius(2),
+                    BorderThickness = new Thickness(1),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(140, 255, 255, 255)),
+                    Margin = new Thickness(0, 0, 3, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                void UpdateBgDot()
+                {
+                    bgMiniDot.Background = item.NoteBgColor switch
+                    {
+                        "Transparent" => Brushes.Transparent,
+                        "Dark Glass" => new SolidColorBrush(Color.FromArgb(140, 56, 189, 248)),
+                        "Solid Dark" => new SolidColorBrush(Color.FromRgb(30, 41, 59)),
+                        "Yellow Sticky" => new SolidColorBrush(Color.FromRgb(250, 204, 21)),
+                        "Cyan Sticky" => new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                        _ => Brushes.Transparent
+                    };
+                }
+                UpdateBgDot();
+
+                TextBlock txtBgChevron = new TextBlock
+                {
+                    Text = "▾",
+                    FontSize = 9.5,
+                    Foreground = new SolidColorBrush(Color.FromRgb(209, 213, 219)),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                StackPanel bgSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                bgSp.Children.Add(bgMiniDot);
+                bgSp.Children.Add(txtBgChevron);
+
+                Border btnBgPicker = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 3, 5, 3),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Note Background Style (Transparent, Dark Glass, Sticky)",
+                    Child = bgSp
+                };
+                btnBgPicker.MouseEnter += (s, e) => btnBgPicker.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+                btnBgPicker.MouseLeave += (s, e) => btnBgPicker.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                btnBgPicker.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnBgPicker.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    ShowNoteBgMenu(btnBgPicker, item, chosenBg =>
+                    {
+                        ApplyNoteBackground(item, chosenBg);
+                        UpdateBgDot();
+                        ScheduleAutoSave();
+                    });
+                };
+
+                // 5. Custom Color Picker Button
+                Border colorDot = new Border
+                {
+                    Width = 10,
+                    Height = 10,
+                    CornerRadius = new CornerRadius(5),
+                    BorderThickness = new Thickness(1),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(140, 255, 255, 255)),
+                    Margin = new Thickness(0, 0, 3, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                try
+                {
+                    colorDot.Background = (Brush)new BrushConverter().ConvertFromString(item.NoteTextColor)!;
+                }
+                catch
+                {
+                    colorDot.Background = Brushes.White;
+                }
+
+                TextBlock txtColorChevron = new TextBlock
+                {
+                    Text = "▾",
+                    FontSize = 9.5,
+                    Foreground = new SolidColorBrush(Color.FromRgb(209, 213, 219)),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                StackPanel colorBtnSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                colorBtnSp.Children.Add(colorDot);
+                colorBtnSp.Children.Add(txtColorChevron);
+
+                Border btnColor = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 3, 5, 3),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Custom Text Color (Palette & Hex Input)",
+                    Child = colorBtnSp
+                };
+                btnColor.MouseEnter += (s, e) => btnColor.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+                btnColor.MouseLeave += (s, e) => btnColor.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                btnColor.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnColor.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    ShowColorPickerPopup(btnColor, item, chosenHex =>
+                    {
+                        item.NoteTextColor = chosenHex;
+                        if (item.NoteEditor != null)
+                        {
+                            try
+                            {
+                                var brush = (Brush)new BrushConverter().ConvertFromString(chosenHex)!;
+                                item.NoteEditor.Foreground = brush;
+                                item.NoteEditor.CaretBrush = chosenHex == "#111827" || chosenHex == "#000000" ? Brushes.Black : Brushes.White;
+                                colorDot.Background = brush;
+                            }
+                            catch { }
+                        }
+                        ScheduleAutoSave();
+                    });
+                };
+
+                // 6. Overflow More Actions Button (•••)
+                Border btnMore = new Border
+                {
+                    Background = Brushes.Transparent,
+                    Padding = new Thickness(5, 2, 5, 2),
+                    CornerRadius = new CornerRadius(4),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "More Actions (Copy, Duplicate, Delete)",
+                    Child = new TextBlock
+                    {
+                        Text = "•••",
+                        FontSize = 9.5,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                };
+                btnMore.MouseEnter += (s, e) => btnMore.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                btnMore.MouseLeave += (s, e) => btnMore.Background = Brushes.Transparent;
+                btnMore.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnMore.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    ShowNoteMoreMenu(btnMore, item);
+                };
+
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnFontPicker);
+                sp.Children.Add(btnFontSize);
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(alignGroup);
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnBgPicker);
+                sp.Children.Add(btnColor);
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnMore);
+            }
+            else if (item.IsPaletteCard)
+            {
+                Border CreateDivider() => new Border
+                {
+                    Width = 1,
+                    Height = 14,
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    Margin = new Thickness(4, 0, 4, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                // 1. Mood Dropdown Pill
+                StackPanel moodSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                TextBlock txtMoodLabel = new TextBlock
+                {
+                    Text = $"{item.PaletteMood} ▾",
+                    FontSize = 10.5,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                moodSp.Children.Add(txtMoodLabel);
+
+                Border btnMood = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(40, 56, 189, 248)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(80, 56, 189, 248)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(6, 3, 6, 3),
+                    Margin = new Thickness(2, 0, 2, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Color Harmony Mood (Colorful, Bright, Muted, Deep, Dark, Dominant)",
+                    Child = moodSp
+                };
+                btnMood.MouseEnter += (s, e) => btnMood.Background = new SolidColorBrush(Color.FromArgb(70, 56, 189, 248));
+                btnMood.MouseLeave += (s, e) => btnMood.Background = new SolidColorBrush(Color.FromArgb(40, 56, 189, 248));
+                btnMood.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    ShowPaletteCardMoodMenu(btnMood, item);
+                };
+
+                // 2. Swatch count Stepper: [ - ] 5 [ + ]
+                StackPanel countSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                TextBlock txtColorsLabel = new TextBlock
+                {
+                    Text = "Colors:",
+                    FontSize = 10.0,
+                    Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(2, 0, 4, 0)
+                };
+                countSp.Children.Add(txtColorsLabel);
+
+                Border CreateStepBtn(string text, string tip, Action onStep)
+                {
+                    Border sb = new Border
+                    {
+                        Width = 18,
+                        Height = 18,
+                        Background = new SolidColorBrush(Color.FromArgb(35, 255, 255, 255)),
+                        CornerRadius = new CornerRadius(3),
+                        Cursor = Cursors.Hand,
+                        ToolTip = tip,
+                        Child = new TextBlock
+                        {
+                            Text = text,
+                            FontSize = 10.5,
+                            FontWeight = FontWeights.Bold,
+                            Foreground = Brushes.White,
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            VerticalAlignment = VerticalAlignment.Center
+                        }
+                    };
+                    sb.MouseEnter += (s, e) => sb.Background = new SolidColorBrush(Color.FromArgb(65, 255, 255, 255));
+                    sb.MouseLeave += (s, e) => sb.Background = new SolidColorBrush(Color.FromArgb(35, 255, 255, 255));
+                    sb.MouseLeftButtonDown += (s, e) => { e.Handled = true; onStep(); };
+                    return sb;
+                }
+
+                Border btnMinus = CreateStepBtn("−", "Decrease color count (min 3)", () =>
+                {
+                    if (item.PaletteColorCount > 3)
+                    {
+                        item.PaletteColorCount--;
+                        RefreshPaletteCardFromSource(item, isRandom: false);
+                        RebuildCardHoverToolbar(item);
+                    }
+                });
+
+                TextBlock txtCountVal = new TextBlock
+                {
+                    Text = item.PaletteColorCount.ToString(),
+                    FontSize = 10.5,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(241, 245, 249)),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(5, 0, 5, 0)
+                };
+
+                Border btnPlus = CreateStepBtn("+", "Increase color count (max 10)", () =>
+                {
+                    if (item.PaletteColorCount < 10)
+                    {
+                        item.PaletteColorCount++;
+                        RefreshPaletteCardFromSource(item, isRandom: false);
+                        RebuildCardHoverToolbar(item);
+                    }
+                });
+
+                countSp.Children.Add(btnMinus);
+                countSp.Children.Add(txtCountVal);
+                countSp.Children.Add(btnPlus);
+
+                // 3. Randomize Button
+                Border btnRandom = CreatePillButton("🎲 Random", Color.FromRgb(251, 191, 36), "Re-sample random palette colors", () =>
+                {
+                    RefreshPaletteCardFromSource(item, isRandom: true);
+                }, isBold: true);
+
+                // 4. Rows Toggle Button: 1 Row <-> 2 Rows (Coolors / Adobe style)
+                Border btnRows = CreatePillButton(item.PaletteRows == 2 ? "2 Rows" : "1 Row", Color.FromRgb(147, 197, 253), "Toggle 1 or 2 rows layout", () =>
+                {
+                    item.PaletteRows = item.PaletteRows == 1 ? 2 : 1;
+                    UpdatePaletteCardContent(item);
+                    RebuildCardHoverToolbar(item);
+                    ScheduleAutoSave();
+                    ShowToast($"Layout: {item.PaletteRows} row(s)", ToastType.Info);
+                }, isBold: true);
+
+                // 5. Toggle Sampling Pins on Source Image Button
+                Border btnPins = CreatePillButton("📍 Pins", Color.FromRgb(56, 189, 248), "Toggle live sampling pins on reference image", () =>
+                {
+                    if (item.LinkedSourceImageCard == null || !_cards.Contains(item.LinkedSourceImageCard))
+                    {
+                        var candidate = _selectedCards.FirstOrDefault(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null)
+                                     ?? _cards.FirstOrDefault(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null);
+                        if (candidate != null)
+                        {
+                            item.LinkedSourceImageCard = candidate;
+                            candidate.LinkedPaletteCard = item;
+                            if (candidate.ActivePalettePins == null || candidate.ActivePalettePins.Count == 0)
+                            {
+                                candidate.ActivePalettePins = item.ActivePalettePins;
+                            }
+                            ScheduleAutoSave();
+                            ShowToast("Connected palette to reference image!", ToastType.Success);
+                        }
+                    }
+
+                    if (item.LinkedSourceImageCard != null)
+                    {
+                        var src = item.LinkedSourceImageCard;
+                        src.LinkedPaletteCard = item;
+                        if (src.ActivePalettePins == null || src.ActivePalettePins.Count == 0)
+                        {
+                            src.ActivePalettePins = item.ActivePalettePins;
+                        }
+
+                        if (src.IsPaletteMode)
+                            CloseCanvasPaletteMode(src);
+                        else
+                            StartCanvasPaletteMode(src);
+                    }
+                    else
+                    {
+                        ShowToast("Select an image to link this palette to", ToastType.Info);
+                    }
+                }, isBold: true);
+
+                // 6. Ae Export Button
+                Border btnAeExport = CreatePillButton("Ae Export", Color.FromRgb(165, 180, 252), "Export palette image to Adobe After Effects", () =>
+                {
+                    ExportCanvasPaletteToAe(item);
+                }, isBold: true);
+
+                // 7. Copy Button
+                Border btnCopy = CreatePillButton("Copy", Color.FromRgb(209, 213, 219), "Copy Palette Image to Clipboard", () =>
+                {
+                    CopyCardToClipboard(item);
+                });
+
+                // 8. Delete Button
+                Border btnDel = CreatePillButton("✕", Color.FromRgb(239, 68, 68), "Delete Palette Card", () =>
+                {
+                    RemoveCard(item);
+                }, isBold: true);
+
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnMood);
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(countSp);
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnRandom);
+                sp.Children.Add(btnRows);
+                sp.Children.Add(btnPins);
+                sp.Children.Add(btnAeExport);
+                sp.Children.Add(btnCopy);
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnDel);
+            }
+            else if (item.IsPaletteMode)
+            {
+                Border CreateDivider() => new Border
+                {
+                    Width = 1,
+                    Height = 14,
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    Margin = new Thickness(4, 0, 4, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                // In image card during palette mode: quick Randomize and Close Pins
+                Border btnRandom = CreatePillButton("🎲 Random", Color.FromRgb(251, 191, 36), "Re-sample random palette pins on image", () =>
+                {
+                    if (item.LinkedPaletteCard != null)
+                        RefreshPaletteCardFromSource(item.LinkedPaletteCard, isRandom: true);
+                    else
+                        RefreshCanvasPalette(item, isRandom: true);
+                }, isBold: true);
+
+                Border btnClosePins = CreatePillButton("✕ Close Pins", Color.FromRgb(239, 68, 68), "Hide sampling pins from image", () =>
+                {
+                    CloseCanvasPaletteMode(item);
+                }, isBold: true);
+
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnRandom);
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnClosePins);
+            }
+            else
+            {
+                // Regular Image Card buttons
+                Border btnPalette = CreatePillButton("🎨 Palette", Color.FromRgb(56, 189, 248), "Extract real-time interactive color palette on canvas", () =>
+                {
+                    StartCanvasPaletteMode(item);
+                }, isBold: true);
+
+                Border btnAe = CreatePillButton("Ae Import", Color.FromRgb(165, 180, 252), "Export this reference to Adobe After Effects", () =>
+                {
+                    if (_selectedCards.Contains(item) && _selectedCards.Count > 1)
+                        ExportCardsToAe(_selectedCards);
+                    else
+                        ExportCardsToAe(new[] { item });
+                }, isBold: true);
+
+                Border btnCrop = CreatePillButton("✂ Crop", Color.FromRgb(251, 191, 36), "Crop / Mask Reference", () =>
+                {
+                    StartCropCard(item);
+                }, isBold: true);
+
+                Border btnCopy = CreatePillButton("Copy", Color.FromRgb(209, 213, 219), "Copy Image to Clipboard", () =>
+                {
+                    CopyCardToClipboard(item);
+                });
+
+                Border btnDel = CreatePillButton("✕", Color.FromRgb(239, 68, 68), "Delete Reference (Del)", () =>
+                {
+                    RemoveCard(item);
+                }, isBold: true);
+
+                sp.Children.Add(btnPalette);
+                sp.Children.Add(btnAe);
+                sp.Children.Add(btnCrop);
+                sp.Children.Add(btnCopy);
+                sp.Children.Add(btnDel);
+            }
+
+            pill.Child = sp;
+            return pill;
+        }
+
+        private void ShowFontPickerPopup(FrameworkElement anchor, CardItem item, Action<string> onFontSelected)
+        {
+            _isCardSubMenuOpen = true;
+
+            Popup popup = new Popup
+            {
+                PlacementTarget = anchor,
+                Placement = PlacementMode.Bottom,
+                StaysOpen = false,
+                AllowsTransparency = true,
+                PopupAnimation = PopupAnimation.Fade,
+                VerticalOffset = 4
+            };
+
+            popup.Closed += (s, e) =>
+            {
+                _isCardSubMenuOpen = false;
+                if (item.HoverToolbar != null && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                {
+                    DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                    anim.Completed += (s2, e2) =>
+                    {
+                        if (!_isCardSubMenuOpen && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                        {
+                            item.HoverToolbar.IsHitTestVisible = false;
+                        }
+                    };
+                    item.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, anim);
+                }
+            };
+
+            Border container = new Border
+            {
+                Width = 230,
+                MaxHeight = 320,
+                Background = new SolidColorBrush(Color.FromRgb(22, 25, 34)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(8),
+                SnapsToDevicePixels = true,
+                Effect = new DropShadowEffect
+                {
+                    Color = Colors.Black,
+                    BlurRadius = 22,
+                    ShadowDepth = 6,
+                    Opacity = 0.7
+                }
+            };
+
+            Grid grid = new Grid();
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            // Search input box with pure vector SVG search icon
+            Grid searchGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            TextBox searchBox = new TextBox
+            {
+                Background = new SolidColorBrush(Color.FromRgb(30, 36, 48)),
+                Foreground = Brushes.White,
+                CaretBrush = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(27, 5, 8, 5),
+                FontSize = 11.5,
+                FontFamily = new FontFamily("Segoe UI, Inter")
+            };
+
+            System.Windows.Shapes.Path searchSvg = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse("M 9.5,9.5 L 13.5,13.5 M 11,6 A 5,5 0 1 1 1,6 A 5,5 0 0 1 11,6 Z"),
+                Stroke = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                StrokeThickness = 1.6,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                SnapsToDevicePixels = true
+            };
+            Viewbox searchIconVb = new Viewbox
+            {
+                Width = 12,
+                Height = 12,
+                Child = searchSvg,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(9, 0, 0, 0),
+                IsHitTestVisible = false
+            };
+
+            TextBlock placeholder = new TextBlock
+            {
+                Text = "Search fonts...",
+                Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                FontSize = 11.5,
+                Margin = new Thickness(27, 6, 0, 0),
+                IsHitTestVisible = false
+            };
+
+            searchGrid.Children.Add(searchBox);
+            searchGrid.Children.Add(searchIconVb);
+            searchGrid.Children.Add(placeholder);
+
+            Grid.SetRow(searchGrid, 0);
+            grid.Children.Add(searchGrid);
+
+            // List of fonts
+            ListBox listBox = new ListBox
+            {
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Foreground = Brushes.White,
+                MaxHeight = 240
+            };
+            ScrollViewer.SetVerticalScrollBarVisibility(listBox, ScrollBarVisibility.Auto);
+            ScrollViewer.SetHorizontalScrollBarVisibility(listBox, ScrollBarVisibility.Disabled);
+
+            // Custom ItemTemplate for typeface preview
+            DataTemplate itemTemplate = new DataTemplate();
+            FrameworkElementFactory tbFactory = new FrameworkElementFactory(typeof(TextBlock));
+            tbFactory.SetBinding(TextBlock.TextProperty, new Binding("."));
+            tbFactory.SetBinding(TextBlock.FontFamilyProperty, new Binding("."));
+            tbFactory.SetValue(TextBlock.ForegroundProperty, new SolidColorBrush(Color.FromRgb(241, 245, 249)));
+            tbFactory.SetValue(TextBlock.FontSizeProperty, 12.0);
+            tbFactory.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+            itemTemplate.VisualTree = tbFactory;
+            listBox.ItemTemplate = itemTemplate;
+
+            // Custom ItemContainerStyle for dark hover / selection
+            Style itemStyle = new Style(typeof(ListBoxItem));
+            ControlTemplate ct = new ControlTemplate(typeof(ListBoxItem));
+            FrameworkElementFactory bd = new FrameworkElementFactory(typeof(Border));
+            bd.Name = "Bd";
+            bd.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+            bd.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            bd.SetValue(Border.PaddingProperty, new Thickness(8, 5, 8, 5));
+            bd.SetValue(Border.MarginProperty, new Thickness(0, 1, 0, 1));
+            FrameworkElementFactory cp = new FrameworkElementFactory(typeof(ContentPresenter));
+            cp.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            bd.AppendChild(cp);
+            ct.VisualTree = bd;
+
+            Trigger mouseOver = new Trigger { Property = ListBoxItem.IsMouseOverProperty, Value = true };
+            mouseOver.Setters.Add(new Setter(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(37, 47, 66)), "Bd"));
+            ct.Triggers.Add(mouseOver);
+
+            Trigger selected = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
+            selected.Setters.Add(new Setter(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(30, 58, 138)), "Bd"));
+            ct.Triggers.Add(selected);
+
+            itemStyle.Setters.Add(new Setter(ListBoxItem.TemplateProperty, ct));
+            listBox.ItemContainerStyle = itemStyle;
+
+            void UpdateList(string query)
+            {
+                var filtered = string.IsNullOrWhiteSpace(query)
+                    ? _installedFontNames
+                    : _installedFontNames.Where(f => f.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+
+                listBox.ItemsSource = filtered;
+            }
+
+            UpdateList("");
+            if (_installedFontNames.Contains(item.NoteFontFamily))
+            {
+                listBox.SelectedItem = item.NoteFontFamily;
+                listBox.ScrollIntoView(item.NoteFontFamily);
+            }
+
+            searchBox.TextChanged += (s, e) =>
+            {
+                placeholder.Visibility = string.IsNullOrEmpty(searchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+                UpdateList(searchBox.Text);
+            };
+
+            // Selection via mouse click on item (guards against clicking scrollbar)
+            listBox.PreviewMouseLeftButtonUp += (s, e) =>
+            {
+                DependencyObject dep = (DependencyObject)e.OriginalSource;
+                while (dep != null && !(dep is ListBoxItem))
+                {
+                    if (dep is ScrollBar || dep is Thumb || dep is RepeatButton)
+                    {
+                        return;
+                    }
+                    dep = VisualTreeHelper.GetParent(dep);
+                }
+                if (dep is ListBoxItem lbi)
+                {
+                    string? chosen = (lbi.DataContext as string) ?? (lbi.Content as string);
+                    if (!string.IsNullOrEmpty(chosen))
+                    {
+                        e.Handled = true;
+                        onFontSelected(chosen);
+                        popup.IsOpen = false;
+                    }
+                }
+            };
+
+            // Keyboard navigation in searchBox and listBox
+            searchBox.KeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Enter)
+                {
+                    string? chosen = listBox.SelectedItem as string ?? (listBox.Items.Count > 0 ? listBox.Items[0] as string : null);
+                    if (!string.IsNullOrEmpty(chosen))
+                    {
+                        e.Handled = true;
+                        onFontSelected(chosen);
+                        popup.IsOpen = false;
+                    }
+                }
+                else if (e.Key == Key.Down)
+                {
+                    if (listBox.Items.Count > 0)
+                    {
+                        listBox.Focus();
+                        if (listBox.SelectedIndex < 0) listBox.SelectedIndex = 0;
+                    }
+                    e.Handled = true;
+                }
+                else if (e.Key == Key.Escape)
+                {
+                    popup.IsOpen = false;
+                    e.Handled = true;
+                }
+            };
+
+            listBox.KeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Enter)
+                {
+                    if (listBox.SelectedItem is string chosen && !string.IsNullOrEmpty(chosen))
+                    {
+                        e.Handled = true;
+                        onFontSelected(chosen);
+                        popup.IsOpen = false;
+                    }
+                }
+                else if (e.Key == Key.Escape)
+                {
+                    popup.IsOpen = false;
+                    e.Handled = true;
+                }
+            };
+
+            Grid.SetRow(listBox, 1);
+            grid.Children.Add(listBox);
+
+            container.Child = grid;
+            popup.Child = container;
+
+            popup.Opened += (s, e) =>
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+                {
+                    searchBox.Focus();
+                    searchBox.SelectAll();
+                }));
+            };
+
+            popup.IsOpen = true;
+        }
+
+        private static string GetNoteBgShortLabel(string bgMode)
+        {
+            return bgMode switch
+            {
+                "Transparent" => "Trans",
+                "Dark Glass" => "Glass",
+                "Solid Dark" => "Dark",
+                "Yellow Sticky" => "Yellow",
+                "Cyan Sticky" => "Cyan",
+                _ => "Trans"
+            };
+        }
+
+        private void ShowNoteBgMenu(FrameworkElement anchor, CardItem item, Action<string> onChosen)
+        {
+            _isCardSubMenuOpen = true;
+
+            ContextMenu cm = new ContextMenu
+            {
+                PlacementTarget = anchor,
+                Placement = PlacementMode.Bottom,
+                VerticalOffset = 3
+            };
+
+            cm.Closed += (s, e) =>
+            {
+                _isCardSubMenuOpen = false;
+                if (item.HoverToolbar != null && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                {
+                    DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                    anim.Completed += (s2, e2) =>
+                    {
+                        if (!_isCardSubMenuOpen && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                        {
+                            item.HoverToolbar.IsHitTestVisible = false;
+                        }
+                    };
+                    item.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, anim);
+                }
+            };
+
+            var modes = new (string mode, string label, string iconColor)[]
+            {
+                ("Transparent", "Transparent (Float on Canvas)", "#94A3B8"),
+                ("Dark Glass", "Dark Glass (Frosted Glass)", "#38BDF8"),
+                ("Solid Dark", "Solid Dark (Classic Card)", "#64748B"),
+                ("Yellow Sticky", "Yellow Sticky (Classic Post-It)", "#FACC15"),
+                ("Cyan Sticky", "Cyan Sticky (Note Blue)", "#38BDF8")
+            };
+
+            foreach (var (mode, label, iconColor) in modes)
+            {
+                Border dot = new Border
+                {
+                    Width = 10,
+                    Height = 10,
+                    CornerRadius = new CornerRadius(5),
+                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(iconColor)),
+                    Margin = new Thickness(0, 0, 8, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                MenuItem mi = new MenuItem
+                {
+                    Header = label,
+                    Icon = dot,
+                    FontWeight = item.NoteBgColor == mode ? FontWeights.Bold : FontWeights.Normal
+                };
+
+                string chosenMode = mode;
+                mi.Click += (s, e) => onChosen(chosenMode);
+                cm.Items.Add(mi);
+            }
+
+            cm.IsOpen = true;
+        }
+
+        private void ShowFontSizeMenu(FrameworkElement anchor, CardItem item, Action<double> onSizeChosen)
+        {
+            _isCardSubMenuOpen = true;
+            ContextMenu cm = new ContextMenu
+            {
+                PlacementTarget = anchor,
+                Placement = PlacementMode.Bottom,
+                VerticalOffset = 3
+            };
+            cm.Closed += (s, e) =>
+            {
+                _isCardSubMenuOpen = false;
+                if (item.HoverToolbar != null && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                {
+                    DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                    anim.Completed += (s2, e2) =>
+                    {
+                        if (!_isCardSubMenuOpen && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                        {
+                            item.HoverToolbar.IsHitTestVisible = false;
+                        }
+                    };
+                    item.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, anim);
+                }
+            };
+
+            double[] sizes = new[] { 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 36.0, 48.0, 64.0, 72.0 };
+            foreach (double sz in sizes)
+            {
+                MenuItem mi = new MenuItem
+                {
+                    Header = $"{(int)sz} pt",
+                    FontWeight = (int)item.NoteFontSize == (int)sz ? FontWeights.Bold : FontWeights.Normal
+                };
+                double chosenSz = sz;
+                mi.Click += (s, e) => onSizeChosen(chosenSz);
+                cm.Items.Add(mi);
+            }
+
+            cm.IsOpen = true;
+        }
+
+        private void ShowColorPickerPopup(FrameworkElement anchor, CardItem item, Action<string> onColorChosen)
+        {
+            _isCardSubMenuOpen = true;
+
+            Popup popup = new Popup
+            {
+                PlacementTarget = anchor,
+                Placement = PlacementMode.Bottom,
+                StaysOpen = false,
+                AllowsTransparency = true,
+                PopupAnimation = PopupAnimation.Fade,
+                VerticalOffset = 4
+            };
+
+            popup.Closed += (s, e) =>
+            {
+                _isCardSubMenuOpen = false;
+                if (item.HoverToolbar != null && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                {
+                    DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                    anim.Completed += (s2, e2) =>
+                    {
+                        if (!_isCardSubMenuOpen && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                        {
+                            item.HoverToolbar.IsHitTestVisible = false;
+                        }
+                    };
+                    item.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, anim);
+                }
+            };
+
+            Border container = new Border
+            {
+                Width = 224,
+                Background = new SolidColorBrush(Color.FromRgb(22, 25, 34)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(12),
+                SnapsToDevicePixels = true,
+                Effect = new DropShadowEffect
+                {
+                    Color = Colors.Black,
+                    BlurRadius = 24,
+                    ShadowDepth = 6,
+                    Opacity = 0.75
+                }
+            };
+
+            StackPanel sp = new StackPanel();
+
+            // Initial color parsing & HSV state
+            string initialColor = string.IsNullOrWhiteSpace(item.NoteTextColor) ? "#FFFFFF" : item.NoteTextColor;
+            Color initC = Colors.White;
+            try
+            {
+                initC = (Color)ColorConverter.ConvertFromString(initialColor);
+            }
+            catch { }
+
+            var (initH, initS, initV) = ColorToHsv(initC);
+            double currentHue = initH;
+            double currentSat = initS;
+            double currentVal = initV;
+
+            // 1. Top Bar: Live Preview + Hex Input + Eyedropper Button
+            Grid topRow = new Grid { Margin = new Thickness(0, 0, 0, 10) };
+            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
+            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
+            topRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+
+            Border livePreview = new Border
+            {
+                Width = 28,
+                Height = 28,
+                CornerRadius = new CornerRadius(5),
+                BorderThickness = new Thickness(1),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)),
+                Background = new SolidColorBrush(initC)
+            };
+
+            TextBox hexBox = new TextBox
+            {
+                Text = initialColor,
+                Background = new SolidColorBrush(Color.FromRgb(30, 36, 48)),
+                Foreground = Brushes.White,
+                CaretBrush = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(6, 4, 6, 4),
+                FontSize = 11.5,
+                FontFamily = new FontFamily("Consolas, Segoe UI"),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                MaxLength = 9
+            };
+
+            // Pipet (Eyedropper) Button
+            Border btnEyedropper = new Border
+            {
+                Width = 28,
+                Height = 28,
+                CornerRadius = new CornerRadius(5),
+                Background = new SolidColorBrush(Color.FromRgb(30, 36, 48)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(80, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand,
+                ToolTip = "Pick color from screen / canvas (Eyedropper)"
+            };
+
+            System.Windows.Shapes.Path pipetIcon = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse("M 14,2 C 14.5,1.5 15.5,1.5 16,2 L 18,4 C 18.5,4.5 18.5,5.5 18,6 L 15.5,8.5 L 11.5,4.5 L 14,2 Z M 10.5,5.5 L 14.5,9.5 L 7,17 L 3,17 L 3,13 L 10.5,5.5 Z M 3,17 L 1,19"),
+                Stroke = Brushes.White,
+                StrokeThickness = 1.3,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                StrokeLineJoin = PenLineJoin.Round,
+                SnapsToDevicePixels = true,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Viewbox pipetVb = new Viewbox
+            {
+                Width = 14,
+                Height = 14,
+                Child = pipetIcon
+            };
+            btnEyedropper.Child = pipetVb;
+
+            btnEyedropper.MouseEnter += (s, e) =>
+            {
+                btnEyedropper.Background = new SolidColorBrush(Color.FromArgb(70, 56, 189, 248));
+                btnEyedropper.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+            };
+            btnEyedropper.MouseLeave += (s, e) =>
+            {
+                btnEyedropper.Background = new SolidColorBrush(Color.FromRgb(30, 36, 48));
+                btnEyedropper.BorderBrush = new SolidColorBrush(Color.FromArgb(80, 255, 255, 255));
+            };
+
+            btnEyedropper.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                popup.IsOpen = false;
+                StartScreenColorPicker(pickedColor =>
+                {
+                    string hex = $"#{pickedColor.R:X2}{pickedColor.G:X2}{pickedColor.B:X2}";
+                    onColorChosen(hex);
+                    ShowColorPickerPopup(anchor, item, onColorChosen);
+                }, () =>
+                {
+                    ShowColorPickerPopup(anchor, item, onColorChosen);
+                });
+            };
+
+            Grid.SetColumn(livePreview, 0);
+            Grid.SetColumn(hexBox, 2);
+            Grid.SetColumn(btnEyedropper, 4);
+            topRow.Children.Add(livePreview);
+            topRow.Children.Add(hexBox);
+            topRow.Children.Add(btnEyedropper);
+            sp.Children.Add(topRow);
+
+            // 2. 2D Saturation / Value Gradient Canvas
+            const double svWidth = 200;
+            const double svHeight = 100;
+
+            Border svContainer = new Border
+            {
+                Width = svWidth,
+                Height = svHeight,
+                CornerRadius = new CornerRadius(6),
+                ClipToBounds = true,
+                BorderThickness = new Thickness(1),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255)),
+                Cursor = Cursors.Cross,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+
+            Canvas svCanvas = new Canvas { Width = svWidth, Height = svHeight };
+            System.Windows.Shapes.Rectangle hueLayer = new System.Windows.Shapes.Rectangle
+            {
+                Width = svWidth,
+                Height = svHeight,
+                Fill = new SolidColorBrush(HsvToColor(currentHue, 1.0, 1.0))
+            };
+            System.Windows.Shapes.Rectangle satLayer = new System.Windows.Shapes.Rectangle
+            {
+                Width = svWidth,
+                Height = svHeight,
+                Fill = new LinearGradientBrush(Colors.White, Color.FromArgb(0, 255, 255, 255), new Point(0, 0), new Point(1, 0))
+            };
+            System.Windows.Shapes.Rectangle valLayer = new System.Windows.Shapes.Rectangle
+            {
+                Width = svWidth,
+                Height = svHeight,
+                Fill = new LinearGradientBrush(Color.FromArgb(0, 0, 0, 0), Colors.Black, new Point(0, 0), new Point(0, 1))
+            };
+
+            Border svThumb = new Border
+            {
+                Width = 12,
+                Height = 12,
+                CornerRadius = new CornerRadius(6),
+                BorderBrush = Brushes.White,
+                BorderThickness = new Thickness(2),
+                IsHitTestVisible = false,
+                Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 4, ShadowDepth = 1, Opacity = 0.8 }
+            };
+
+            Canvas.SetLeft(svThumb, Math.Clamp(currentSat * svWidth - 6, -6, svWidth - 6));
+            Canvas.SetTop(svThumb, Math.Clamp((1.0 - currentVal) * svHeight - 6, -6, svHeight - 6));
+
+            svCanvas.Children.Add(hueLayer);
+            svCanvas.Children.Add(satLayer);
+            svCanvas.Children.Add(valLayer);
+            svCanvas.Children.Add(svThumb);
+            svContainer.Child = svCanvas;
+            sp.Children.Add(svContainer);
+
+            // 3. Rainbow Hue Bar
+            const double hueWidth = 200;
+            const double hueHeight = 12;
+
+            Border hueContainer = new Border
+            {
+                Width = hueWidth,
+                Height = hueHeight,
+                CornerRadius = new CornerRadius(6),
+                ClipToBounds = true,
+                BorderThickness = new Thickness(1),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255)),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+
+            Canvas hueCanvas = new Canvas { Width = hueWidth, Height = hueHeight };
+
+            LinearGradientBrush rainbowBrush = new LinearGradientBrush
+            {
+                StartPoint = new Point(0, 0.5),
+                EndPoint = new Point(1, 0.5),
+                GradientStops = new GradientStopCollection
+                {
+                    new GradientStop(Color.FromRgb(255, 0, 0), 0.0),
+                    new GradientStop(Color.FromRgb(255, 255, 0), 0.17),
+                    new GradientStop(Color.FromRgb(0, 255, 0), 0.33),
+                    new GradientStop(Color.FromRgb(0, 255, 255), 0.50),
+                    new GradientStop(Color.FromRgb(0, 0, 255), 0.67),
+                    new GradientStop(Color.FromRgb(255, 0, 255), 0.83),
+                    new GradientStop(Color.FromRgb(255, 0, 0), 1.0)
+                }
+            };
+
+            System.Windows.Shapes.Rectangle hueTrack = new System.Windows.Shapes.Rectangle { Width = hueWidth, Height = hueHeight, Fill = rainbowBrush };
+
+            Border hueThumb = new Border
+            {
+                Width = 8,
+                Height = 14,
+                CornerRadius = new CornerRadius(2),
+                Background = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
+                BorderThickness = new Thickness(1),
+                IsHitTestVisible = false,
+                Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 4, ShadowDepth = 1, Opacity = 0.8 }
+            };
+
+            Canvas.SetLeft(hueThumb, Math.Clamp((currentHue / 360.0) * hueWidth - 4, -4, hueWidth - 4));
+            Canvas.SetTop(hueThumb, -1);
+
+            hueCanvas.Children.Add(hueTrack);
+            hueCanvas.Children.Add(hueThumb);
+            hueContainer.Child = hueCanvas;
+            sp.Children.Add(hueContainer);
+
+            // Synchronizing handlers
+            bool suppressUpdate = false;
+
+            void UpdateColorOutput()
+            {
+                Color c = HsvToColor(currentHue, currentSat, currentVal);
+                string hex = $"#{c.R:X2}{c.G:X2}{c.B:X2}";
+                suppressUpdate = true;
+                hexBox.Text = hex;
+                suppressUpdate = false;
+                livePreview.Background = new SolidColorBrush(c);
+                onColorChosen(hex);
+            }
+
+            void SyncFromColor(Color c)
+            {
+                var (h, s, v) = ColorToHsv(c);
+                currentHue = h;
+                currentSat = s;
+                currentVal = v;
+
+                hueLayer.Fill = new SolidColorBrush(HsvToColor(currentHue, 1.0, 1.0));
+                Canvas.SetLeft(svThumb, Math.Clamp(currentSat * svWidth - 6, -6, svWidth - 6));
+                Canvas.SetTop(svThumb, Math.Clamp((1.0 - currentVal) * svHeight - 6, -6, svHeight - 6));
+                Canvas.SetLeft(hueThumb, Math.Clamp((currentHue / 360.0) * hueWidth - 4, -4, hueWidth - 4));
+                livePreview.Background = new SolidColorBrush(c);
+            }
+
+            // SV Drag logic
+            bool isDraggingSv = false;
+            void HandleSvMove(Point pt)
+            {
+                currentSat = Math.Clamp(pt.X / svWidth, 0.0, 1.0);
+                currentVal = Math.Clamp(1.0 - (pt.Y / svHeight), 0.0, 1.0);
+
+                Canvas.SetLeft(svThumb, Math.Clamp(currentSat * svWidth - 6, -6, svWidth - 6));
+                Canvas.SetTop(svThumb, Math.Clamp((1.0 - currentVal) * svHeight - 6, -6, svHeight - 6));
+
+                UpdateColorOutput();
+            }
+
+            svContainer.MouseLeftButtonDown += (s, e) =>
+            {
+                isDraggingSv = true;
+                svContainer.CaptureMouse();
+                HandleSvMove(e.GetPosition(svContainer));
+                e.Handled = true;
+            };
+            svContainer.MouseMove += (s, e) =>
+            {
+                if (isDraggingSv)
+                {
+                    HandleSvMove(e.GetPosition(svContainer));
+                    e.Handled = true;
+                }
+            };
+            svContainer.MouseLeftButtonUp += (s, e) =>
+            {
+                if (isDraggingSv)
+                {
+                    isDraggingSv = false;
+                    svContainer.ReleaseMouseCapture();
+                    e.Handled = true;
+                }
+            };
+
+            // Hue Drag logic
+            bool isDraggingHue = false;
+            void HandleHueMove(Point pt)
+            {
+                currentHue = Math.Clamp((pt.X / hueWidth) * 360.0, 0.0, 360.0);
+                if (currentHue >= 360.0) currentHue = 0.0;
+
+                Canvas.SetLeft(hueThumb, Math.Clamp((currentHue / 360.0) * hueWidth - 4, -4, hueWidth - 4));
+                hueLayer.Fill = new SolidColorBrush(HsvToColor(currentHue, 1.0, 1.0));
+
+                UpdateColorOutput();
+            }
+
+            hueContainer.MouseLeftButtonDown += (s, e) =>
+            {
+                isDraggingHue = true;
+                hueContainer.CaptureMouse();
+                HandleHueMove(e.GetPosition(hueContainer));
+                e.Handled = true;
+            };
+            hueContainer.MouseMove += (s, e) =>
+            {
+                if (isDraggingHue)
+                {
+                    HandleHueMove(e.GetPosition(hueContainer));
+                    e.Handled = true;
+                }
+            };
+            hueContainer.MouseLeftButtonUp += (s, e) =>
+            {
+                if (isDraggingHue)
+                {
+                    isDraggingHue = false;
+                    hueContainer.ReleaseMouseCapture();
+                    e.Handled = true;
+                }
+            };
+
+            void ApplyHex(string hex)
+            {
+                if (suppressUpdate) return;
+                if (string.IsNullOrWhiteSpace(hex)) return;
+                hex = hex.Trim();
+                if (!hex.StartsWith("#")) hex = "#" + hex;
+                if (hex.Length == 4 || hex.Length == 7 || hex.Length == 9)
+                {
+                    try
+                    {
+                        Color c = (Color)ColorConverter.ConvertFromString(hex);
+                        SyncFromColor(c);
+                        onColorChosen(hex);
+                    }
+                    catch { }
+                }
+            }
+
+            hexBox.TextChanged += (s, e) =>
+            {
+                ApplyHex(hexBox.Text);
+            };
+
+            // 4. Presets Header
+            TextBlock presetsLabel = new TextBlock
+            {
+                Text = "PRESETS",
+                FontSize = 9.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                Margin = new Thickness(0, 2, 0, 6)
+            };
+            sp.Children.Add(presetsLabel);
+
+            // 5. Preset Colors Grid (18 curated colors in 6x3)
+            string[][] palette = new string[][]
+            {
+                new[] { "#FFFFFF", "#D1D5DB", "#9CA3AF", "#4B5563", "#1F2937", "#000000" },
+                new[] { "#EF4444", "#F97316", "#FBBF24", "#10B981", "#06B6D4", "#3B82F6" },
+                new[] { "#6366F1", "#8B5CF6", "#EC4899", "#F43F5E", "#84CC16", "#14B8A6" }
+            };
+
+            foreach (var row in palette)
+            {
+                StackPanel rowSp = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 0, 0, 4)
+                };
+
+                foreach (string colorHex in row)
+                {
+                    Border swatch = new Border
+                    {
+                        Width = 24,
+                        Height = 24,
+                        CornerRadius = new CornerRadius(12),
+                        Margin = new Thickness(2.5),
+                        Cursor = Cursors.Hand,
+                        ToolTip = colorHex,
+                        BorderThickness = new Thickness(1),
+                        BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255))
+                    };
+
+                    try
+                    {
+                        swatch.Background = (Brush)new BrushConverter().ConvertFromString(colorHex)!;
+                    }
+                    catch { }
+
+                    swatch.MouseEnter += (s, e) =>
+                    {
+                        swatch.BorderBrush = Brushes.White;
+                        swatch.BorderThickness = new Thickness(2);
+                    };
+                    swatch.MouseLeave += (s, e) =>
+                    {
+                        swatch.BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255));
+                        swatch.BorderThickness = new Thickness(1);
+                    };
+                    string hexToApply = colorHex;
+                    swatch.MouseLeftButtonDown += (s, e) =>
+                    {
+                        e.Handled = true;
+                        hexBox.Text = hexToApply;
+                        ApplyHex(hexToApply);
+                        popup.IsOpen = false;
+                    };
+
+                    rowSp.Children.Add(swatch);
+                }
+
+                sp.Children.Add(rowSp);
+            }
+
+            container.Child = sp;
+            popup.Child = container;
+
+            popup.Opened += (s, e) =>
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+                {
+                    hexBox.Focus();
+                    hexBox.SelectAll();
+                }));
+            };
+
+            popup.IsOpen = true;
+        }
+
+        private void StartScreenColorPicker(Action<Color> onColorPicked, Action onCancelled)
+        {
+            Window overlay = new Window
+            {
+                WindowStyle = WindowStyle.None,
+                AllowsTransparency = true,
+                Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)),
+                Topmost = true,
+                ShowInTaskbar = false,
+                Left = SystemParameters.VirtualScreenLeft,
+                Top = SystemParameters.VirtualScreenTop,
+                Width = SystemParameters.VirtualScreenWidth,
+                Height = SystemParameters.VirtualScreenHeight,
+                Cursor = Cursors.Cross
+            };
+
+            Canvas canvas = new Canvas { IsHitTestVisible = false };
+            overlay.Content = canvas;
+
+            Border loupeCard = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(20, 24, 33)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(8, 6, 10, 6),
+                Effect = new DropShadowEffect
+                {
+                    Color = Colors.Black,
+                    BlurRadius = 16,
+                    ShadowDepth = 4,
+                    Opacity = 0.85
+                }
+            };
+
+            StackPanel loupeSp = new StackPanel { Orientation = Orientation.Horizontal };
+
+            Border swatchCircle = new Border
+            {
+                Width = 28,
+                Height = 28,
+                CornerRadius = new CornerRadius(14),
+                BorderThickness = new Thickness(2),
+                BorderBrush = Brushes.White,
+                Margin = new Thickness(0, 0, 8, 0),
+                Background = Brushes.White
+            };
+
+            StackPanel textCol = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            TextBlock hexText = new TextBlock
+            {
+                Text = "#FFFFFF",
+                FontFamily = new FontFamily("Consolas, Segoe UI"),
+                FontWeight = FontWeights.Bold,
+                FontSize = 13,
+                Foreground = Brushes.White
+            };
+            TextBlock hintText = new TextBlock
+            {
+                Text = "Click to pick • Esc to cancel",
+                FontSize = 9.5,
+                Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                Margin = new Thickness(0, 1, 0, 0)
+            };
+            textCol.Children.Add(hexText);
+            textCol.Children.Add(hintText);
+
+            loupeSp.Children.Add(swatchCircle);
+            loupeSp.Children.Add(textCol);
+            loupeCard.Child = loupeSp;
+
+            canvas.Children.Add(loupeCard);
+
+            Color lastColor = Colors.White;
+
+            void SampleAtCursor(MouseEventArgs? e = null)
+            {
+                GetCursorPos(out POINT screenPt);
+                IntPtr hdc = GetDC(IntPtr.Zero);
+                uint pixel = GetPixel(hdc, screenPt.X, screenPt.Y);
+                ReleaseDC(IntPtr.Zero, hdc);
+
+                if (pixel != 0xFFFFFFFF)
+                {
+                    byte r = (byte)(pixel & 0xFF);
+                    byte g = (byte)((pixel >> 8) & 0xFF);
+                    byte b = (byte)((pixel >> 16) & 0xFF);
+                    lastColor = Color.FromRgb(r, g, b);
+
+                    swatchCircle.Background = new SolidColorBrush(lastColor);
+                    hexText.Text = $"#{r:X2}{g:X2}{b:X2}";
+                }
+
+                Point mousePos = e != null ? e.GetPosition(overlay) : new Point(screenPt.X - overlay.Left, screenPt.Y - overlay.Top);
+                double cardX = mousePos.X + 18;
+                double cardY = mousePos.Y + 18;
+
+                if (cardX + 180 > overlay.ActualWidth) cardX = mousePos.X - 190;
+                if (cardY + 50 > overlay.ActualHeight) cardY = mousePos.Y - 60;
+
+                Canvas.SetLeft(loupeCard, Math.Max(8, cardX));
+                Canvas.SetTop(loupeCard, Math.Max(8, cardY));
+            }
+
+            overlay.MouseMove += (s, e) => SampleAtCursor(e);
+
+            bool finished = false;
+
+            overlay.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                if (finished) return;
+                finished = true;
+                e.Handled = true;
+                SampleAtCursor();
+                overlay.Close();
+                onColorPicked(lastColor);
+            };
+
+            overlay.PreviewMouseRightButtonDown += (s, e) =>
+            {
+                if (finished) return;
+                finished = true;
+                e.Handled = true;
+                overlay.Close();
+                onCancelled?.Invoke();
+            };
+
+            overlay.PreviewKeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Escape)
+                {
+                    if (finished) return;
+                    finished = true;
+                    e.Handled = true;
+                    overlay.Close();
+                    onCancelled?.Invoke();
+                }
+            };
+
+            overlay.Loaded += (s, e) =>
+            {
+                overlay.Activate();
+                overlay.Focus();
+                SampleAtCursor();
+            };
+
+            overlay.Show();
+        }
+
+        private static (double h, double s, double v) ColorToHsv(Color color)
+        {
+            double r = color.R / 255.0;
+            double g = color.G / 255.0;
+            double b = color.B / 255.0;
+
+            double max = Math.Max(r, Math.Max(g, b));
+            double min = Math.Min(r, Math.Min(g, b));
+            double delta = max - min;
+
+            double h = 0;
+            if (delta > 0.00001)
+            {
+                if (Math.Abs(max - r) < 0.00001)
+                    h = 60 * (((g - b) / delta) % 6);
+                else if (Math.Abs(max - g) < 0.00001)
+                    h = 60 * (((b - r) / delta) + 2);
+                else
+                    h = 60 * (((r - g) / delta) + 4);
+
+                if (h < 0) h += 360;
+            }
+
+            double s = max < 0.00001 ? 0 : delta / max;
+            double v = max;
+
+            return (h, s, v);
+        }
+
+        private static Color HsvToColor(double h, double s, double v)
+        {
+            double c = v * s;
+            double x = c * (1 - Math.Abs((h / 60.0) % 2 - 1));
+            double m = v - c;
+
+            double rPrime = 0, gPrime = 0, bPrime = 0;
+            if (h >= 0 && h < 60) { rPrime = c; gPrime = x; bPrime = 0; }
+            else if (h >= 60 && h < 120) { rPrime = x; gPrime = c; bPrime = 0; }
+            else if (h >= 120 && h < 180) { rPrime = 0; gPrime = c; bPrime = x; }
+            else if (h >= 180 && h < 240) { rPrime = 0; gPrime = x; bPrime = c; }
+            else if (h >= 240 && h < 300) { rPrime = x; gPrime = 0; bPrime = c; }
+            else { rPrime = c; gPrime = 0; bPrime = x; }
+
+            byte r = (byte)Math.Clamp((int)Math.Round((rPrime + m) * 255), 0, 255);
+            byte g = (byte)Math.Clamp((int)Math.Round((gPrime + m) * 255), 0, 255);
+            byte b = (byte)Math.Clamp((int)Math.Round((bPrime + m) * 255), 0, 255);
+
+            return Color.FromRgb(r, g, b);
+        }
+
+        private void ShowNoteMoreMenu(FrameworkElement anchor, CardItem item)
+        {
+            _isCardSubMenuOpen = true;
+            ContextMenu cm = new ContextMenu
+            {
+                PlacementTarget = anchor,
+                Placement = PlacementMode.Bottom,
+                VerticalOffset = 3
+            };
+            cm.Closed += (s, e) =>
+            {
+                _isCardSubMenuOpen = false;
+                if (item.HoverToolbar != null && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                {
+                    DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                    anim.Completed += (s2, e2) =>
+                    {
+                        if (!_isCardSubMenuOpen && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                        {
+                            item.HoverToolbar.IsHitTestVisible = false;
+                        }
+                    };
+                    item.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, anim);
+                }
+            };
+
+            MenuItem miCopy = new MenuItem { Header = "Copy Note Text" };
+            miCopy.Click += (s, e) =>
+            {
+                try
+                {
+                    Clipboard.SetText(item.NoteText);
+                    ShowToast("Copied note text to clipboard", ToastType.Success);
+                }
+                catch (Exception ex)
+                {
+                    ShowToast("Copy failed: " + ex.Message, ToastType.Error);
+                }
+            };
+
+            MenuItem miDup = new MenuItem { Header = "Duplicate Note" };
+            miDup.Click += (s, e) => DuplicateNoteCard(item);
+
+            MenuItem miZoom = new MenuItem { Header = "Zoom to Note" };
+            miZoom.Click += (s, e) => ZoomToCard(item);
+
+            MenuItem miDel = new MenuItem
+            {
+                Header = "Delete Note",
+                Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)),
+                FontWeight = FontWeights.SemiBold
+            };
+            miDel.Click += (s, e) => RemoveCard(item);
+
+            cm.Items.Add(miCopy);
+            cm.Items.Add(miDup);
+            cm.Items.Add(miZoom);
+            cm.Items.Add(new Separator());
+            cm.Items.Add(miDel);
+
+            cm.IsOpen = true;
+        }
+
+        #region Standalone Live Color Palette Card System
+
+        private CardItem AddPaletteCard(
+            CardItem? sourceCard = null,
+            List<PalettePin>? initialPins = null,
+            Point? worldPosition = null,
+            double? customWidth = null,
+            double? customHeight = null,
+            ColorMood mood = ColorMood.Colorful,
+            int colorCount = 5,
+            int rows = 1,
+            bool autoSelect = true)
+        {
+            EmptyStateOverlay.Visibility = Visibility.Collapsed;
+
+            double w = customWidth ?? 460.0;
+            double h = customHeight ?? (rows == 2 ? 260.0 : 200.0);
+
+            // 1x1 frozen transparent BitmapSource as dummy bitmap for CardItem requirements
+            BitmapSource dummyBmp = BitmapSource.Create(1, 1, 96, 96, PixelFormats.Bgra32, null, new byte[4], 4);
+            dummyBmp.Freeze();
+
+            Image dummyImg = new Image
+            {
+                Source = dummyBmp,
+                Visibility = Visibility.Collapsed
+            };
+
+            // Swatches Grid
+            Grid swatchesGrid = new Grid
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch
+            };
+
+            // Rounded clip container so swatches cleanly follow card's 14px border radius
+            Border swatchesClipBorder = new Border
+            {
+                CornerRadius = new CornerRadius(14),
+                Background = Brushes.Transparent,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Child = swatchesGrid
+            };
+            swatchesClipBorder.SizeChanged += (s, e) =>
+            {
+                if (swatchesClipBorder.ActualWidth > 0 && swatchesClipBorder.ActualHeight > 0)
+                {
+                    swatchesClipBorder.Clip = new RectangleGeometry
+                    {
+                        Rect = new Rect(0, 0, swatchesClipBorder.ActualWidth, swatchesClipBorder.ActualHeight),
+                        RadiusX = 14,
+                        RadiusY = 14
+                    };
+                }
+            };
+
+            // Outer container border: 100% transparent background, subtle sleek border & soft drop shadow
+            Border contentBorder = new Border
+            {
+                Width = w,
+                Height = h,
+                Background = Brushes.Transparent,
+                BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(14),
+                Padding = new Thickness(0),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                SnapsToDevicePixels = true,
+                Effect = new DropShadowEffect
+                {
+                    BlurRadius = 24,
+                    ShadowDepth = 6,
+                    Opacity = 0.55,
+                    Color = Colors.Black
+                },
+                Child = swatchesClipBorder
+            };
+
+            Grid container = new Grid
+            {
+                Width = w,
+                Height = h,
+                Cursor = Cursors.SizeAll
+            };
+            container.Children.Add(dummyImg);
+            container.Children.Add(contentBorder);
+
+            // 4 Corner Handles
+            Border handleTL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Top, Cursors.SizeNWSE);
+            Border handleTR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Top, Cursors.SizeNESW);
+            Border handleBL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Bottom, Cursors.SizeNESW);
+            Border handleBR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Bottom, Cursors.SizeNWSE);
+
+            container.Children.Add(handleTL);
+            container.Children.Add(handleTR);
+            container.Children.Add(handleBL);
+            container.Children.Add(handleBR);
+
+            CardItem item = new CardItem
+            {
+                Container = container,
+                ContentBorder = contentBorder,
+                ImageControl = dummyImg,
+                Bitmap = dummyBmp,
+                OriginalBitmap = dummyBmp,
+                BaseWidth = w,
+                BaseHeight = h,
+                AspectRatio = w / Math.Max(1.0, h),
+                HandleTL = handleTL,
+                HandleTR = handleTR,
+                HandleBL = handleBL,
+                HandleBR = handleBR,
+                IsPaletteCard = true,
+                LinkedSourceImageCard = sourceCard,
+                PaletteColorCount = colorCount,
+                PaletteMood = mood,
+                PaletteRows = rows,
+                PaletteGridContent = swatchesGrid,
+                PaletteTitleText = null
+            };
+
+            if (initialPins != null && initialPins.Count > 0)
+            {
+                item.ActivePalettePins = new List<PalettePin>(initialPins);
+            }
+            else if (sourceCard != null)
+            {
+                BitmapSource? bmp = sourceCard.Bitmap ?? sourceCard.OriginalBitmap;
+                if (bmp != null)
+                {
+                    item.ActivePalettePins = ColorPaletteExtractor.ExtractPalette(bmp, colorCount, mood, 0);
+                }
+            }
+
+            UpdatePaletteCardContent(item);
+
+            // Attach Hover Quick-Action Toolbar for Palette Card
+            Border hoverToolbar = CreateCardHoverToolbar(item);
+            item.HoverToolbar = hoverToolbar;
+            Canvas toolbarHost = new Canvas
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                Width = 0,
+                Height = 0,
+                ClipToBounds = false
+            };
+            Panel.SetZIndex(toolbarHost, 9999);
+            Canvas.SetTop(hoverToolbar, -38.0);
+            toolbarHost.Children.Add(hoverToolbar);
+            container.Children.Add(toolbarHost);
+
+            hoverToolbar.SizeChanged += (s, e) =>
+            {
+                if (e.NewSize.Width > 0)
+                {
+                    Canvas.SetLeft(hoverToolbar, -e.NewSize.Width / 2.0);
+                    Canvas.SetTop(hoverToolbar, -38.0);
+                }
+            };
+
+            container.MouseEnter += (s, e) =>
+            {
+                if (_isCropping) return;
+                if (Panel.GetZIndex(container) < 500 && !item.IsSelected)
+                {
+                    Panel.SetZIndex(container, 500);
+                }
+                hoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
+                hoverToolbar.Opacity = 1.0;
+                hoverToolbar.IsHitTestVisible = true;
+            };
+            container.MouseLeave += (s, e) =>
+            {
+                if (!item.IsSelected)
+                {
+                    if (Panel.GetZIndex(container) == 500)
+                    {
+                        Panel.SetZIndex(container, 0);
+                    }
+                }
+                if (item.IsSelected || _isCardSubMenuOpen) return;
+                DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                anim.Completed += (s2, e2) =>
+                {
+                    if (!container.IsMouseOver && !hoverToolbar.IsMouseOver && !item.IsSelected && !_isCardSubMenuOpen)
+                    {
+                        hoverToolbar.IsHitTestVisible = false;
+                    }
+                };
+                hoverToolbar.BeginAnimation(UIElement.OpacityProperty, anim);
+            };
+
+            // Attach Right-Click Context Menu for Palette Card
+            container.ContextMenu = CreateCardContextMenu(item);
+            container.MouseRightButtonDown += (s, e) =>
+            {
+                if (!item.IsSelected)
+                {
+                    SelectCard(item, addToSelection: false);
+                }
+                e.Handled = true;
+            };
+            container.MouseRightButtonUp += (s, e) =>
+            {
+                if (container.ContextMenu != null)
+                {
+                    container.ContextMenu.PlacementTarget = container;
+                    container.ContextMenu.IsOpen = true;
+                }
+                e.Handled = true;
+            };
+
+            // Solo Drag interaction (movable anywhere on canvas independently)
+            container.MouseLeftButtonDown += (s, e) =>
+            {
+                if (Keyboard.IsKeyDown(Key.Space)) return;
+
+                if (e.ClickCount == 2)
+                {
+                    SelectCard(item, addToSelection: false);
+                    ZoomToCard(item);
+                    e.Handled = true;
+                    return;
+                }
+
+                RecordUndo("Move Palette Card");
+
+                bool isShift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+                if (isShift)
+                {
+                    if (item.IsSelected) DeselectCard(item);
+                    else SelectCard(item, addToSelection: true);
+                }
+                else
+                {
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                }
+
+                _isDraggingCards = true;
+                _cardDragStartMousePoint = e.GetPosition(CanvasContainer);
+                _cardsInitialPositions.Clear();
+                foreach (CardItem sel in _selectedCards)
+                {
+                    _cardsInitialPositions[sel] = new Point(sel.X, sel.Y);
+                }
+                SetWebViewHitTesting(false);
+                CanvasContainer.CaptureMouse();
+                e.Handled = true;
+            };
+
+            // Resize handle events
+            AttachResizeHandleEvents(item, handleTL, ResizeCorner.TopLeft);
+            AttachResizeHandleEvents(item, handleTR, ResizeCorner.TopRight);
+            AttachResizeHandleEvents(item, handleBL, ResizeCorner.BottomLeft);
+            AttachResizeHandleEvents(item, handleBR, ResizeCorner.BottomRight);
+
+            // Placement
+            Point pos;
+            if (worldPosition.HasValue)
+            {
+                pos = worldPosition.Value;
+            }
+            else if (sourceCard != null)
+            {
+                pos = new Point(sourceCard.X + sourceCard.Width + 24, sourceCard.Y);
+            }
+            else
+            {
+                Matrix matrix = CanvasMatrixTransform.Matrix;
+                matrix.Invert();
+                Point centerScreen = new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2);
+                pos = matrix.Transform(centerScreen);
+            }
+
+            item.X = pos.X;
+            item.Y = pos.Y;
+
+            if (!_isRestoringSession && !_isApplyingSnapshot)
+            {
+                RecordUndo("Add Palette Card");
+            }
+
+            _cards.Add(item);
+            WorldCanvas.Children.Add(container);
+
+            if (sourceCard != null)
+            {
+                sourceCard.LinkedPaletteCard = item;
+                item.LinkedSourceImageCard = sourceCard;
+            }
+
+            UpdateStatusCounts();
+            if (autoSelect)
+            {
+                SelectCard(item, addToSelection: false);
+            }
+
+            if (!_isRestoringSession)
+            {
+                ScheduleAutoSave();
+            }
+
+            return item;
+        }
+
+        private void UpdatePaletteCardContent(CardItem paletteCard)
+        {
+            if (paletteCard.PaletteGridContent == null) return;
+            paletteCard.PaletteGridContent.Children.Clear();
+            paletteCard.PaletteGridContent.ColumnDefinitions.Clear();
+            paletteCard.PaletteGridContent.RowDefinitions.Clear();
+
+            var pins = paletteCard.ActivePalettePins;
+            if (pins == null || pins.Count == 0) return;
+
+            int count = pins.Count;
+            bool isTwoRows = paletteCard.PaletteRows == 2 && count > 1;
+
+            if (isTwoRows)
+            {
+                paletteCard.PaletteGridContent.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                paletteCard.PaletteGridContent.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+                int topCount = (int)Math.Ceiling(count / 2.0);
+                int bottomCount = count - topCount;
+
+                Grid topGrid = new Grid
+                {
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    VerticalAlignment = VerticalAlignment.Stretch
+                };
+                for (int i = 0; i < topCount; i++)
+                {
+                    topGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                }
+
+                Grid bottomGrid = new Grid
+                {
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    VerticalAlignment = VerticalAlignment.Stretch
+                };
+                for (int i = 0; i < bottomCount; i++)
+                {
+                    bottomGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                }
+
+                for (int i = 0; i < topCount; i++)
+                {
+                    var cell = CreateSwatchCell(paletteCard, pins[i], isTwoRows: true);
+                    Grid.SetColumn(cell, i);
+                    topGrid.Children.Add(cell);
+                }
+
+                for (int i = 0; i < bottomCount; i++)
+                {
+                    var cell = CreateSwatchCell(paletteCard, pins[topCount + i], isTwoRows: true);
+                    Grid.SetColumn(cell, i);
+                    bottomGrid.Children.Add(cell);
+                }
+
+                Grid.SetRow(topGrid, 0);
+                Grid.SetRow(bottomGrid, 1);
+                paletteCard.PaletteGridContent.Children.Add(topGrid);
+                paletteCard.PaletteGridContent.Children.Add(bottomGrid);
+            }
+            else
+            {
+                for (int i = 0; i < count; i++)
+                {
+                    paletteCard.PaletteGridContent.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                }
+
+                for (int i = 0; i < count; i++)
+                {
+                    var cell = CreateSwatchCell(paletteCard, pins[i], isTwoRows: false);
+                    Grid.SetColumn(cell, i);
+                    paletteCard.PaletteGridContent.Children.Add(cell);
+                }
+            }
+        }
+
+        private FrameworkElement CreateSwatchCell(CardItem paletteCard, PalettePin pin, bool isTwoRows)
+        {
+            // Perceived luminance calculation for high-contrast legible text
+            double lum = (0.299 * pin.Color.R + 0.587 * pin.Color.G + 0.114 * pin.Color.B) / 255.0;
+            bool isLight = lum > 0.58;
+
+            Color textCol = isLight ? Color.FromArgb(220, 20, 24, 33) : Color.FromArgb(245, 255, 255, 255);
+            Color subCol = isLight ? Color.FromArgb(160, 50, 55, 65) : Color.FromArgb(180, 255, 255, 255);
+            Brush textBrush = new SolidColorBrush(textCol);
+            Brush subBrush = new SolidColorBrush(subCol);
+
+            Grid cellGrid = new Grid
+            {
+                Background = new SolidColorBrush(pin.Color),
+                Cursor = Cursors.Hand,
+                ToolTip = $"Click to copy {pin.Hex}\nRight-click to change color (Color Picker)\nRGB: {pin.Color.R}, {pin.Color.G}, {pin.Color.B}"
+            };
+
+            // Subtle hover overlay
+            Border hoverOverlay = new Border
+            {
+                Background = Brushes.White,
+                Opacity = 0,
+                IsHitTestVisible = false
+            };
+            cellGrid.MouseEnter += (s, e) => hoverOverlay.Opacity = 0.12;
+            cellGrid.MouseLeave += (s, e) => hoverOverlay.Opacity = 0;
+
+            // Bottom bar: Hex text + copy icon (Seamless Coolors / Adobe style)
+            Grid bottomBar = new Grid
+            {
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(isTwoRows ? 6 : 8, 0, isTwoRows ? 6 : 8, isTwoRows ? 6 : 10),
+                IsHitTestVisible = false
+            };
+            bottomBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            bottomBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            TextBlock hexTb = new TextBlock
+            {
+                Text = pin.Hex,
+                FontSize = isTwoRows ? 9.5 : 11.0,
+                FontWeight = FontWeights.Bold,
+                FontFamily = new FontFamily("Consolas, Segoe UI, monospace"),
+                Foreground = textBrush,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetColumn(hexTb, 0);
+            bottomBar.Children.Add(hexTb);
+
+            System.Windows.Shapes.Path copyIcon = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse("M19,21H8V7h11m0-2H8a2,2 0 0,0-2,2v14a2,2 0 0,0 2,2h11a2,2 0 0,0 2-2V7a2,2 0 0,0-2-2m-3-4H4a2,2 0 0,0-2,2v14h2V3h12V1Z"),
+                Fill = subBrush,
+                Width = isTwoRows ? 10 : 12,
+                Height = isTwoRows ? 10 : 12,
+                Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0, 0, 0),
+                Opacity = 0.85
+            };
+            Grid.SetColumn(copyIcon, 1);
+            bottomBar.Children.Add(copyIcon);
+
+            cellGrid.Children.Add(hoverOverlay);
+            cellGrid.Children.Add(bottomBar);
+
+            // Right-click context menu: Pick custom color or copy hex
+            ContextMenu swatchMenu = new ContextMenu();
+            MenuItem miPick = new MenuItem
+            {
+                Header = "🎨 Change Color (Color Picker)...",
+                FontWeight = FontWeights.Bold
+            };
+            miPick.Click += (s, e) =>
+            {
+                ShowColorPickerPopup(cellGrid, paletteCard, chosenHex =>
+                {
+                    try
+                    {
+                        Color c = (Color)ColorConverter.ConvertFromString(chosenHex);
+                        pin.Color = c;
+                        UpdatePaletteCardContent(paletteCard);
+                        if (paletteCard.LinkedSourceImageCard != null && paletteCard.LinkedSourceImageCard.IsPaletteMode)
+                        {
+                            RenderCanvasPalettePins(paletteCard.LinkedSourceImageCard);
+                        }
+                        ScheduleAutoSave();
+                    }
+                    catch { }
+                });
+            };
+
+            MenuItem miCopy = new MenuItem { Header = $"📋 Copy Hex ({pin.Hex})" };
+            string curHex = pin.Hex;
+            miCopy.Click += (s, e) =>
+            {
+                Clipboard.SetText(curHex);
+                ShowToast($"Copied {curHex} to clipboard!", ToastType.Success);
+            };
+
+            swatchMenu.Items.Add(miPick);
+            swatchMenu.Items.Add(miCopy);
+
+            cellGrid.ContextMenu = swatchMenu;
+            cellGrid.MouseRightButtonDown += (s, e) =>
+            {
+                swatchMenu.PlacementTarget = cellGrid;
+                swatchMenu.IsOpen = true;
+                e.Handled = true;
+            };
+
+            // Support click to copy without blocking card dragging:
+            // MouseDown records position, lets event bubble so card drag works.
+            // MouseUp checks distance: if mouse moved < 6px and not dragging cards, copy hex!
+            Point? mouseDownPoint = null;
+            string currentHex = pin.Hex;
+
+            cellGrid.MouseLeftButtonDown += (s, e) =>
+            {
+                mouseDownPoint = e.GetPosition(cellGrid);
+            };
+
+            cellGrid.MouseLeftButtonUp += (s, e) =>
+            {
+                if (mouseDownPoint.HasValue)
+                {
+                    Point upPoint = e.GetPosition(cellGrid);
+                    double dist = (upPoint - mouseDownPoint.Value).Length;
+                    mouseDownPoint = null;
+
+                    if (dist < 6.0 && !_isDraggingCards)
+                    {
+                        Clipboard.SetText(currentHex);
+                        ShowToast($"Copied {currentHex} to clipboard!", ToastType.Success);
+                        e.Handled = true;
+                    }
+                }
+            };
+
+            return cellGrid;
+        }
+
+        private void StartCanvasPaletteMode(CardItem item)
+        {
+            if (item == null || item.IsNote || item.IsPaletteCard) return;
+            BitmapSource? bmp = item.Bitmap ?? item.OriginalBitmap;
+            if (bmp == null)
+            {
+                ShowToast("Cannot extract palette from this card", ToastType.Error);
+                return;
+            }
+
+            item.IsPaletteMode = true;
+
+            // Check if we already have a linked palette card on board
+            CardItem? paletteCard = item.LinkedPaletteCard;
+            if (paletteCard == null || !_cards.Contains(paletteCard))
+            {
+                paletteCard = _cards.FirstOrDefault(c => c.IsPaletteCard && (c.LinkedSourceImageCard == item || c.LinkedSourceImageCard == null));
+                if (paletteCard != null)
+                {
+                    item.LinkedPaletteCard = paletteCard;
+                    paletteCard.LinkedSourceImageCard = item;
+                }
+            }
+
+            if (paletteCard == null || !_cards.Contains(paletteCard))
+            {
+                if (item.ActivePalettePins == null || item.ActivePalettePins.Count == 0)
+                {
+                    item.ActivePalettePins = ColorPaletteExtractor.ExtractPalette(bmp, item.PaletteColorCount, item.PaletteMood, 0);
+                }
+
+                // Spawn independent transparent palette card directly beside reference image
+                Point sidePos = new Point(item.X + item.Width + 24, item.Y);
+                paletteCard = AddPaletteCard(
+                    sourceCard: item,
+                    initialPins: item.ActivePalettePins,
+                    worldPosition: sidePos,
+                    mood: item.PaletteMood,
+                    colorCount: item.PaletteColorCount,
+                    autoSelect: false);
+                item.LinkedPaletteCard = paletteCard;
+            }
+            else
+            {
+                item.LinkedPaletteCard = paletteCard;
+                paletteCard.LinkedSourceImageCard = item;
+
+                // If image card has no pins (e.g. after reload), take from palette card
+                if (item.ActivePalettePins == null || item.ActivePalettePins.Count == 0)
+                {
+                    if (paletteCard.ActivePalettePins != null && paletteCard.ActivePalettePins.Count > 0)
+                    {
+                        item.ActivePalettePins = new List<PalettePin>(paletteCard.ActivePalettePins);
+                    }
+                    else
+                    {
+                        item.ActivePalettePins = ColorPaletteExtractor.ExtractPalette(bmp, paletteCard.PaletteColorCount, paletteCard.PaletteMood, 0);
+                    }
+                }
+
+                // Ensure pins have valid normalized positions (RelX, RelY) on image
+                for (int i = 0; i < item.ActivePalettePins.Count; i++)
+                {
+                    var p = item.ActivePalettePins[i];
+                    if (p.RelX <= 0 && p.RelY <= 0)
+                    {
+                        p.RelX = (i + 1.0) / (item.ActivePalettePins.Count + 1.0);
+                        p.RelY = 0.5;
+                    }
+                }
+
+                paletteCard.ActivePalettePins = item.ActivePalettePins;
+                UpdatePaletteCardContent(paletteCard);
+            }
+
+            // Set up PalettePinsCanvas overlay directly over image card
+            if (item.PalettePinsCanvas == null)
+            {
+                item.PalettePinsCanvas = new Canvas
+                {
+                    Width = item.Width,
+                    Height = item.Height,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Top,
+                    ClipToBounds = false,
+                    Background = Brushes.Transparent // enables click detection on card
+                };
+                Panel.SetZIndex(item.PalettePinsCanvas, 850);
+
+                // Clicking anywhere on image canvas moves nearest pin to clicked spot
+                item.PalettePinsCanvas.MouseLeftButtonDown += (s, e) =>
+                {
+                    if (e.OriginalSource == item.PalettePinsCanvas && item.ActivePalettePins.Count > 0)
+                    {
+                        Point pt = e.GetPosition(item.PalettePinsCanvas);
+                        double relX = Math.Clamp(pt.X / Math.Max(1.0, item.Width), 0.02, 0.98);
+                        double relY = Math.Clamp(pt.Y / Math.Max(1.0, item.Height), 0.02, 0.98);
+
+                        PalettePin? nearest = null;
+                        double minDist = double.MaxValue;
+                        foreach (var p in item.ActivePalettePins)
+                        {
+                            double dx = p.RelX - relX;
+                            double dy = p.RelY - relY;
+                            double dist = dx * dx + dy * dy;
+                            if (dist < minDist)
+                            {
+                                minDist = dist;
+                                nearest = p;
+                            }
+                        }
+
+                        if (nearest != null)
+                        {
+                            nearest.RelX = relX;
+                            nearest.RelY = relY;
+                            BitmapSource? b = item.Bitmap ?? item.OriginalBitmap;
+                            if (b != null)
+                            {
+                                nearest.Color = ColorPaletteExtractor.SampleColorAt(b, relX, relY);
+                            }
+                            RenderCanvasPalettePins(item);
+                            if (item.LinkedPaletteCard != null)
+                            {
+                                item.LinkedPaletteCard.ActivePalettePins = item.ActivePalettePins;
+                                UpdatePaletteCardContent(item.LinkedPaletteCard);
+                            }
+                        }
+                        e.Handled = true;
+                    }
+                };
+
+                item.Container.Children.Add(item.PalettePinsCanvas);
+            }
+
+            RenderCanvasPalettePins(item);
+            RebuildCardHoverToolbar(item);
+
+            ShowToast("Live Palette Card placed at side. Drag pins or move palette solo!", ToastType.Info);
+        }
+
+        private void CloseCanvasPaletteMode(CardItem item)
+        {
+            if (!item.IsPaletteMode) return;
+            item.IsPaletteMode = false;
+
+            if (item.PalettePinsCanvas != null)
+            {
+                item.Container.Children.Remove(item.PalettePinsCanvas);
+                item.PalettePinsCanvas = null;
+            }
+
+            RebuildCardHoverToolbar(item);
+            ShowToast("Closed sampling pins on reference", ToastType.Info);
+        }
+
+        private void RefreshPaletteCardFromSource(CardItem paletteCard, bool isRandom)
+        {
+            CardItem? source = paletteCard.LinkedSourceImageCard;
+            if (source == null)
+            {
+                // Standalone palette adjustment without active source image (prevents freezing on - / + buttons)
+                if (paletteCard.ActivePalettePins != null && paletteCard.ActivePalettePins.Count > 0)
+                {
+                    int targetCount = paletteCard.PaletteColorCount;
+                    if (targetCount < paletteCard.ActivePalettePins.Count)
+                    {
+                        paletteCard.ActivePalettePins = paletteCard.ActivePalettePins.Take(targetCount).ToList();
+                    }
+                    else if (targetCount > paletteCard.ActivePalettePins.Count)
+                    {
+                        while (paletteCard.ActivePalettePins.Count < targetCount)
+                        {
+                            var last = paletteCard.ActivePalettePins.Last();
+                            byte r = (byte)Math.Clamp((int)(last.Color.R * 0.85 + 25), 0, 255);
+                            byte g = (byte)Math.Clamp((int)(last.Color.G * 0.85 + 25), 0, 255);
+                            byte b = (byte)Math.Clamp((int)(last.Color.B * 0.85 + 25), 0, 255);
+                            paletteCard.ActivePalettePins.Add(new PalettePin { Color = Color.FromRgb(r, g, b) });
+                        }
+                    }
+                    UpdatePaletteCardContent(paletteCard);
+                    ScheduleAutoSave();
+                }
+                return;
+            }
+
+            BitmapSource? bmp = source.Bitmap ?? source.OriginalBitmap;
+            if (bmp == null) return;
+
+            int seed = isRandom ? new Random().Next(1, 999999) : 0;
+            var pins = ColorPaletteExtractor.ExtractPalette(bmp, paletteCard.PaletteColorCount, paletteCard.PaletteMood, seed);
+            paletteCard.ActivePalettePins = pins;
+            source.ActivePalettePins = pins;
+            source.PaletteColorCount = paletteCard.PaletteColorCount;
+            source.PaletteMood = paletteCard.PaletteMood;
+
+            UpdatePaletteCardContent(paletteCard);
+
+            if (source.IsPaletteMode && source.PalettePinsCanvas != null)
+            {
+                RenderCanvasPalettePins(source);
+            }
+            ScheduleAutoSave();
+        }
+
+        private void RefreshCanvasPalette(CardItem item, bool isRandom)
+        {
+            BitmapSource? bmp = item.Bitmap ?? item.OriginalBitmap;
+            if (bmp == null) return;
+
+            int seed = isRandom ? new Random().Next(1, 999999) : 0;
+            item.ActivePalettePins = ColorPaletteExtractor.ExtractPalette(bmp, item.PaletteColorCount, item.PaletteMood, seed);
+            RenderCanvasPalettePins(item);
+
+            if (item.LinkedPaletteCard != null)
+            {
+                item.LinkedPaletteCard.ActivePalettePins = item.ActivePalettePins;
+                UpdatePaletteCardContent(item.LinkedPaletteCard);
+            }
+        }
+
+        private void RenderCanvasPalettePins(CardItem item)
+        {
+            if (item.PalettePinsCanvas == null) return;
+            item.PalettePinsCanvas.Children.Clear();
+
+            double cardW = item.Width;
+            double cardH = item.Height;
+            item.PalettePinsCanvas.Width = cardW;
+            item.PalettePinsCanvas.Height = cardH;
+
+            for (int i = 0; i < item.ActivePalettePins.Count; i++)
+            {
+                PalettePin pin = item.ActivePalettePins[i];
+
+                Border pip = new Border
+                {
+                    Width = 6,
+                    Height = 6,
+                    CornerRadius = new CornerRadius(3),
+                    Background = Brushes.White,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    IsHitTestVisible = false
+                };
+
+                Border pinElement = new Border
+                {
+                    Width = 26,
+                    Height = 26,
+                    CornerRadius = new CornerRadius(13),
+                    BorderThickness = new Thickness(2.5),
+                    BorderBrush = Brushes.White,
+                    Background = new SolidColorBrush(pin.Color),
+                    Cursor = Cursors.Hand,
+                    ToolTip = $"Sample Pin #{i + 1}: {pin.Hex}\nDrag to adjust sample position",
+                    Effect = new DropShadowEffect
+                    {
+                        BlurRadius = 10,
+                        ShadowDepth = 2,
+                        Opacity = 0.75,
+                        Color = Colors.Black
+                    },
+                    Child = pip
+                };
+
+                Canvas.SetLeft(pinElement, (pin.RelX * cardW) - 13);
+                Canvas.SetTop(pinElement, (pin.RelY * cardH) - 13);
+
+                bool isDraggingPin = false;
+                Point dragStartOffset = new Point();
+
+                pinElement.MouseLeftButtonDown += (s, e) =>
+                {
+                    isDraggingPin = true;
+                    dragStartOffset = e.GetPosition(pinElement);
+                    pinElement.CaptureMouse();
+                    pinElement.Cursor = Cursors.SizeAll;
+                    e.Handled = true;
+                };
+
+                pinElement.MouseMove += (s, e) =>
+                {
+                    if (isDraggingPin && pinElement.IsMouseCaptured)
+                    {
+                        Point mousePos = e.GetPosition(item.PalettePinsCanvas);
+                        double pinCenterX = mousePos.X - dragStartOffset.X + 13;
+                        double pinCenterY = mousePos.Y - dragStartOffset.Y + 13;
+
+                        double relX = Math.Clamp(pinCenterX / Math.Max(1.0, cardW), 0.01, 0.99);
+                        double relY = Math.Clamp(pinCenterY / Math.Max(1.0, cardH), 0.01, 0.99);
+
+                        pin.RelX = relX;
+                        pin.RelY = relY;
+
+                        Canvas.SetLeft(pinElement, (relX * cardW) - 13);
+                        Canvas.SetTop(pinElement, (relY * cardH) - 13);
+
+                        BitmapSource? bmp = item.Bitmap ?? item.OriginalBitmap;
+                        if (bmp != null)
+                        {
+                            Color sampled = ColorPaletteExtractor.SampleColorAt(bmp, relX, relY);
+                            pin.Color = sampled;
+                            pinElement.Background = new SolidColorBrush(sampled);
+                            pinElement.ToolTip = $"Sample Pin: {pin.Hex}\nDrag to adjust sample position";
+
+                            // Live update the linked standalone Palette Card!
+                            if (item.LinkedPaletteCard != null)
+                            {
+                                item.LinkedPaletteCard.ActivePalettePins = item.ActivePalettePins;
+                                UpdatePaletteCardContent(item.LinkedPaletteCard);
+                            }
+                        }
+
+                        e.Handled = true;
+                    }
+                };
+
+                pinElement.MouseLeftButtonUp += (s, e) =>
+                {
+                    if (isDraggingPin)
+                    {
+                        isDraggingPin = false;
+                        pinElement.ReleaseMouseCapture();
+                        pinElement.Cursor = Cursors.Hand;
+                        e.Handled = true;
+                    }
+                };
+
+                item.PalettePinsCanvas.Children.Add(pinElement);
+            }
+        }
+
+        private void ShowPaletteCardMoodMenu(FrameworkElement anchor, CardItem item)
+        {
+            _isCardSubMenuOpen = true;
+            ContextMenu cm = new ContextMenu
+            {
+                PlacementTarget = anchor,
+                Placement = PlacementMode.Bottom,
+                VerticalOffset = 3
+            };
+
+            cm.Closed += (s, e) =>
+            {
+                _isCardSubMenuOpen = false;
+            };
+
+            var moods = new[]
+            {
+                (ColorMood.Colorful, "Colorful", "Vibrant, high-saturation color harmony"),
+                (ColorMood.Bright, "Bright", "High luminance and light tints"),
+                (ColorMood.Muted, "Muted", "Soft, low-saturation pastel tones"),
+                (ColorMood.Deep, "Deep", "Rich, saturated medium tones"),
+                (ColorMood.Dark, "Dark", "Moody, deep shadows and dark tones"),
+                (ColorMood.Dominant, "Dominant", "Most frequent reference image colors")
+            };
+
+            foreach (var (m, title, desc) in moods)
+            {
+                ColorMood targetMood = m;
+                MenuItem mi = new MenuItem
+                {
+                    Header = title,
+                    FontWeight = item.PaletteMood == targetMood ? FontWeights.Bold : FontWeights.Normal
+                };
+                mi.Click += (s, e) =>
+                {
+                    item.PaletteMood = targetMood;
+                    RefreshPaletteCardFromSource(item, isRandom: false);
+                    RebuildCardHoverToolbar(item);
+                    ShowToast($"Mood set to {title}", ToastType.Info);
+                };
+                cm.Items.Add(mi);
+            }
+
+            cm.IsOpen = true;
+        }
+
+        private void UpdateCanvasPaletteLayout(CardItem item)
+        {
+            if (item.PalettePinsCanvas != null)
+            {
+                RenderCanvasPalettePins(item);
+            }
+        }
+
+        private void ExportCanvasPaletteToAe(CardItem item)
+        {
+            if (item.ActivePalettePins == null || item.ActivePalettePins.Count == 0) return;
+            try
+            {
+                string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "DropBoard_Palettes");
+                string title = item.LinkedSourceImageCard != null && !string.IsNullOrEmpty(item.LinkedSourceImageCard.LocalPath)
+                    ? System.IO.Path.GetFileNameWithoutExtension(item.LinkedSourceImageCard.LocalPath)
+                    : "Theme";
+                string savedFile = PaletteCardRenderer.SavePaletteImageToFile(
+                    item.ActivePalettePins,
+                    tempDir,
+                    "Palette_" + title,
+                    rows: item.PaletteRows,
+                    targetWidth: item.Width,
+                    targetHeight: item.Height);
+
+                BitmapImage bi = new BitmapImage();
+                bi.BeginInit();
+                bi.UriSource = new Uri(savedFile, UriKind.Absolute);
+                bi.CacheOption = BitmapCacheOption.OnLoad;
+                bi.EndInit();
+                bi.Freeze();
+
+                double cardW = item.Width > 0 ? item.Width : 480.0;
+                double cardH = item.Height > 0 ? item.Height : 240.0;
+
+                CardItem tempCard = new CardItem
+                {
+                    Bitmap = bi,
+                    LocalPath = savedFile,
+                    Width = cardW,
+                    Height = cardH,
+                    AspectRatio = cardW / Math.Max(1.0, cardH),
+                    X = item.X,
+                    Y = item.Y
+                };
+                ExportCardsToAe(new[] { tempCard });
+            }
+            catch (Exception ex)
+            {
+                ShowToast("AE Export failed: " + ex.Message, ToastType.Error);
+            }
+        }
+
+        private void RebuildCardHoverToolbar(CardItem item)
+        {
+            if (item.HoverToolbar == null) return;
+            if (item.HoverToolbar.Parent is Canvas host)
+            {
+                host.Children.Remove(item.HoverToolbar);
+                Border newToolbar = CreateCardHoverToolbar(item);
+                item.HoverToolbar = newToolbar;
+                Canvas.SetTop(newToolbar, -38.0);
+                host.Children.Add(newToolbar);
+
+                newToolbar.SizeChanged += (s, e) =>
+                {
+                    if (e.NewSize.Width > 0)
+                    {
+                        Canvas.SetLeft(newToolbar, -e.NewSize.Width / 2.0);
+                        Canvas.SetTop(newToolbar, -38.0);
+                    }
+                };
+
+                newToolbar.Opacity = 1.0;
+                newToolbar.IsHitTestVisible = true;
+            }
+        }
+
+        private void OpenColorPaletteStudio(CardItem item)
+        {
+            StartCanvasPaletteMode(item);
+        }
+
+        #endregion
+
+        private void DuplicateNoteCard(CardItem item)
+        {
+            RecordUndo("Duplicate Note");
+            Point newPos = new Point(item.X + 24, item.Y + 24);
+            AddNoteCard(
+                text: item.NoteText,
+                worldPosition: newPos,
+                customWidth: item.Width,
+                customHeight: item.Height,
+                fontFamily: item.NoteFontFamily,
+                fontSize: item.NoteFontSize,
+                textColor: item.NoteTextColor,
+                bgColor: item.NoteBgColor,
+                alignment: item.NoteAlignment,
+                autoSelect: true);
+            ScheduleAutoSave();
+            ShowToast("Duplicated note", ToastType.Success);
+        }
+
+        private void CleanupCard(CardItem card)
+        {
+            if (card.IsPaletteMode)
+            {
+                CloseCanvasPaletteMode(card);
+            }
+            if (card.IsPaletteCard)
+            {
+                if (card.LinkedSourceImageCard != null)
+                {
+                    CloseCanvasPaletteMode(card.LinkedSourceImageCard);
+                    card.LinkedSourceImageCard.LinkedPaletteCard = null;
+                }
+            }
+            if (card.LinkedPaletteCard != null)
+            {
+                card.LinkedPaletteCard.LinkedSourceImageCard = null;
+            }
+            if (card.PlayerControl != null)
+            {
+                try { card.PlayerControl.Dispose(); } catch { }
+                card.PlayerControl = null;
+            }
+        }
+
+        private void RemoveCard(CardItem card)
+        {
+            RecordUndo("Delete Card");
+            CleanupCard(card);
+            WorldCanvas.Children.Remove(card.Container);
+            _cards.Remove(card);
+            _selectedCards.Remove(card);
+            UpdateStatusCounts();
+            if (_cards.Count == 0)
+            {
+                EmptyStateOverlay.Visibility = Visibility.Visible;
+            }
+            ScheduleAutoSave();
+            ShowToast(card.IsPaletteCard ? "Deleted palette card" : "Deleted reference", ToastType.Info);
+        }
+
+        private void CopyCardToClipboard(CardItem item)
+        {
+            try
+            {
+                if (item.IsPaletteCard && item.ActivePalettePins != null && item.ActivePalettePins.Count > 0)
+                {
+                    string title = item.LinkedSourceImageCard != null && !string.IsNullOrEmpty(item.LinkedSourceImageCard.LocalPath)
+                        ? System.IO.Path.GetFileNameWithoutExtension(item.LinkedSourceImageCard.LocalPath)
+                        : "Color Palette";
+                    PaletteCardRenderer.CopyPaletteImageToClipboard(
+                        item.ActivePalettePins,
+                        title,
+                        rows: item.PaletteRows,
+                        targetWidth: item.Width,
+                        targetHeight: item.Height);
+                    ShowToast("Copied palette graphic to clipboard!", ToastType.Success);
+                    return;
+                }
+                if (!string.IsNullOrEmpty(item.LocalPath) && File.Exists(item.LocalPath))
+                {
+                    var fileList = new System.Collections.Specialized.StringCollection { item.LocalPath };
+                    Clipboard.SetFileDropList(fileList);
+                }
+                else if (item.Bitmap != null)
+                {
+                    Clipboard.SetImage(item.Bitmap);
+                }
+                ShowToast("Copied reference image to clipboard", ToastType.Success);
+            }
+            catch (Exception ex)
+            {
+                ShowToast("Copy failed: " + ex.Message, ToastType.Error);
+            }
+        }
+
+        private void StartCropCard(CardItem item)
+        {
+            if (_isCropping) return;
+            _isCropping = true;
+            _activeCroppingCard = item;
+
+            // Hide card hover quick-action toolbar
+            if (item.HoverToolbar != null)
+            {
+                item.HoverToolbar.Opacity = 0.0;
+                item.HoverToolbar.IsHitTestVisible = false;
+            }
+
+            // Hide normal corner resize handles while cropping
+            if (item.HandleTL != null) item.HandleTL.Visibility = Visibility.Collapsed;
+            if (item.HandleTR != null) item.HandleTR.Visibility = Visibility.Collapsed;
+            if (item.HandleBL != null) item.HandleBL.Visibility = Visibility.Collapsed;
+            if (item.HandleBR != null) item.HandleBR.Visibility = Visibility.Collapsed;
+
+            // Ensure OriginalBitmap and base dimensions exist
+            if (item.OriginalBitmap == null)
+            {
+                item.OriginalBitmap = item.Bitmap;
+            }
+            if (item.BaseWidth <= 0 || item.BaseHeight <= 0)
+            {
+                item.BaseWidth = item.Width;
+                item.BaseHeight = item.Height;
+                item.BaseX = item.X;
+                item.BaseY = item.Y;
+            }
+
+            // Store previous state for Cancel option
+            BitmapSource prevBitmap = item.Bitmap;
+            double prevW = item.Width;
+            double prevH = item.Height;
+            double prevX = item.X;
+            double prevY = item.Y;
+            double prevCropL = item.CropLeft;
+            double prevCropT = item.CropTop;
+            double prevCropR = item.CropRight;
+            double prevCropB = item.CropBottom;
+
+            // Expand card back to full original uncropped image so user can see full reference and edit crop clearly
+            item.ImageControl.Source = item.OriginalBitmap;
+            item.Width = item.BaseWidth;
+            item.Height = item.BaseHeight;
+            item.X = item.BaseX;
+            item.Y = item.BaseY;
+
+            // Initialize crop percentages (use existing crop if card is already cropped, else default 10%)
+            double cropL = item.IsCropped ? item.CropLeft : 10.0;
+            double cropT = item.IsCropped ? item.CropTop : 10.0;
+            double cropR = item.IsCropped ? item.CropRight : 10.0;
+            double cropB = item.IsCropped ? item.CropBottom : 10.0;
+
+            Canvas cropCanvas = new Canvas
+            {
+                Width = item.BaseWidth,
+                Height = item.BaseHeight,
+                ClipToBounds = false
+            };
+
+            Grid cropOverlay = new Grid
+            {
+                Width = item.BaseWidth,
+                Height = item.BaseHeight,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch
+            };
+            cropOverlay.Children.Add(cropCanvas);
+            _activeCropOverlay = cropOverlay;
+
+            // 4 Dark Dim Masks around the active box (0.72 dark opacity matching Web JS)
+            Brush maskBrush = new SolidColorBrush(Color.FromArgb(185, 8, 10, 15));
+            Border maskTop = new Border { Background = maskBrush, IsHitTestVisible = false };
+            Border maskBottom = new Border { Background = maskBrush, IsHitTestVisible = false };
+            Border maskLeft = new Border { Background = maskBrush, IsHitTestVisible = false };
+            Border maskRight = new Border { Background = maskBrush, IsHitTestVisible = false };
+
+            // Active Yellow Dashed Box (Center Draggable to Pan Crop Area)
+            System.Windows.Shapes.Rectangle activeBox = new System.Windows.Shapes.Rectangle
+            {
+                Stroke = new SolidColorBrush(Color.FromRgb(251, 191, 36)),
+                StrokeThickness = 2,
+                StrokeDashArray = new DoubleCollection { 4, 2 },
+                Fill = new SolidColorBrush(Color.FromArgb(28, 251, 191, 36)),
+                Cursor = Cursors.SizeAll
+            };
+
+            // 4 Draggable Edge Bars (Top, Bottom, Left, Right)
+            Border edgeTop = new Border
+            {
+                Height = 8,
+                Background = new SolidColorBrush(Color.FromArgb(1, 251, 191, 36)),
+                Cursor = Cursors.SizeNS
+            };
+            Border edgeBottom = new Border
+            {
+                Height = 8,
+                Background = new SolidColorBrush(Color.FromArgb(1, 251, 191, 36)),
+                Cursor = Cursors.SizeNS
+            };
+            Border edgeLeft = new Border
+            {
+                Width = 8,
+                Background = new SolidColorBrush(Color.FromArgb(1, 251, 191, 36)),
+                Cursor = Cursors.SizeWE
+            };
+            Border edgeRight = new Border
+            {
+                Width = 8,
+                Background = new SolidColorBrush(Color.FromArgb(1, 251, 191, 36)),
+                Cursor = Cursors.SizeWE
+            };
+
+            // Subtle hover highlight on edge bars
+            void AddEdgeHover(Border edge)
+            {
+                edge.MouseEnter += (s, e) => edge.Background = new SolidColorBrush(Color.FromArgb(120, 251, 191, 36));
+                edge.MouseLeave += (s, e) => edge.Background = new SolidColorBrush(Color.FromArgb(1, 251, 191, 36));
+            }
+            AddEdgeHover(edgeTop);
+            AddEdgeHover(edgeBottom);
+            AddEdgeHover(edgeLeft);
+            AddEdgeHover(edgeRight);
+
+            // 4 Corner Handles (NW, NE, SW, SE)
+            Border CreateCornerHandle(Cursor cursor)
+            {
+                Border h = new Border
+                {
+                    Width = 10,
+                    Height = 10,
+                    Background = new SolidColorBrush(Color.FromRgb(251, 191, 36)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(15, 17, 23)),
+                    BorderThickness = new Thickness(1.5),
+                    CornerRadius = new CornerRadius(2),
+                    Cursor = cursor
+                };
+                h.MouseEnter += (s, e) => h.Background = Brushes.White;
+                h.MouseLeave += (s, e) => h.Background = new SolidColorBrush(Color.FromRgb(251, 191, 36));
+                return h;
+            }
+
+            Border cornerNW = CreateCornerHandle(Cursors.SizeNWSE);
+            Border cornerNE = CreateCornerHandle(Cursors.SizeNESW);
+            Border cornerSW = CreateCornerHandle(Cursors.SizeNESW);
+            Border cornerSE = CreateCornerHandle(Cursors.SizeNWSE);
+
+            // Floating Controls Pill: Done, Reset, Cancel (Authentic 1:1 Web JS .crop-controls-pill)
+            Border pill = new Border
+            {
+                Height = 36,
+                Background = new SolidColorBrush(Color.FromArgb(246, 20, 24, 34)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(130, 251, 191, 36)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(18), // Pure capsule geometry (Height/2)
+                Padding = new Thickness(6, 3, 6, 3),
+                Effect = new DropShadowEffect
+                {
+                    BlurRadius = 20,
+                    ShadowDepth = 5,
+                    Direction = 270,
+                    Opacity = 0.7,
+                    Color = Colors.Black
+                }
+            };
+            StackPanel pillSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+            // 1. Done Button (Solid Amber Capsule with Dark Bold Text like .crop-btn-done)
+            Border btnDone = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(251, 191, 36)),
+                CornerRadius = new CornerRadius(13),
+                Padding = new Thickness(12, 5, 12, 5),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(0, 0, 6, 0),
+                Child = new TextBlock
+                {
+                    Text = "✓ Done (Enter)",
+                    Foreground = new SolidColorBrush(Color.FromRgb(15, 17, 23)),
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 11,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            btnDone.MouseEnter += (s, e) => btnDone.Background = new SolidColorBrush(Color.FromRgb(245, 158, 11));
+            btnDone.MouseLeave += (s, e) => btnDone.Background = new SolidColorBrush(Color.FromRgb(251, 191, 36));
+
+            // 2. Reset Button (Translucent Pill with White Text like .crop-btn-reset)
+            Border btnReset = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(13),
+                Padding = new Thickness(10, 5, 10, 5),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(0, 0, 6, 0),
+                Child = new TextBlock
+                {
+                    Text = "↺ Reset (Esc)",
+                    Foreground = new SolidColorBrush(Color.FromRgb(241, 245, 249)),
+                    FontWeight = FontWeights.SemiBold,
+                    FontSize = 11,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            btnReset.MouseEnter += (s, e) => btnReset.Background = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255));
+            btnReset.MouseLeave += (s, e) => btnReset.Background = new SolidColorBrush(Color.FromArgb(28, 255, 255, 255));
+
+            // 3. Cancel Button (Ghost Pill)
+            Border btnCancel = new Border
+            {
+                Background = Brushes.Transparent,
+                CornerRadius = new CornerRadius(13),
+                Padding = new Thickness(8, 5, 8, 5),
+                Cursor = Cursors.Hand,
+                Child = new TextBlock
+                {
+                    Text = "✕ Cancel",
+                    Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                    FontWeight = FontWeights.Normal,
+                    FontSize = 11,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            btnCancel.MouseEnter += (s, e) =>
+            {
+                btnCancel.Background = new SolidColorBrush(Color.FromArgb(30, 239, 68, 68));
+                if (btnCancel.Child is TextBlock tb) tb.Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113));
+            };
+            btnCancel.MouseLeave += (s, e) =>
+            {
+                btnCancel.Background = Brushes.Transparent;
+                if (btnCancel.Child is TextBlock tb) tb.Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184));
+            };
+
+            pillSp.Children.Add(btnDone);
+            pillSp.Children.Add(btnReset);
+            pillSp.Children.Add(btnCancel);
+            pill.Child = pillSp;
+
+            // Z-Order: Masks -> Active Box -> Edge Bars -> Corner Handles -> Pill
+            cropCanvas.Children.Add(maskTop);
+            cropCanvas.Children.Add(maskBottom);
+            cropCanvas.Children.Add(maskLeft);
+            cropCanvas.Children.Add(maskRight);
+            cropCanvas.Children.Add(activeBox);
+            cropCanvas.Children.Add(edgeTop);
+            cropCanvas.Children.Add(edgeBottom);
+            cropCanvas.Children.Add(edgeLeft);
+            cropCanvas.Children.Add(edgeRight);
+            cropCanvas.Children.Add(cornerNW);
+            cropCanvas.Children.Add(cornerNE);
+            cropCanvas.Children.Add(cornerSW);
+            cropCanvas.Children.Add(cornerSE);
+            cropCanvas.Children.Add(pill);
+
+            void UpdateCropLayout()
+            {
+                double cardW = item.BaseWidth;
+                double cardH = item.BaseHeight;
+
+                double lPx = (cropL / 100.0) * cardW;
+                double tPx = (cropT / 100.0) * cardH;
+                double rPx = (cropR / 100.0) * cardW;
+                double bPx = (cropB / 100.0) * cardH;
+
+                double boxW = Math.Max(10, cardW - lPx - rPx);
+                double boxH = Math.Max(10, cardH - tPx - bPx);
+
+                // Update 4 dim masks
+                Canvas.SetLeft(maskTop, 0);
+                Canvas.SetTop(maskTop, 0);
+                maskTop.Width = cardW;
+                maskTop.Height = Math.Max(0, tPx);
+
+                Canvas.SetLeft(maskBottom, 0);
+                Canvas.SetTop(maskBottom, cardH - bPx);
+                maskBottom.Width = cardW;
+                maskBottom.Height = Math.Max(0, bPx);
+
+                Canvas.SetLeft(maskLeft, 0);
+                Canvas.SetTop(maskLeft, tPx);
+                maskLeft.Width = Math.Max(0, lPx);
+                maskLeft.Height = Math.Max(0, boxH);
+
+                Canvas.SetLeft(maskRight, cardW - rPx);
+                Canvas.SetTop(maskRight, tPx);
+                maskRight.Width = Math.Max(0, rPx);
+                maskRight.Height = Math.Max(0, boxH);
+
+                // Update active dashed box
+                Canvas.SetLeft(activeBox, lPx);
+                Canvas.SetTop(activeBox, tPx);
+                activeBox.Width = boxW;
+                activeBox.Height = boxH;
+
+                // Update 4 edge bars (centered along the 4 borders of activeBox)
+                Canvas.SetLeft(edgeTop, lPx);
+                Canvas.SetTop(edgeTop, tPx - 4);
+                edgeTop.Width = boxW;
+
+                Canvas.SetLeft(edgeBottom, lPx);
+                Canvas.SetTop(edgeBottom, tPx + boxH - 4);
+                edgeBottom.Width = boxW;
+
+                Canvas.SetLeft(edgeLeft, lPx - 4);
+                Canvas.SetTop(edgeLeft, tPx);
+                edgeLeft.Height = boxH;
+
+                Canvas.SetLeft(edgeRight, lPx + boxW - 4);
+                Canvas.SetTop(edgeRight, tPx);
+                edgeRight.Height = boxH;
+
+                // Update 4 corner handles (10x10 centered at corners)
+                Canvas.SetLeft(cornerNW, lPx - 5);
+                Canvas.SetTop(cornerNW, tPx - 5);
+
+                Canvas.SetLeft(cornerNE, lPx + boxW - 5);
+                Canvas.SetTop(cornerNE, tPx - 5);
+
+                Canvas.SetLeft(cornerSW, lPx - 5);
+                Canvas.SetTop(cornerSW, tPx + boxH - 5);
+
+                Canvas.SetLeft(cornerSE, lPx + boxW - 5);
+                Canvas.SetTop(cornerSE, tPx + boxH - 5);
+
+                // Update controls pill position
+                double pillW = 290;
+                double pillH = 36;
+                double pillLeft = lPx + (boxW - pillW) / 2.0;
+                pillLeft = Math.Clamp(pillLeft, 6, Math.Max(6, cardW - pillW - 6));
+                double pillTop = tPx + boxH + 10;
+                if (pillTop + pillH > cardH)
+                {
+                    pillTop = Math.Max(6, tPx + boxH - pillH - 8);
+                }
+                Canvas.SetLeft(pill, pillLeft);
+                Canvas.SetTop(pill, pillTop);
+            }
+
+            UpdateCropLayout();
+
+            // Universal drag listener for all 8 handles + active box
+            void AttachHandle(UIElement handle, Action<double, double, double, double, double, double> onDrag)
+            {
+                bool isDragging = false;
+                Point startMouse = new Point();
+                double initL = 0, initT = 0, initR = 0, initB = 0;
+
+                handle.MouseLeftButtonDown += (s, e) =>
+                {
+                    isDragging = true;
+                    startMouse = e.GetPosition(cropCanvas);
+                    initL = cropL; initT = cropT; initR = cropR; initB = cropB;
+                    handle.CaptureMouse();
+                    e.Handled = true;
+                };
+
+                handle.MouseMove += (s, e) =>
+                {
+                    if (isDragging)
+                    {
+                        Point cur = e.GetPosition(cropCanvas);
+                        double dx = cur.X - startMouse.X;
+                        double dy = cur.Y - startMouse.Y;
+                        double dxPct = (dx / item.BaseWidth) * 100.0;
+                        double dyPct = (dy / item.BaseHeight) * 100.0;
+
+                        onDrag(dxPct, dyPct, initL, initT, initR, initB);
+                        UpdateCropLayout();
+                        e.Handled = true;
+                    }
+                };
+
+                handle.MouseLeftButtonUp += (s, e) =>
+                {
+                    if (isDragging)
+                    {
+                        isDragging = false;
+                        handle.ReleaseMouseCapture();
+                        e.Handled = true;
+                    }
+                };
+            }
+
+            // 1. Top Edge
+            AttachHandle(edgeTop, (dx, dy, initL, initT, initR, initB) =>
+            {
+                double maxAllowed = 85.0 - initB;
+                cropT = Math.Round(Math.Clamp(initT + dy, 0, maxAllowed), 1);
+            });
+
+            // 2. Bottom Edge
+            AttachHandle(edgeBottom, (dx, dy, initL, initT, initR, initB) =>
+            {
+                double maxAllowed = 85.0 - initT;
+                cropB = Math.Round(Math.Clamp(initB - dy, 0, maxAllowed), 1);
+            });
+
+            // 3. Left Edge
+            AttachHandle(edgeLeft, (dx, dy, initL, initT, initR, initB) =>
+            {
+                double maxAllowed = 85.0 - initR;
+                cropL = Math.Round(Math.Clamp(initL + dx, 0, maxAllowed), 1);
+            });
+
+            // 4. Right Edge
+            AttachHandle(edgeRight, (dx, dy, initL, initT, initR, initB) =>
+            {
+                double maxAllowed = 85.0 - initL;
+                cropR = Math.Round(Math.Clamp(initR - dx, 0, maxAllowed), 1);
+            });
+
+            // 5. Corner NW
+            AttachHandle(cornerNW, (dx, dy, initL, initT, initR, initB) =>
+            {
+                cropT = Math.Round(Math.Clamp(initT + dy, 0, 85.0 - initB), 1);
+                cropL = Math.Round(Math.Clamp(initL + dx, 0, 85.0 - initR), 1);
+            });
+
+            // 6. Corner NE
+            AttachHandle(cornerNE, (dx, dy, initL, initT, initR, initB) =>
+            {
+                cropT = Math.Round(Math.Clamp(initT + dy, 0, 85.0 - initB), 1);
+                cropR = Math.Round(Math.Clamp(initR - dx, 0, 85.0 - initL), 1);
+            });
+
+            // 7. Corner SW
+            AttachHandle(cornerSW, (dx, dy, initL, initT, initR, initB) =>
+            {
+                cropB = Math.Round(Math.Clamp(initB - dy, 0, 85.0 - initT), 1);
+                cropL = Math.Round(Math.Clamp(initL + dx, 0, 85.0 - initR), 1);
+            });
+
+            // 8. Corner SE
+            AttachHandle(cornerSE, (dx, dy, initL, initT, initR, initB) =>
+            {
+                cropB = Math.Round(Math.Clamp(initB - dy, 0, 85.0 - initT), 1);
+                cropR = Math.Round(Math.Clamp(initR - dx, 0, 85.0 - initL), 1);
+            });
+
+            // 9. Active Box (Center Pan)
+            AttachHandle(activeBox, (dx, dy, initL, initT, initR, initB) =>
+            {
+                double boxWPct = 100.0 - initL - initR;
+                double boxHPct = 100.0 - initT - initB;
+
+                double newL = initL + dx;
+                if (newL < 0) newL = 0;
+                if (newL + boxWPct > 100.0) newL = 100.0 - boxWPct;
+                double newR = 100.0 - (newL + boxWPct);
+
+                double newT = initT + dy;
+                if (newT < 0) newT = 0;
+                if (newT + boxHPct > 100.0) newT = 100.0 - boxHPct;
+                double newB = 100.0 - (newT + boxHPct);
+
+                cropL = Math.Round(newL, 1);
+                cropR = Math.Round(newR, 1);
+                cropT = Math.Round(newT, 1);
+                cropB = Math.Round(newB, 1);
+            });
+
+            KeyEventHandler? onCropKey = null;
+
+            void CloseOverlay()
+            {
+                if (onCropKey != null)
+                {
+                    this.PreviewKeyDown -= onCropKey;
+                    onCropKey = null;
+                }
+
+                item.Container.Children.Remove(cropOverlay);
+                _isCropping = false;
+                _activeCroppingCard = null;
+                _activeCropOverlay = null;
+
+                // Restore normal corner resize handles
+                if (item.HandleTL != null) item.HandleTL.Visibility = Visibility.Visible;
+                if (item.HandleTR != null) item.HandleTR.Visibility = Visibility.Visible;
+                if (item.HandleBL != null) item.HandleBL.Visibility = Visibility.Visible;
+                if (item.HandleBR != null) item.HandleBR.Visibility = Visibility.Visible;
+            }
+
+            void FinishCrop()
+            {
+                RecordUndo("Crop Reference");
+
+                int imgW = item.OriginalBitmap.PixelWidth;
+                int imgH = item.OriginalBitmap.PixelHeight;
+
+                int pxX = (int)Math.Round((cropL / 100.0) * imgW);
+                int pxY = (int)Math.Round((cropT / 100.0) * imgH);
+                int pxW = (int)Math.Round(((100.0 - cropL - cropR) / 100.0) * imgW);
+                int pxH = (int)Math.Round(((100.0 - cropT - cropB) / 100.0) * imgH);
+
+                pxX = Math.Clamp(pxX, 0, Math.Max(0, imgW - 1));
+                pxY = Math.Clamp(pxY, 0, Math.Max(0, imgH - 1));
+                pxW = Math.Clamp(pxW, 1, imgW - pxX);
+                pxH = Math.Clamp(pxH, 1, imgH - pxY);
+
+                CroppedBitmap cb = new CroppedBitmap(item.OriginalBitmap, new Int32Rect(pxX, pxY, pxW, pxH));
+                item.Bitmap = cb;
+                item.ImageControl.Source = cb;
+                item.AspectRatio = (double)pxW / Math.Max(1.0, pxH);
+
+                double visW = Math.Max(40, item.BaseWidth * ((100.0 - cropL - cropR) / 100.0));
+                double visH = Math.Max(40, item.BaseHeight * ((100.0 - cropT - cropB) / 100.0));
+
+                item.CropLeft = cropL;
+                item.CropTop = cropT;
+                item.CropRight = cropR;
+                item.CropBottom = cropB;
+
+                item.Width = visW;
+                item.Height = visH;
+                item.X = item.BaseX + item.BaseWidth * (cropL / 100.0);
+                item.Y = item.BaseY + item.BaseHeight * (cropT / 100.0);
+
+                CloseOverlay();
+                ScheduleAutoSave();
+                ShowToast("Crop applied (Fit to crop)", ToastType.Success);
+            }
+
+            void ResetCrop()
+            {
+                RecordUndo("Reset Crop");
+
+                item.CropLeft = 0;
+                item.CropTop = 0;
+                item.CropRight = 0;
+                item.CropBottom = 0;
+
+                item.Bitmap = item.OriginalBitmap;
+                item.ImageControl.Source = item.OriginalBitmap;
+                ApplyGifAnimationIfNeeded(item);
+                item.AspectRatio = (double)item.OriginalBitmap.PixelWidth / Math.Max(1.0, item.OriginalBitmap.PixelHeight);
+
+                item.Width = item.BaseWidth;
+                item.Height = item.BaseHeight;
+                item.X = item.BaseX;
+                item.Y = item.BaseY;
+
+                CloseOverlay();
+                ScheduleAutoSave();
+                ShowToast("Crop reset to full image", ToastType.Info);
+            }
+
+            void CancelCrop()
+            {
+                item.Bitmap = prevBitmap;
+                item.ImageControl.Source = prevBitmap;
+                item.CropLeft = prevCropL;
+                item.CropTop = prevCropT;
+                item.CropRight = prevCropR;
+                item.CropBottom = prevCropB;
+
+                item.Width = prevW;
+                item.Height = prevH;
+                item.X = prevX;
+                item.Y = prevY;
+
+                CloseOverlay();
+                ShowToast("Crop cancelled", ToastType.Info);
+            }
+
+            onCropKey = (s, e) =>
+            {
+                if (e.Key == Key.Enter)
+                {
+                    e.Handled = true;
+                    FinishCrop();
+                }
+                else if (e.Key == Key.Escape)
+                {
+                    e.Handled = true;
+                    if (item.IsCropped)
+                    {
+                        ResetCrop();
+                    }
+                    else
+                    {
+                        CancelCrop();
+                    }
+                }
+            };
+            this.PreviewKeyDown += onCropKey;
+
+            btnDone.MouseLeftButtonDown += (s, e) => { e.Handled = true; FinishCrop(); };
+            btnReset.MouseLeftButtonDown += (s, e) => { e.Handled = true; ResetCrop(); };
+            btnCancel.MouseLeftButtonDown += (s, e) => { e.Handled = true; CancelCrop(); };
+
+            item.Container.Children.Add(cropOverlay);
+            ShowToast("Drag yellow borders/corners to crop. Press Enter when done.", ToastType.Info);
+        }
+
+        #endregion
+
+        private void ZoomToCard(CardItem item)
+        {
+            if (item == null) return;
+
+            double viewW = CanvasContainer.ActualWidth > 0 ? CanvasContainer.ActualWidth : ActualWidth;
+            double viewH = CanvasContainer.ActualHeight > 0 ? CanvasContainer.ActualHeight : ActualHeight;
+            if (viewW <= 0) viewW = 800;
+            if (viewH <= 0) viewH = 600;
+
+            // Comfortable margins: 120px horizontal (60px each side), 140px vertical (topbar, dock, and bottom pill clearance)
+            const double marginX = 120.0;
+            const double marginY = 140.0;
+
+            double availW = Math.Max(50.0, viewW - marginX);
+            double availH = Math.Max(50.0, viewH - marginY);
+
+            double cardW = Math.Max(10.0, item.Width);
+            double cardH = Math.Max(10.0, item.Height);
+
+            // Mathematical aspect-ratio preserving fit with comfortable breathing room (~90% fill)
+            double scaleX = availW / cardW;
+            double scaleY = availH / cardH;
+            double fitScale = Math.Min(scaleX, scaleY) * 0.90;
+
+            // Smooth scaling: allows scaling in up to 350% or down to 15%
+            double targetZoom = Math.Clamp(fitScale, 0.15, 3.5);
+
+            double cardCenterX = item.X + (cardW / 2.0);
+            double cardCenterY = item.Y + (cardH / 2.0);
+
+            // Optical center of canvas viewport (accounting for the 40px Top TitleBar)
+            double viewCenterX = viewW / 2.0;
+            double viewCenterY = (viewH + 40.0) / 2.0;
+
+            double targetOffsetX = viewCenterX - (cardCenterX * targetZoom);
+            double targetOffsetY = viewCenterY - (cardCenterY * targetZoom);
+
+            AnimateCanvasView(targetZoom, targetOffsetX, targetOffsetY);
+            ShowToast($"Zoomed to reference ({(int)Math.Round(targetZoom * 100)}%)", ToastType.Info);
+        }
+
+        private void AnimateCanvasView(double targetZoom, double targetOffsetX, double targetOffsetY)
+        {
+            if (_activeZoomAnimation != null)
+            {
+                CompositionTarget.Rendering -= _activeZoomAnimation;
+                _activeZoomAnimation = null;
+            }
+
+            Matrix current = CanvasMatrixTransform.Matrix;
+            double startZoom = current.M11;
+            double startX = current.OffsetX;
+            double startY = current.OffsetY;
+
+            DateTime startTime = DateTime.Now;
+            TimeSpan duration = TimeSpan.FromMilliseconds(220);
+
+            _activeZoomAnimation = (s, e) =>
+            {
+                double elapsed = (DateTime.Now - startTime).TotalMilliseconds;
+                double t = Math.Clamp(elapsed / duration.TotalMilliseconds, 0.0, 1.0);
+                // Smooth cubic ease out: 1 - (1 - t)^3
+                double ease = 1.0 - Math.Pow(1.0 - t, 3);
+
+                double curZoom = startZoom + (targetZoom - startZoom) * ease;
+                double curX = startX + (targetOffsetX - startX) * ease;
+                double curY = startY + (targetOffsetY - startY) * ease;
+
+                CanvasMatrixTransform.Matrix = new Matrix(curZoom, 0, 0, curZoom, curX, curY);
+                TxtZoom.Text = $"Zoom: {(int)Math.Round(curZoom * 100)}%";
+                SyncActiveHwndPositions(updateSize: true);
+
+                if (t >= 1.0)
+                {
+                    if (_activeZoomAnimation != null)
+                    {
+                        CompositionTarget.Rendering -= _activeZoomAnimation;
+                        _activeZoomAnimation = null;
+                    }
+                    SyncActiveHwndPositions(updateSize: true);
+                    ScheduleAutoSave();
+                }
+            };
+
+            CompositionTarget.Rendering += _activeZoomAnimation;
+        }
+
+        public void ZoomToFitAllCards(bool animated = false, bool showToast = true)
+        {
+            if (_cards.Count == 0)
+            {
+                if (animated)
+                {
+                    AnimateCanvasView(1.0, 0, 0);
+                }
+                else
+                {
+                    CanvasMatrixTransform.Matrix = Matrix.Identity;
+                    TxtZoom.Text = "Zoom: 100%";
+                    SyncActiveHwndPositions(updateSize: true);
+                }
+                return;
+            }
+
+            double minX = _cards.Min(c => c.X);
+            double minY = _cards.Min(c => c.Y);
+            double maxX = _cards.Max(c => c.X + c.Width);
+            double maxY = _cards.Max(c => c.Y + c.Height);
+
+            double boardW = Math.Max(50.0, maxX - minX);
+            double boardH = Math.Max(50.0, maxY - minY);
+
+            double viewW = CanvasContainer.ActualWidth > 0 ? CanvasContainer.ActualWidth : ActualWidth;
+            double viewH = CanvasContainer.ActualHeight > 0 ? CanvasContainer.ActualHeight : ActualHeight;
+            if (viewW <= 0) viewW = 1200;
+            if (viewH <= 0) viewH = 800;
+
+            const double padding = 100.0;
+            double availW = Math.Max(50.0, viewW - (padding * 2));
+            double availH = Math.Max(50.0, viewH - (padding * 2) - 40.0); // 40px top titlebar clearance
+
+            double scaleX = availW / boardW;
+            double scaleY = availH / boardH;
+            double targetZoom = Math.Clamp(Math.Min(scaleX, scaleY), 0.10, 1.25);
+
+            double centerX = minX + (boardW / 2.0);
+            double centerY = minY + (boardH / 2.0);
+
+            double viewCenterX = viewW / 2.0;
+            double viewCenterY = (viewH + 40.0) / 2.0;
+
+            double targetOffsetX = viewCenterX - (centerX * targetZoom);
+            double targetOffsetY = viewCenterY - (centerY * targetZoom);
+
+            if (animated)
+            {
+                AnimateCanvasView(targetZoom, targetOffsetX, targetOffsetY);
+                if (showToast)
+                {
+                    ShowToast($"Framed {_cards.Count} references ({(int)Math.Round(targetZoom * 100)}%)", ToastType.Info);
+                }
+            }
+            else
+            {
+                CanvasMatrixTransform.Matrix = new Matrix(targetZoom, 0, 0, targetZoom, targetOffsetX, targetOffsetY);
+                TxtZoom.Text = $"Zoom: {(int)Math.Round(targetZoom * 100)}%";
+                SyncActiveHwndPositions(updateSize: true);
+            }
+        }
+
+        private void BtnFitAll_Click(object sender, MouseButtonEventArgs e)
+        {
+            ZoomToFitAllCards(animated: true);
+            e.Handled = true;
+        }
+
+        private string GetExportPathForCard(CardItem item)
+        {
+            EnsureLocalCache(item);
+            if (!item.IsCropped || item.Bitmap == null)
+            {
+                return item.LocalPath;
+            }
+
+            try
+            {
+                Directory.CreateDirectory(CacheDir);
+                string filename = $"crop_{DateTime.UtcNow:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}.png";
+                string targetPath = System.IO.Path.Combine(CacheDir, filename);
+
+                int origW = item.Bitmap.PixelWidth;
+                int origH = item.Bitmap.PixelHeight;
+                int srcX = (int)Math.Round(origW * (item.CropLeft / 100.0));
+                int srcY = (int)Math.Round(origH * (item.CropTop / 100.0));
+                int srcW = (int)Math.Round(origW * (1.0 - (item.CropLeft + item.CropRight) / 100.0));
+                int srcH = (int)Math.Round(origH * (1.0 - (item.CropTop + item.CropBottom) / 100.0));
+
+                srcX = Math.Clamp(srcX, 0, origW - 1);
+                srcY = Math.Clamp(srcY, 0, origH - 1);
+                srcW = Math.Clamp(srcW, 1, origW - srcX);
+                srcH = Math.Clamp(srcH, 1, origH - srcY);
+
+                CroppedBitmap croppedBmp = new CroppedBitmap(item.Bitmap, new Int32Rect(srcX, srcY, srcW, srcH));
+                PngBitmapEncoder encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(croppedBmp));
+                using FileStream fs = new FileStream(targetPath, FileMode.Create, FileAccess.Write);
+                encoder.Save(fs);
+                return targetPath;
+            }
+            catch
+            {
+                return item.LocalPath;
+            }
+        }
+
+        private void ExportCardsToAe(IEnumerable<CardItem> cards, string? compName = null, string mode = "loose_photos")
+        {
+            var cardList = cards.ToList();
+            if (cardList.Count == 0) return;
+
+            var payload = new AeExportCompPayload
+            {
+                Mode = mode,
+                CompName = !string.IsNullOrWhiteSpace(compName) ? compName : (_projectName == "untitled" ? "References" : _projectName)
+            };
+
+            var clipboardPaths = new System.Collections.Specialized.StringCollection();
+
+            foreach (var card in cardList)
+            {
+                string exportPath = GetExportPathForCard(card);
+                if (!File.Exists(exportPath)) continue;
+
+                clipboardPaths.Add(exportPath);
+                payload.Items.Add(new AeExportItem
+                {
+                    FilePath = exportPath,
+                    RelX = card.X,
+                    RelY = card.Y,
+                    Width = card.Width > 0 ? card.Width : 300,
+                    Height = card.Height > 0 ? card.Height : 200
+                });
+            }
+
+            if (payload.Items.Count == 0)
+            {
+                ShowToast("No valid image files available to export.", ToastType.Error);
+                return;
+            }
+
+            // Also copy to clipboard for convenience
+            try
+            {
+                Clipboard.SetFileDropList(clipboardPaths);
+            }
+            catch { }
+
+            ShowToast(payload.Items.Count > 1
+                ? $"Exporting {payload.Items.Count} references to After Effects..."
+                : "Exporting reference to After Effects...", ToastType.Info, 2500);
+
+            bool ok = AfterEffectsIntegration.ExportToAfterEffects(payload, out string outMsg);
+            if (ok)
+            {
+                ShowToast($"📸 {outMsg}", ToastType.Success, 3500);
+            }
+            else
+            {
+                ShowToast($"After Effects: {outMsg}", ToastType.Error, 4000);
+            }
+        }
+
+        private void SendCardToAe(CardItem item)
+        {
+            ExportCardsToAe(new[] { item });
+        }
+
+        private void SendCardToPs(CardItem item)
+        {
+            string exportPath = GetExportPathForCard(item);
+            if (!File.Exists(exportPath)) return;
+
+            try
+            {
+                string psExe = AfterEffectsIntegration.FindPhotoshopExe();
+                if (!string.IsNullOrEmpty(psExe) && File.Exists(psExe))
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = psExe,
+                        Arguments = $"\"{exportPath}\"",
+                        UseShellExecute = true
+                    });
+                    ShowToast("Opened reference in Adobe Photoshop", ToastType.Success);
+                }
+                else
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = exportPath,
+                        UseShellExecute = true
+                    });
+                    ShowToast("Opened reference in Default Viewer", ToastType.Info);
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowToast($"Photoshop error: {ex.Message}", ToastType.Error);
+            }
+        }
+
+        #region YouTube Playback & AE Frame Capture
+
+        public static void LogToFile(string message)
+        {
+            try
+            {
+                Directory.CreateDirectory(AppDataDir);
+                string logFile = System.IO.Path.Combine(AppDataDir, "dropboard.log");
+                File.AppendAllText(logFile, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}{Environment.NewLine}");
+            }
+            catch { }
+        }
+
+        private static Microsoft.Web.WebView2.Core.CoreWebView2Environment? _sharedWebViewEnv;
+
+        private static async Task<Microsoft.Web.WebView2.Core.CoreWebView2Environment> GetSharedWebViewEnvAsync()
+        {
+            if (_sharedWebViewEnv != null) return _sharedWebViewEnv;
+
+            string userDataDir = System.IO.Path.Combine(AppDataDir, "WebView2Profile");
+            var envOptions = new Microsoft.Web.WebView2.Core.CoreWebView2EnvironmentOptions
+            {
+                AdditionalBrowserArguments = "--in-process-gpu --disable-features=AudioServiceOutOfProcess,NetworkServiceInProcess,Translate,OptimizationHints --disable-gpu-shader-disk-cache --disable-crash-reporter --disable-crashpad --renderer-process-limit=1 --process-per-site --autoplay-policy=no-user-gesture-required"
+            };
+            _sharedWebViewEnv = await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(userDataFolder: userDataDir, options: envOptions);
+            return _sharedWebViewEnv;
+        }
+
+        private async void PlayYouTubeCard(CardItem item)
+        {
+            if (string.IsNullOrEmpty(item.YouTubeId) || item.IsPlayingYouTube) return;
+
+            LogToFile($"PlayYouTubeCard initiated for id: {item.YouTubeId}");
+
+            try
+            {
+                item.IsPlayingYouTube = true;
+                item.AspectRatio = 16.0 / 9.0;
+                double targetH = Math.Round(item.Width / (16.0 / 9.0));
+                item.Height = targetH;
+                item.BaseHeight = targetH;
+                item.Container.Height = targetH;
+                item.ContentBorder.Height = targetH;
+                item.ImageControl.Height = targetH;
+
+                if (item.BtnPlayOverlay?.Child is TextBlock tb)
+                {
+                    tb.Text = "⏹ Stop";
+                    tb.Foreground = new SolidColorBrush(Color.FromRgb(251, 191, 36)); // Amber stop
+                }
+
+                if (item.PlayerControl == null)
+                {
+                    var webView = new Microsoft.Web.WebView2.Wpf.WebView2
+                    {
+                        Width = double.NaN,
+                        Height = double.NaN,
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        VerticalAlignment = VerticalAlignment.Stretch,
+                        DefaultBackgroundColor = System.Drawing.Color.FromArgb(15, 17, 23)
+                    };
+                    item.LastPixelX = int.MinValue;
+                    item.LastPixelY = int.MinValue;
+                    item.LastPixelW = int.MinValue;
+                    item.LastPixelH = int.MinValue;
+                    item.PlayerControl = webView;
+
+                    // Ensure ContentBorder stays at index 0 as solid C# backing (Alpha = 255)
+                    // Place webView right above ContentBorder at index 1 (behind handles & hover toolbar)
+                    item.Container.Children.Insert(1, webView);
+
+                    var env = await GetSharedWebViewEnvAsync();
+                    await webView.EnsureCoreWebView2Async(env);
+
+                    webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
+                    webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                    webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+
+                    // Ensure local WebAssets folder exists with yt.html
+                    string ytAssetsDir = System.IO.Path.Combine(AppDataDir, "WebAssets");
+                    Directory.CreateDirectory(ytAssetsDir);
+                    string ytHtmlPath = System.IO.Path.Combine(ytAssetsDir, "yt.html");
+                    string ytHtmlContent = @"<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"">
+  <meta http-equiv=""X-UA-Compatible"" content=""IE=Edge""/>
+  <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
+  <title>YouTube Player</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000000; }
+    #player-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; }
+    iframe { border: none; width: 100% !important; height: 100% !important; display: block; }
+  </style>
+</head>
+<body>
+  <div id=""player-container""></div>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const ytId = params.get('id');
+    if (ytId) {
+      const iframe = document.createElement('iframe');
+      iframe.className = 'card-yt-iframe';
+      iframe.src = 'https://www.youtube-nocookie.com/embed/' + ytId + '?autoplay=1&playsinline=1&enablejsapi=1&rel=0';
+      iframe.title = 'YouTube Video Player';
+      iframe.setAttribute('allow', 'accelerometer; autoplay *; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share');
+      iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+      iframe.setAttribute('allowfullscreen', 'true');
+      document.getElementById('player-container').appendChild(iframe);
+    }
+
+    window.requestCleanFrame = function() {
+      const ifr = document.querySelector('iframe');
+      if (ifr && ifr.contentWindow) {
+        ifr.contentWindow.postMessage({ type: 'DROPBOARD_CAPTURE_YT_FRAME' }, '*');
+      }
+    };
+
+    window.addEventListener('message', function(ev) {
+      if (!ev.data) return;
+      if (ev.data.type === 'DROPBOARD_YT_FRAME_RESULT') {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify({
+            type: 'YT_CLEAN_FRAME',
+            dataUrl: ev.data.dataUrl
+          }));
+        }
+      } else if (ev.data.type === 'DROPBOARD_IFRAME_CLICK') {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify({ type: 'CARD_CLICK' }));
+        }
+      } else if (ev.data.type === 'DROPBOARD_IFRAME_CONTEXT_MENU') {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify({
+            type: 'IFRAME_CONTEXT_MENU',
+            screenX: ev.data.screenX,
+            screenY: ev.data.screenY
+          }));
+        }
+      } else if (ev.data.type === 'DROPBOARD_IFRAME_WHEEL') {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify({
+            type: 'CANVAS_WHEEL',
+            deltaY: ev.data.deltaY,
+            screenX: ev.data.screenX,
+            screenY: ev.data.screenY
+          }));
+        }
+      } else if (ev.data.type === 'DROPBOARD_IFRAME_PAN_START') {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify({
+            type: 'IFRAME_PAN_START',
+            button: ev.data.button,
+            screenX: ev.data.screenX,
+            screenY: ev.data.screenY
+          }));
+        }
+      }
+    });
+
+    window.addEventListener('mousedown', function(e) {
+      if (e.button === 2) {
+        e.preventDefault();
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify({
+            type: 'IFRAME_CONTEXT_MENU',
+            screenX: e.screenX,
+            screenY: e.screenY
+          }));
+        }
+      } else if (e.button === 1) {
+        e.preventDefault();
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify({
+            type: 'IFRAME_PAN_START',
+            button: e.button,
+            screenX: e.screenX,
+            screenY: e.screenY
+          }));
+        }
+      }
+    }, true);
+
+    window.addEventListener('wheel', function(e) {
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage(JSON.stringify({
+          type: 'CANVAS_WHEEL',
+          deltaY: e.deltaY,
+          screenX: e.screenX,
+          screenY: e.screenY
+        }));
+      }
+    }, { passive: false });
+
+    document.addEventListener('mousemove', function() {
+      if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage(JSON.stringify({ type: 'MOUSE_MOVE' }));
+      }
+    });
+  </script>
+</body>
+</html>";
+                    File.WriteAllText(ytHtmlPath, ytHtmlContent);
+
+                    // Map virtual host name 'dropboard.local' to WebAssets folder
+                    webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                        "dropboard.local",
+                        ytAssetsDir,
+                        Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow
+                    );
+
+                    webView.CoreWebView2.WebMessageReceived += (s, e) =>
+                    {
+                        try
+                        {
+                            string rawMsg = e.TryGetWebMessageAsString();
+                            if (string.IsNullOrEmpty(rawMsg)) return;
+
+                            Dispatcher.InvokeAsync(() =>
+                            {
+                                if (rawMsg.Contains("MOUSE_MOVE"))
+                                {
+                                    if (Panel.GetZIndex(item.Container) < 500 && !item.IsSelected)
+                                    {
+                                        Panel.SetZIndex(item.Container, 500);
+                                    }
+                                    if (item.HoverToolbar != null)
+                                    {
+                                        item.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
+                                        item.HoverToolbar.Opacity = 1.0;
+                                        item.HoverToolbar.IsHitTestVisible = true;
+                                    }
+                                }
+                                else if (rawMsg.Contains("IFRAME_PAN_START"))
+                                {
+                                    try
+                                    {
+                                        using var doc = System.Text.Json.JsonDocument.Parse(rawMsg);
+                                        Point canvasPoint;
+                                        if (doc.RootElement.TryGetProperty("screenX", out var sxEl) &&
+                                            doc.RootElement.TryGetProperty("screenY", out var syEl))
+                                        {
+                                            canvasPoint = CanvasContainer.PointFromScreen(new Point(sxEl.GetDouble(), syEl.GetDouble()));
+                                        }
+                                        else
+                                        {
+                                            canvasPoint = Mouse.GetPosition(CanvasContainer);
+                                        }
+
+                                        _isPanning = true;
+                                        _lastPanPoint = canvasPoint;
+                                        SetWebViewHitTesting(false);
+                                        CanvasContainer.CaptureMouse();
+                                        Cursor = Cursors.Hand;
+                                    }
+                                    catch { }
+                                }
+                                else if (rawMsg.Contains("CARD_CLICK"))
+                                {
+                                    SelectCard(item, addToSelection: false);
+                                }
+                                else if (rawMsg.Contains("IFRAME_CONTEXT_MENU"))
+                                {
+                                    if (!item.IsSelected)
+                                    {
+                                        SelectCard(item, addToSelection: false);
+                                    }
+                                    if (item.Container.ContextMenu != null)
+                                    {
+                                        item.Container.ContextMenu.PlacementTarget = item.Container;
+                                        item.Container.ContextMenu.IsOpen = true;
+                                    }
+                                }
+                                else if (rawMsg.Contains("CANVAS_WHEEL"))
+                                {
+                                    try
+                                    {
+                                        using var doc = System.Text.Json.JsonDocument.Parse(rawMsg);
+                                        if (doc.RootElement.TryGetProperty("deltaY", out var dyEl))
+                                        {
+                                            double dy = dyEl.GetDouble();
+                                            int wpfDelta = dy > 0 ? -120 : 120;
+                                            Point mousePos;
+                                            if (doc.RootElement.TryGetProperty("screenX", out var sxEl) &&
+                                                doc.RootElement.TryGetProperty("screenY", out var syEl))
+                                            {
+                                                mousePos = CanvasContainer.PointFromScreen(new Point(sxEl.GetDouble(), syEl.GetDouble()));
+                                            }
+                                            else
+                                            {
+                                                mousePos = new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2);
+                                            }
+                                            PerformCanvasZoom(wpfDelta, mousePos);
+                                        }
+                                    }
+                                    catch { }
+                                }
+                                else if (rawMsg.Contains("YT_CLEAN_FRAME"))
+                                {
+                                    try
+                                    {
+                                        using var doc = System.Text.Json.JsonDocument.Parse(rawMsg);
+                                        if (doc.RootElement.TryGetProperty("dataUrl", out var urlEl))
+                                        {
+                                            string dataUrl = urlEl.GetString() ?? "";
+                                            if (_pendingCleanFrameRequests.TryGetValue(item.Id, out var tcs))
+                                            {
+                                                tcs.TrySetResult(dataUrl);
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
+                            });
+                        }
+                        catch { }
+                    };
+
+                    // Inject clean YouTube frame capture hook, auto-play, pan forwarding, & UI cleanup into all frames
+                    await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(@"
+(function() {
+  if (window.self === window.top) return;
+  if (location.hostname.indexOf('youtube') === -1) return;
+
+  function cleanYoutube() {
+    try {
+      if (!document.getElementById('dropboard-clean-yt')) {
+        var style = document.createElement('style');
+        style.id = 'dropboard-clean-yt';
+        style.textContent = '.ytp-pause-overlay, .ytp-bezel, .ytp-chrome-top, .ytp-gradient-top, .ytp-gradient-bottom { display: none !important; }';
+        (document.head || document.documentElement).appendChild(style);
+      }
+    } catch(e) {}
+  }
+  cleanYoutube();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', cleanYoutube);
+  } else {
+    cleanYoutube();
+  }
+
+  // Auto-play immediately without waiting for extra user gesture
+  function tryAutoPlay() {
+    try {
+      var v = document.querySelector('video');
+      if (v && v.paused) {
+        v.play().catch(function(){});
+      }
+      var btn = document.querySelector('.ytp-large-play-button');
+      if (btn) btn.click();
+    } catch(e) {}
+  }
+  setTimeout(tryAutoPlay, 300);
+  setTimeout(tryAutoPlay, 700);
+  setTimeout(tryAutoPlay, 1500);
+
+  // Forward click inside video to WPF so card is selected; forward right click to open context menu; middle click to pan
+  window.addEventListener('mousedown', function(e) {
+    if (e.button === 0) {
+      window.parent.postMessage({ type: 'DROPBOARD_IFRAME_CLICK' }, '*');
+    } else if (e.button === 2) {
+      e.preventDefault();
+      window.parent.postMessage({
+        type: 'DROPBOARD_IFRAME_CONTEXT_MENU',
+        screenX: e.screenX,
+        screenY: e.screenY
+      }, '*');
+    } else if (e.button === 1) {
+      e.preventDefault();
+      window.parent.postMessage({
+        type: 'DROPBOARD_IFRAME_PAN_START',
+        button: e.button,
+        screenX: e.screenX,
+        screenY: e.screenY
+      }, '*');
+    }
+  }, true);
+
+  // Forward mouse wheel so canvas zoom works when hovering over video
+  window.addEventListener('wheel', function(e) {
+    window.parent.postMessage({
+      type: 'DROPBOARD_IFRAME_WHEEL',
+      deltaY: e.deltaY,
+      screenX: e.screenX,
+      screenY: e.screenY
+    }, '*');
+  }, { passive: false });
+
+  // Capture clean video frame from HTML5 <video> directly into offscreen <canvas>
+  window.addEventListener('message', function(ev) {
+    if (!ev.data) return;
+    if (ev.data.type === 'DROPBOARD_CAPTURE_YT_FRAME') {
+      try {
+        var v = document.querySelector('video');
+        if (v) {
+          var w = v.videoWidth || v.clientWidth || 1280;
+          var h = v.videoHeight || v.clientHeight || 720;
+          var c = document.createElement('canvas');
+          c.width = w;
+          c.height = h;
+          var ctx = c.getContext('2d');
+          ctx.drawImage(v, 0, 0, w, h);
+          var dataUrl = c.toDataURL('image/png');
+          window.parent.postMessage({
+            type: 'DROPBOARD_YT_FRAME_RESULT',
+            dataUrl: dataUrl
+          }, '*');
+        }
+      } catch(err) {
+        console.warn('Frame capture error:', err);
+      }
+    }
+  });
+})();
+");
+                }
+
+                item.PlayerControl.Visibility = Visibility.Visible;
+                item.ContentBorder.Visibility = Visibility.Visible;
+                item.ContentBorder.IsHitTestVisible = false; // Mouse events pass straight to webView
+                item.ImageControl.Visibility = Visibility.Collapsed;
+                if (item.NativePlayer != null) item.NativePlayer.Visibility = Visibility.Collapsed;
+                if (item.YouTubeTagBadge != null) item.YouTubeTagBadge.Visibility = Visibility.Collapsed;
+                if (item.CenterPlayBtn != null) item.CenterPlayBtn.Visibility = Visibility.Collapsed;
+
+                string playerUrl = $"https://dropboard.local/yt.html?id={item.YouTubeId}";
+                item.PlayerControl.CoreWebView2.Navigate(playerUrl);
+
+                if (item.HoverToolbar != null)
+                {
+                    item.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
+                    item.HoverToolbar.Opacity = 1.0;
+                    item.HoverToolbar.IsHitTestVisible = true;
+                }
+
+                ShowToast("▶ Streaming YouTube", ToastType.Info, 1800);
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"PlayYouTubeCard exception: {ex.Message}");
+                StopYouTubeCard(item);
+                ShowToast($"Playback error: {ex.Message}", ToastType.Error);
+            }
+        }
+
+        private void StopYouTubeCard(CardItem item)
+        {
+            item.IsPlayingYouTube = false;
+            if (item.BtnPlayOverlay?.Child is TextBlock tb)
+            {
+                tb.Text = "▶ Play";
+                tb.Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)); // Red play
+            }
+
+            if (item.NativePlayer != null)
+            {
+                try
+                {
+                    item.NativePlayer.Stop();
+                    item.NativePlayer.Source = null;
+                }
+                catch { }
+                item.NativePlayer.Visibility = Visibility.Collapsed;
+            }
+
+            if (item.PlayerControl != null)
+            {
+                try
+                {
+                    item.PlayerControl.Source = new Uri("about:blank");
+                    item.PlayerControl.Dispose();
+                    item.Container.Children.Remove(item.PlayerControl);
+                    item.PlayerControl = null;
+                }
+                catch { }
+            }
+            item.LastPixelX = int.MinValue;
+            item.LastPixelY = int.MinValue;
+            item.LastPixelW = int.MinValue;
+            item.LastPixelH = int.MinValue;
+            item.ContentBorder.Visibility = Visibility.Visible;
+            item.ContentBorder.IsHitTestVisible = true;
+            item.ImageControl.Visibility = Visibility.Visible;
+            if (item.YouTubeTagBadge != null) item.YouTubeTagBadge.Visibility = Visibility.Visible;
+            if (item.CenterPlayBtn != null) item.CenterPlayBtn.Visibility = Visibility.Visible;
+
+            if (item.HoverToolbar != null && !item.IsSelected && !item.Container.IsMouseOver)
+            {
+                item.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
+                item.HoverToolbar.Opacity = 0.0;
+                item.HoverToolbar.IsHitTestVisible = false;
+            }
+        }
+
+        private void ToggleYouTubePlayback(CardItem item)
+        {
+            if (!item.IsYouTube) return;
+            if (item.IsPlayingYouTube)
+            {
+                StopYouTubeCard(item);
+            }
+            else
+            {
+                PlayYouTubeCard(item);
+            }
+        }
+
+        private async Task<byte[]?> CaptureCleanYouTubeFrameAsync(CardItem item)
+        {
+            if (item == null) return null;
+
+            byte[]? frameBytes = null;
+
+            // 1. If NativePlayer (WPF MediaElement) is playing, capture instantly via RenderTargetBitmap
+            if (item.IsPlayingYouTube && item.NativePlayer != null && item.NativePlayer.Visibility == Visibility.Visible)
+            {
+                try
+                {
+                    int w = Math.Max(10, (int)item.Width);
+                    int h = Math.Max(10, (int)item.Height);
+                    var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+                    rtb.Render(item.NativePlayer);
+
+                    var encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(rtb));
+                    using var ms = new MemoryStream();
+                    encoder.Save(ms);
+                    frameBytes = ms.ToArray();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"MediaElement capture error: {ex.Message}");
+                }
+            }
+            // 2. If WebView2 is actively playing, capture CLEAN frame directly from HTML5 <video> element (no player UI overlays!)
+            else if (item.IsPlayingYouTube && item.PlayerControl?.CoreWebView2 != null)
+            {
+                try
+                {
+                    var tcs = new TaskCompletionSource<string>();
+                    _pendingCleanFrameRequests[item.Id] = tcs;
+
+                    await item.PlayerControl.ExecuteScriptAsync("window.requestCleanFrame && window.requestCleanFrame();");
+
+                    var completed = await Task.WhenAny(tcs.Task, Task.Delay(850));
+                    if (completed == tcs.Task)
+                    {
+                        string dataUrl = await tcs.Task;
+                        if (!string.IsNullOrEmpty(dataUrl))
+                        {
+                            string b64 = dataUrl.Contains(",") ? dataUrl.Substring(dataUrl.IndexOf(",") + 1) : dataUrl;
+                            frameBytes = Convert.FromBase64String(b64);
+                        }
+                    }
+                    _pendingCleanFrameRequests.Remove(item.Id);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Clean canvas snapshot error: {ex.Message}");
+                }
+
+                // Fallback to viewport capture only if clean canvas extraction timed out
+                if (frameBytes == null || frameBytes.Length == 0)
+                {
+                    try
+                    {
+                        using var ms = new MemoryStream();
+                        await item.PlayerControl.CoreWebView2.CapturePreviewAsync(
+                            Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat.Png,
+                            ms);
+                        frameBytes = ms.ToArray();
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"CapturePreviewAsync fallback error: {ex.Message}");
+                    }
+                }
+            }
+
+            // 3. Fallback: if not playing or preview capture returned empty, use card visual Bitmap
+            if (frameBytes == null || frameBytes.Length == 0)
+            {
+                if (item.Bitmap != null)
+                {
+                    var encoder = new PngBitmapEncoder();
+                    encoder.Frames.Add(BitmapFrame.Create(item.Bitmap));
+                    using var ms = new MemoryStream();
+                    encoder.Save(ms);
+                    frameBytes = ms.ToArray();
+                }
+            }
+
+            return frameBytes;
+        }
+
+        private async void SnapYouTubeFrameToAE(CardItem item)
+        {
+            if (item == null) return;
+
+            ShowToast("📸 Capturing clean video frame to After Effects...", ToastType.Info, 2000);
+
+            try
+            {
+                byte[]? frameBytes = await CaptureCleanYouTubeFrameAsync(item);
+                if (frameBytes == null || frameBytes.Length == 0)
+                {
+                    ShowToast("Could not capture video frame", ToastType.Error);
+                    return;
+                }
+
+                Directory.CreateDirectory(CacheDir);
+                using var md5 = System.Security.Cryptography.MD5.Create();
+                string hash = Convert.ToHexString(md5.ComputeHash(frameBytes))[..12].ToLowerInvariant();
+                string filename = $"snap_yt_{hash}.png";
+                string snapPath = System.IO.Path.Combine(CacheDir, filename);
+                if (!File.Exists(snapPath))
+                {
+                    await File.WriteAllBytesAsync(snapPath, frameBytes);
+                }
+
+                // Export directly to After Effects WITHOUT adding a card to DropBoard canvas!
+                var payload = new AeExportCompPayload
+                {
+                    Mode = "loose_photos"
+                };
+                payload.Items.Add(new AeExportItem
+                {
+                    FilePath = snapPath,
+                    RelX = item.X,
+                    RelY = item.Y,
+                    Width = item.Width,
+                    Height = item.Height
+                });
+
+                bool aeOk = AfterEffectsIntegration.ExportToAfterEffects(payload, out string aeMsg);
+                if (aeOk)
+                {
+                    ShowToast("📸 Clean video frame exported to After Effects!", ToastType.Success, 3500);
+                }
+                else
+                {
+                    ShowToast($"Frame snapped, but AE: {aeMsg}", ToastType.Info, 3500);
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowToast($"Export error: {ex.Message}", ToastType.Error);
+            }
+        }
+
+        private async void SnapYouTubeFrameToBoard(CardItem item)
+        {
+            if (item == null) return;
+
+            ShowToast("📸 Capturing video snapshot to canvas...", ToastType.Info, 2000);
+
+            try
+            {
+                byte[]? frameBytes = await CaptureCleanYouTubeFrameAsync(item);
+                if (frameBytes == null || frameBytes.Length == 0)
+                {
+                    ShowToast("Could not capture video frame", ToastType.Error);
+                    return;
+                }
+
+                Directory.CreateDirectory(CacheDir);
+                using var md5 = System.Security.Cryptography.MD5.Create();
+                string hash = Convert.ToHexString(md5.ComputeHash(frameBytes))[..12].ToLowerInvariant();
+                string filename = $"snap_yt_{hash}.png";
+                string snapPath = System.IO.Path.Combine(CacheDir, filename);
+                if (!File.Exists(snapPath))
+                {
+                    await File.WriteAllBytesAsync(snapPath, frameBytes);
+                }
+
+                using (var imgMs = new MemoryStream(frameBytes))
+                {
+                    BitmapImage snappedBmp = new BitmapImage();
+                    snappedBmp.BeginInit();
+                    snappedBmp.StreamSource = imgMs;
+                    snappedBmp.CacheOption = BitmapCacheOption.OnLoad;
+                    snappedBmp.EndInit();
+                    snappedBmp.Freeze();
+
+                    Point newCardPos = new Point(item.X + item.Width + _currentGap, item.Y);
+                    string b64 = $"data:image/png;base64,{Convert.ToBase64String(frameBytes)}";
+
+                    CardItem newCard = AddImageCard(
+                        snappedBmp,
+                        worldPosition: newCardPos,
+                        customWidth: item.Width,
+                        customHeight: item.Height,
+                        localPath: snapPath,
+                        base64Data: b64,
+                        autoSelect: true);
+
+                    RecordUndo("Snap Video Frame to Board");
+                }
+
+                ShowToast("📋 Video snapshot card added to canvas", ToastType.Success, 2500);
+            }
+            catch (Exception ex)
+            {
+                ShowToast($"Snapshot error: {ex.Message}", ToastType.Error);
+            }
+        }
+
+        #endregion
+
+        private const string YOUTUBE_API_KEY = "AIzaSyCKx_Tba2ezZ2WlVtZGtf1KvA_jLFji2wQ";
+
+        private static async Task<(string? bestThumbnailUrl, string? title)> FetchYouTubeMetadataViaApiAsync(string ytId, HttpClient client)
+        {
+            try
+            {
+                string endpoint = $"https://www.googleapis.com/youtube/v3/videos?id={ytId}&key={YOUTUBE_API_KEY}&part=snippet";
+                string res = await client.GetStringAsync(endpoint);
+                using var doc = JsonDocument.Parse(res);
+                if (doc.RootElement.TryGetProperty("items", out var items) && items.GetArrayLength() > 0)
+                {
+                    var snippet = items[0].GetProperty("snippet");
+                    string title = snippet.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+                    if (snippet.TryGetProperty("thumbnails", out var thumbs))
+                    {
+                        if (thumbs.TryGetProperty("maxres", out var maxres) && maxres.TryGetProperty("url", out var u1))
+                            return (u1.GetString(), title);
+                        if (thumbs.TryGetProperty("standard", out var std) && std.TryGetProperty("url", out var u2))
+                            return (u2.GetString(), title);
+                        if (thumbs.TryGetProperty("high", out var high) && high.TryGetProperty("url", out var u3))
+                            return (u3.GetString(), title);
+                    }
+                    return (null, title);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"YouTube API error: {ex.Message}");
+            }
+            return (null, null);
+        }
+
+        private async Task AddImageFromUrlAsync(string url, string title)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return;
+
+            try
+            {
+                if (url.StartsWith("data:image/") && url.Contains(";base64,"))
+                {
+                    int comma = url.IndexOf(',');
+                    string dataB64 = url.Substring(comma + 1);
+                    byte[] bytes = Convert.FromBase64String(dataB64);
+                    using MemoryStream ms = new MemoryStream(bytes);
+                    BitmapImage bmp = new BitmapImage();
+                    bmp.BeginInit();
+                    bmp.StreamSource = ms;
+                    bmp.CacheOption = BitmapCacheOption.OnLoad;
+                    bmp.EndInit();
+                    bmp.Freeze();
+
+                    AddImageCard(bmp, base64Data: url);
+                    return;
+                }
+
+                using HttpClient client = new HttpClient();
+                client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+
+                // Pinterest resolver: resolves pin pages (pinterest.com/pin/..., id.pinterest.com/pin/..., pin.it/...)
+                // and upgrades pinimg thumbnails to 736x high-res
+                if (url.Contains("pinterest.") || url.Contains("pin.it") || url.Contains("pinimg.com"))
+                {
+                    url = await ResolvePinterestImageUrlAsync(url, client);
+                    if (string.IsNullOrEmpty(url))
+                    {
+                        ShowToast("Could not resolve Pinterest image", ToastType.Error);
+                        return;
+                    }
+                }
+
+                // YouTube thumbnail resolver (uses Google YouTube Data API v3 with user API Key)
+                bool isYt = false;
+                string ytId = "";
+                string originalYtUrl = "";
+
+                if (url.Contains("youtube.com") || url.Contains("youtu.be"))
+                {
+                    ytId = ExtractYouTubeId(url);
+                    if (!string.IsNullOrEmpty(ytId))
+                    {
+                        isYt = true;
+                        originalYtUrl = url;
+
+                        var (apiThumb, apiTitle) = await FetchYouTubeMetadataViaApiAsync(ytId, client);
+                        if (!string.IsNullOrEmpty(apiTitle))
+                        {
+                            title = apiTitle;
+                        }
+                        url = !string.IsNullOrEmpty(apiThumb) ? apiThumb : $"https://img.youtube.com/vi/{ytId}/maxresdefault.jpg";
+                    }
+                }
+
+                byte[] data;
+                try
+                {
+                    data = await client.GetByteArrayAsync(url);
+                }
+                catch
+                {
+                    if (url.Contains("maxresdefault.jpg"))
+                    {
+                        string fallbackUrl = url.Replace("maxresdefault.jpg", "hqdefault.jpg");
+                        data = await client.GetByteArrayAsync(fallbackUrl);
+                        url = fallbackUrl;
+                    }
+                    else
+                    {
+                        throw;
+                    }
+                }
+
+                Directory.CreateDirectory(CacheDir);
+                bool isGif = url.Contains(".gif", StringComparison.OrdinalIgnoreCase) ||
+                             (data.Length > 3 && data[0] == (byte)'G' && data[1] == (byte)'I' && data[2] == (byte)'F');
+                string ext = isGif ? ".gif" : (url.Contains(".png") ? ".png" : (url.Contains(".webp") ? ".webp" : ".jpg"));
+
+                using var md5 = System.Security.Cryptography.MD5.Create();
+                string hash = Convert.ToHexString(md5.ComputeHash(data))[..12].ToLowerInvariant();
+                string filename = $"ref_{hash}{ext}";
+                string cachedPath = System.IO.Path.Combine(CacheDir, filename);
+                if (!File.Exists(cachedPath))
+                {
+                    await File.WriteAllBytesAsync(cachedPath, data);
+                }
+
+                using MemoryStream imgMs = new MemoryStream(data);
+                BitmapImage fetchedBmp = new BitmapImage();
+                fetchedBmp.BeginInit();
+                fetchedBmp.StreamSource = imgMs;
+                fetchedBmp.CacheOption = BitmapCacheOption.OnLoad;
+                fetchedBmp.EndInit();
+                fetchedBmp.Freeze();
+
+                string mime = isGif ? "image/gif" : (ext == ".png" ? "image/png" : (ext == ".webp" ? "image/webp" : "image/jpeg"));
+                string b64 = $"data:{mime};base64,{Convert.ToBase64String(data)}";
+                AddImageCard(
+                    fetchedBmp,
+                    localPath: cachedPath,
+                    base64Data: b64,
+                    isYouTube: isYt,
+                    youTubeId: ytId,
+                    youTubeUrl: originalYtUrl);
+
+                bool isPinterest = url.Contains("pinimg.com") || url.Contains("pinterest.");
+                if (isYt)
+                    ShowToast("Added YouTube Reference Video!", ToastType.Success);
+                else if (isPinterest)
+                    ShowToast("Pinterest reference loaded!", ToastType.Success);
+                else
+                    ShowToast("Received reference from Web URL!", ToastType.Success);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to add image from URL '{url}': {ex.Message}");
+                ShowToast("Failed to load image from URL", ToastType.Error);
+            }
+        }
+
+        private static string ExtractYouTubeId(string url)
+        {
+            try
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(
+                    url,
+                    @"(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^""&?\/\s]{11})",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (match.Success) return match.Groups[1].Value;
+            }
+            catch { }
+            return "";
+        }
+
+        private static async Task<string> ResolvePinterestImageUrlAsync(string url, HttpClient client)
+        {
+            // 1. If it's already a direct pinimg.com image URL, upgrade to 736x high-res
+            if (url.Contains("pinimg.com/"))
+            {
+                return System.Text.RegularExpressions.Regex.Replace(url, @"\/(236x|474x|564x|170x)\/", "/736x/");
+            }
+
+            // 2. If it is a Pinterest pin page link (pinterest.com/pin/..., id.pinterest.com/pin/..., pin.it/...)
+            if (url.Contains("pinterest.com/pin/") || (url.Contains("pinterest.") && url.Contains("/pin/")) || url.Contains("pin.it/"))
+            {
+                try
+                {
+                    // Try to extract numeric Pin ID
+                    var match = System.Text.RegularExpressions.Regex.Match(url, @"\/pin\/(\d+)");
+                    string oembedUrl;
+                    if (match.Success)
+                    {
+                        string pinId = match.Groups[1].Value;
+                        oembedUrl = $"https://www.pinterest.com/oembed.json?url=https%3A%2F%2Fwww.pinterest.com%2Fpin%2F{pinId}%2F";
+                    }
+                    else
+                    {
+                        oembedUrl = $"https://www.pinterest.com/oembed.json?url={Uri.EscapeDataString(url)}";
+                    }
+
+                    using var req = new HttpRequestMessage(HttpMethod.Get, oembedUrl);
+                    req.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                    var resp = await client.SendAsync(req);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        string json = await resp.Content.ReadAsStringAsync();
+                        using var doc = System.Text.Json.JsonDocument.Parse(json);
+                        if (doc.RootElement.TryGetProperty("thumbnail_url", out var thumbEl))
+                        {
+                            string? thumbUrl = thumbEl.GetString();
+                            if (!string.IsNullOrEmpty(thumbUrl))
+                            {
+                                return System.Text.RegularExpressions.Regex.Replace(thumbUrl, @"\/(236x|474x|564x|170x)\/", "/736x/");
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Pinterest oembed error: {ex.Message}");
+                }
+
+                // 3. Fallback: scrape og:image from HTML page
+                try
+                {
+                    using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                    req.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+                    var resp = await client.SendAsync(req);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        string html = await resp.Content.ReadAsStringAsync();
+                        var ogMatch = System.Text.RegularExpressions.Regex.Match(html, @"<meta\s+property=[""']og:image[""']\s+content=[""']([^""']+)[""']", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (!ogMatch.Success)
+                        {
+                            ogMatch = System.Text.RegularExpressions.Regex.Match(html, @"content=[""']([^""']+)[""']\s+property=[""']og:image[""']", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        }
+                        if (ogMatch.Success)
+                        {
+                            string img = ogMatch.Groups[1].Value;
+                            return System.Text.RegularExpressions.Regex.Replace(img, @"\/(236x|474x|564x|170x)\/", "/736x/");
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return url;
+        }
+
+        #endregion
+
+        private void BtnNew_Click(object sender, RoutedEventArgs e)
+        {
+            ClearCanvasItems();
+            _currentFilePath = "";
+            _projectName = "untitled";
+            TxtProjectTitle.Text = "untitled";
+            EmptyStateOverlay.Visibility = Visibility.Visible;
+
+            // Reset camera to default
+            CanvasMatrixTransform.Matrix = Matrix.Identity;
+            TxtZoom.Text = "Zoom: 100%";
+
+            ScheduleAutoSave();
+            ShowToast("Created new board", ToastType.Info);
+        }
+
+        private void BtnSave_Click(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrEmpty(_currentFilePath))
+                SaveProjectAs();
+            else
+                SaveProject();
+        }
+
+        private void BtnSaveAs_Click(object sender, RoutedEventArgs e) => SaveProjectAs();
+
+        private void SaveProject()
+        {
+            if (string.IsNullOrEmpty(_currentFilePath))
+            {
+                SaveProjectAs();
+                return;
+            }
+            DoSave(_currentFilePath);
+        }
+
+        private void SaveProjectAs()
+        {
+            SaveFileDialog dlg = new SaveFileDialog
+            {
+                Filter = "DropBoard Project (*.dropboard)|*.dropboard|All Files (*.*)|*.*",
+                FileName = string.IsNullOrEmpty(_projectName) || _projectName == "untitled" ? "MyBoard.dropboard" : $"{_projectName}.dropboard"
+            };
+
+            if (dlg.ShowDialog() == true)
+            {
+                _currentFilePath = dlg.FileName;
+                _projectName = System.IO.Path.GetFileNameWithoutExtension(dlg.FileName);
+                TxtProjectTitle.Text = _projectName;
+                DoSave(_currentFilePath);
+            }
+        }
+
+        private void DoSave(string filePath)
+        {
+            try
+            {
+                PerformAutoSave(isClosing: false);
+                ShowToast($"Project saved: \"{_projectName}\"", ToastType.Success);
+            }
+            catch (Exception ex)
+            {
+                ShowToast($"Failed to save: {ex.Message}", ToastType.Error);
+            }
+        }
+
+        private void PerformAutoSave(bool isClosing = false)
+        {
+            if (_isRestoringSession) return;
+
+            try
+            {
+                Directory.CreateDirectory(AppDataDir);
+
+                var cardModels = _cards.Select(c => new
+                {
+                    id = c.Id,
+                    groupId = c.GroupId,
+                    x = c.X,
+                    y = c.Y,
+                    width = c.Width,
+                    height = c.Height,
+                    localPath = c.LocalPath,
+                    imageData = c.IsNote ? "" : (string.IsNullOrEmpty(c.Base64Data) ? BitmapToBase64(c.OriginalBitmap ?? c.Bitmap) : c.Base64Data),
+                    isYouTube = c.IsYouTube,
+                    youtubeId = c.YouTubeId,
+                    youtubeUrl = c.YouTubeUrl,
+                    isNote = c.IsNote,
+                    noteText = c.NoteText,
+                    noteFontFamily = c.NoteFontFamily,
+                    noteFontSize = c.NoteFontSize,
+                    noteTextColor = c.NoteTextColor,
+                    noteBgColor = c.NoteBgColor,
+                    noteAlignment = c.NoteAlignment.ToString(),
+                    isPaletteCard = c.IsPaletteCard,
+                    paletteMood = c.PaletteMood.ToString(),
+                    paletteColorCount = c.PaletteColorCount,
+                    paletteRows = c.PaletteRows,
+                    linkedSourceCardId = c.IsPaletteCard ? (c.LinkedSourceImageCard?.Id ?? "") : "",
+                    palettePinsData = c.IsPaletteCard && c.ActivePalettePins != null && c.ActivePalettePins.Count > 0
+                        ? JsonSerializer.Serialize(c.ActivePalettePins) : "",
+                    crop = new
+                    {
+                        top = c.CropTop,
+                        right = c.CropRight,
+                        bottom = c.CropBottom,
+                        left = c.CropLeft
+                    }
+                }).ToList();
+
+                var matrix = CanvasMatrixTransform.Matrix;
+                string projName = string.IsNullOrEmpty(_currentFilePath) ? _projectName : System.IO.Path.GetFileNameWithoutExtension(_currentFilePath);
+
+                var project = new
+                {
+                    version = 3,
+                    app = "DropBoard Native Studio",
+                    name = projName,
+                    currentFilePath = _currentFilePath,
+                    arrangeGap = _currentGap,
+                    panX = matrix.OffsetX,
+                    panY = matrix.OffsetY,
+                    zoom = matrix.M11,
+                    updatedAt = DateTime.UtcNow.ToString("o"),
+                    cards = cardModels,
+                    groups = _groups.Select(g => new
+                    {
+                        id = g.Id,
+                        title = g.Title,
+                        color = g.Color,
+                        notes = g.Notes,
+                        x = g.X,
+                        y = g.Y,
+                        width = g.Width,
+                        height = g.Height
+                    }).ToList()
+                };
+
+                string json = JsonSerializer.Serialize(project, new JsonSerializerOptions { WriteIndented = true });
+
+                // 1. Always write to local session (even if untitled!)
+                File.WriteAllText(SessionFilePath, json);
+
+                // 2. If user saved to an explicit .dropboard file, keep it synchronized!
+                if (!string.IsNullOrEmpty(_currentFilePath))
+                {
+                    string? dir = System.IO.Path.GetDirectoryName(_currentFilePath);
+                    if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                    {
+                        File.WriteAllText(_currentFilePath, json);
+                    }
+                }
+
+                // 3. Keep recent.json updated
+                var recentData = new
+                {
+                    lastProjectFilePath = _currentFilePath,
+                    projectName = projName,
+                    hasSession = _cards.Count > 0,
+                    lastSavedUtc = DateTime.UtcNow.ToString("o")
+                };
+                File.WriteAllText(RecentConfigPath, JsonSerializer.Serialize(recentData, new JsonSerializerOptions { WriteIndented = true }));
+
+                if (!isClosing)
+                {
+                    string displayTitle = string.IsNullOrEmpty(_currentFilePath) ? "untitled" : System.IO.Path.GetFileNameWithoutExtension(_currentFilePath);
+                    TxtProjectTitle.Text = displayTitle;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("AutoSave error: " + ex.Message);
+            }
+        }
+
+        private string BitmapToBase64(BitmapSource bitmap)
+        {
+            PngBitmapEncoder encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            using MemoryStream ms = new MemoryStream();
+            encoder.Save(ms);
+            byte[] bytes = ms.ToArray();
+            return "data:image/png;base64," + Convert.ToBase64String(bytes);
+        }
+
+        private void BtnOpenDropboard_Click(object sender, RoutedEventArgs e)
+        {
+            OpenFileDialog dlg = new OpenFileDialog
+            {
+                Filter = "DropBoard Project (*.dropboard)|*.dropboard|All Files (*.*)|*.*"
+            };
+
+            if (dlg.ShowDialog() == true)
+            {
+                LoadDropboardFile(dlg.FileName);
+            }
+        }
+
+        private void InitializeSession(string? initialFilePath)
+        {
+            if (!string.IsNullOrEmpty(initialFilePath) && File.Exists(initialFilePath))
+            {
+                LoadDropboardFile(initialFilePath, isSessionRestore: false);
+                return;
+            }
+
+            // Check if there was a recent project
+            string? recentProj = null;
+            if (File.Exists(RecentConfigPath))
+            {
+                try
+                {
+                    string json = File.ReadAllText(RecentConfigPath);
+                    using JsonDocument doc = JsonDocument.Parse(json);
+                    if (doc.RootElement.TryGetProperty("lastProjectFilePath", out JsonElement lpfEl))
+                    {
+                        recentProj = lpfEl.GetString();
+                    }
+                }
+                catch { }
+            }
+
+            if (!string.IsNullOrEmpty(recentProj) && File.Exists(recentProj))
+            {
+                LoadDropboardFile(recentProj, isSessionRestore: false);
+            }
+            else if (File.Exists(SessionFilePath))
+            {
+                LoadDropboardFile(SessionFilePath, isSessionRestore: true);
+            }
+        }
+
+        private void LoadDropboardFile(string filePath, bool isSessionRestore = false)
+        {
+            if (!File.Exists(filePath)) return;
+
+            try
+            {
+                string json = File.ReadAllText(filePath);
+                using JsonDocument doc = JsonDocument.Parse(json);
+                JsonElement root = doc.RootElement;
+
+                _isRestoringSession = true;
+
+                // Clear current canvas items
+                ClearCanvasItems();
+
+                // Restore camera zoom & pan
+                bool hasSavedCamera = false;
+                if (root.TryGetProperty("zoom", out JsonElement zEl) &&
+                    root.TryGetProperty("panX", out JsonElement pxEl) &&
+                    root.TryGetProperty("panY", out JsonElement pyEl))
+                {
+                    double zoom = zEl.GetDouble();
+                    double px = pxEl.GetDouble();
+                    double py = pyEl.GetDouble();
+                    if (zoom >= 0.05 && zoom <= 25.0)
+                    {
+                        Matrix m = new Matrix(zoom, 0, 0, zoom, px, py);
+                        CanvasMatrixTransform.Matrix = m;
+                        int zoomPercent = (int)Math.Round(zoom * 100);
+                        TxtZoom.Text = $"Zoom: {zoomPercent}%";
+                        hasSavedCamera = true;
+                    }
+                }
+
+                if (root.TryGetProperty("arrangeGap", out JsonElement gapEl))
+                {
+                    _currentGap = gapEl.GetDouble();
+                    TxtGap.Text = FormatGapText(_currentGap);
+                }
+
+                if (root.TryGetProperty("cards", out JsonElement cards) && cards.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (JsonElement card in cards.EnumerateArray())
+                    {
+                        bool isNote = card.TryGetProperty("isNote", out JsonElement inEl) && inEl.GetBoolean();
+                        if (isNote)
+                        {
+                            string noteText = card.TryGetProperty("noteText", out JsonElement ntEl) ? (ntEl.GetString() ?? "") : "";
+                            string noteFont = card.TryGetProperty("noteFontFamily", out JsonElement nfEl) ? (nfEl.GetString() ?? "Segoe UI") : "Segoe UI";
+                            double noteFontSize = card.TryGetProperty("noteFontSize", out JsonElement nfsEl) ? nfsEl.GetDouble() : 16.0;
+                            string noteTextColor = card.TryGetProperty("noteTextColor", out JsonElement ntcEl) ? (ntcEl.GetString() ?? "#FFFFFF") : "#FFFFFF";
+                            string noteBgColor = card.TryGetProperty("noteBgColor", out JsonElement nbcEl) ? (nbcEl.GetString() ?? "Transparent") : "Transparent";
+                            TextAlignment noteAlign = TextAlignment.Left;
+                            if (card.TryGetProperty("noteAlignment", out JsonElement naEl))
+                            {
+                                Enum.TryParse(naEl.GetString(), out noteAlign);
+                            }
+
+                            double x = card.TryGetProperty("x", out JsonElement xEl) ? xEl.GetDouble() : 0;
+                            double y = card.TryGetProperty("y", out JsonElement yEl) ? yEl.GetDouble() : 0;
+                            double? w = card.TryGetProperty("width", out JsonElement wEl) ? wEl.GetDouble() : null;
+                            double? h = card.TryGetProperty("height", out JsonElement hEl) ? hEl.GetDouble() : null;
+
+                            var addedNote = AddNoteCard(
+                                text: noteText,
+                                worldPosition: new Point(x, y),
+                                customWidth: w,
+                                customHeight: h,
+                                fontFamily: noteFont,
+                                fontSize: noteFontSize,
+                                textColor: noteTextColor,
+                                bgColor: noteBgColor,
+                                alignment: noteAlign,
+                                autoSelect: false);
+                            if (card.TryGetProperty("id", out JsonElement noteIdEl) && !string.IsNullOrEmpty(noteIdEl.GetString()))
+                                addedNote.Id = noteIdEl.GetString()!;
+                            if (card.TryGetProperty("groupId", out JsonElement noteGidEl) && !string.IsNullOrEmpty(noteGidEl.GetString()))
+                                addedNote.GroupId = noteGidEl.GetString()!;
+                            continue;
+                        }
+
+                        bool isPaletteCard = card.TryGetProperty("isPaletteCard", out JsonElement ipcEl) && ipcEl.GetBoolean();
+                        if (isPaletteCard)
+                        {
+                            double x = card.TryGetProperty("x", out JsonElement xEl) ? xEl.GetDouble() : 0;
+                            double y = card.TryGetProperty("y", out JsonElement yEl) ? yEl.GetDouble() : 0;
+                            double? w = card.TryGetProperty("width", out JsonElement wEl) ? wEl.GetDouble() : null;
+                            double? h = card.TryGetProperty("height", out JsonElement hEl) ? hEl.GetDouble() : null;
+                            int count = card.TryGetProperty("paletteColorCount", out JsonElement ccEl) ? ccEl.GetInt32() : 5;
+                            ColorMood mood = ColorMood.Colorful;
+                            if (card.TryGetProperty("paletteMood", out JsonElement pmEl))
+                            {
+                                Enum.TryParse(pmEl.GetString(), out mood);
+                            }
+                            int rows = card.TryGetProperty("paletteRows", out JsonElement prEl) ? prEl.GetInt32() : 1;
+                            List<PalettePin>? pins = null;
+                            if (card.TryGetProperty("palettePinsData", out JsonElement ppdEl) && !string.IsNullOrEmpty(ppdEl.GetString()))
+                            {
+                                try { pins = JsonSerializer.Deserialize<List<PalettePin>>(ppdEl.GetString()!); } catch { }
+                            }
+                            var addedPal = AddPaletteCard(
+                                sourceCard: null,
+                                initialPins: pins,
+                                worldPosition: new Point(x, y),
+                                customWidth: w,
+                                customHeight: h,
+                                mood: mood,
+                                colorCount: count,
+                                rows: rows,
+                                autoSelect: false);
+                            if (card.TryGetProperty("id", out JsonElement palIdEl) && !string.IsNullOrEmpty(palIdEl.GetString()))
+                                addedPal.Id = palIdEl.GetString()!;
+                            if (card.TryGetProperty("groupId", out JsonElement palGidEl) && !string.IsNullOrEmpty(palGidEl.GetString()))
+                                addedPal.GroupId = palGidEl.GetString()!;
+                            if (card.TryGetProperty("linkedSourceCardId", out JsonElement lscEl) && !string.IsNullOrEmpty(lscEl.GetString()))
+                                addedPal.PendingLinkedSourceCardId = lscEl.GetString()!;
+                            continue;
+                        }
+
+                        string localPath = "";
+                        if (card.TryGetProperty("localPath", out JsonElement lpEl))
+                            localPath = lpEl.GetString() ?? "";
+
+                        string b64 = "";
+                        if (card.TryGetProperty("imageData", out JsonElement idEl))
+                            b64 = idEl.GetString() ?? "";
+                        else if (card.TryGetProperty("src", out JsonElement srcEl))
+                            b64 = srcEl.GetString() ?? "";
+
+                        BitmapSource? bmp = null;
+
+                        // 1. Try loading directly from localPath
+                        if (!string.IsNullOrEmpty(localPath) && File.Exists(localPath))
+                        {
+                            try
+                            {
+                                BitmapImage bi = new BitmapImage();
+                                bi.BeginInit();
+                                bi.UriSource = new Uri(localPath, UriKind.Absolute);
+                                bi.CacheOption = BitmapCacheOption.OnLoad;
+                                bi.EndInit();
+                                bi.Freeze();
+                                bmp = bi;
+                            }
+                            catch { bmp = null; }
+                        }
+
+                        // 2. Fallback to base64
+                        if (bmp == null && !string.IsNullOrEmpty(b64))
+                        {
+                            try
+                            {
+                                int commaIndex = b64.IndexOf(",");
+                                string rawB64 = commaIndex >= 0 ? b64.Substring(commaIndex + 1) : b64;
+                                byte[] bytes = Convert.FromBase64String(rawB64);
+                                using MemoryStream ms = new MemoryStream(bytes);
+                                BitmapImage bi = new BitmapImage();
+                                bi.BeginInit();
+                                bi.StreamSource = ms;
+                                bi.CacheOption = BitmapCacheOption.OnLoad;
+                                bi.EndInit();
+                                bi.Freeze();
+                                bmp = bi;
+                            }
+                            catch { bmp = null; }
+                        }
+
+                        if (bmp != null)
+                        {
+                            double x = card.TryGetProperty("x", out JsonElement xEl) ? xEl.GetDouble() : 0;
+                            double y = card.TryGetProperty("y", out JsonElement yEl) ? yEl.GetDouble() : 0;
+                            double? w = card.TryGetProperty("width", out JsonElement wEl) ? wEl.GetDouble() : null;
+                            double? h = card.TryGetProperty("height", out JsonElement hEl) ? hEl.GetDouble() : null;
+
+                            double? cropL = null, cropT = null, cropR = null, cropB = null;
+                            if (card.TryGetProperty("crop", out JsonElement cropEl))
+                            {
+                                if (cropEl.TryGetProperty("left", out JsonElement cl)) cropL = cl.GetDouble();
+                                if (cropEl.TryGetProperty("top", out JsonElement ct)) cropT = ct.GetDouble();
+                                if (cropEl.TryGetProperty("right", out JsonElement cr)) cropR = cr.GetDouble();
+                                if (cropEl.TryGetProperty("bottom", out JsonElement cb)) cropB = cb.GetDouble();
+                            }
+
+                            bool isYt = false;
+                            string ytId = "";
+                            string ytUrl = "";
+                            if (card.TryGetProperty("isYouTube", out JsonElement ytEl)) isYt = ytEl.GetBoolean();
+                            if (card.TryGetProperty("youtubeId", out JsonElement ytidEl)) ytId = ytidEl.GetString() ?? "";
+                            if (card.TryGetProperty("youtubeUrl", out JsonElement yturlEl)) ytUrl = yturlEl.GetString() ?? "";
+
+                            var addedImg = AddImageCard(
+                                bmp,
+                                new Point(x, y),
+                                customWidth: w,
+                                customHeight: h,
+                                localPath: localPath,
+                                base64Data: b64,
+                                autoSelect: false,
+                                cropLeft: cropL,
+                                cropTop: cropT,
+                                cropRight: cropR,
+                                cropBottom: cropB,
+                                isYouTube: isYt,
+                                youTubeId: ytId,
+                                youTubeUrl: ytUrl);
+                            if (card.TryGetProperty("id", out JsonElement imgIdEl) && !string.IsNullOrEmpty(imgIdEl.GetString()))
+                                addedImg.Id = imgIdEl.GetString()!;
+                            if (card.TryGetProperty("groupId", out JsonElement imgGidEl) && !string.IsNullOrEmpty(imgGidEl.GetString()))
+                                addedImg.GroupId = imgGidEl.GetString()!;
+                        }
+                    }
+                }
+
+                if (root.TryGetProperty("groups", out JsonElement groupsEl) && groupsEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (JsonElement gEl in groupsEl.EnumerateArray())
+                    {
+                        string gid = gEl.TryGetProperty("id", out var idEl) ? (idEl.GetString() ?? "") : "";
+                        string gtitle = gEl.TryGetProperty("title", out var gtEl) ? (gtEl.GetString() ?? "Scene 01") : "Scene 01";
+                        string gcolor = gEl.TryGetProperty("color", out var gcEl) ? (gcEl.GetString() ?? "#3B82F6") : "#3B82F6";
+                        string gnotes = gEl.TryGetProperty("notes", out var gnEl) ? (gnEl.GetString() ?? "") : "";
+                        double gx = gEl.TryGetProperty("x", out var gxEl) ? gxEl.GetDouble() : 0;
+                        double gy = gEl.TryGetProperty("y", out var gyEl) ? gyEl.GetDouble() : 0;
+                        double gw = gEl.TryGetProperty("width", out var gwEl) ? gwEl.GetDouble() : 460;
+                        double gh = gEl.TryGetProperty("height", out var ghEl) ? ghEl.GetDouble() : 380;
+
+                        AddSceneGroup(
+                            title: gtitle,
+                            notes: gnotes,
+                            customX: gx,
+                            customY: gy,
+                            width: gw,
+                            height: gh,
+                            color: gcolor,
+                            customId: !string.IsNullOrEmpty(gid) ? gid : null,
+                            recordUndo: false);
+                    }
+                    UpdateGroupCounts();
+                }
+
+                // Re-link palette cards to their source image cards after loading
+                foreach (var card in _cards)
+                {
+                    if (card.IsPaletteCard && !string.IsNullOrEmpty(card.PendingLinkedSourceCardId))
+                    {
+                        var src = _cards.FirstOrDefault(c => c.Id == card.PendingLinkedSourceCardId);
+                        if (src != null)
+                        {
+                            card.LinkedSourceImageCard = src;
+                            src.LinkedPaletteCard = card;
+                            if (src.ActivePalettePins == null || src.ActivePalettePins.Count == 0)
+                            {
+                                src.ActivePalettePins = card.ActivePalettePins;
+                            }
+                        }
+                    }
+                }
+                var singleImage = _cards.FirstOrDefault(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null);
+                if (singleImage != null && _cards.Count(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null) == 1)
+                {
+                    foreach (var pal in _cards.Where(c => c.IsPaletteCard && c.LinkedSourceImageCard == null))
+                    {
+                        pal.LinkedSourceImageCard = singleImage;
+                        singleImage.LinkedPaletteCard = pal;
+                        if (singleImage.ActivePalettePins == null || singleImage.ActivePalettePins.Count == 0)
+                        {
+                            singleImage.ActivePalettePins = pal.ActivePalettePins;
+                        }
+                    }
+                }
+
+                // Verify whether cards are actually visible in the current camera viewport
+                bool cardsInView = false;
+                if (hasSavedCamera && _cards.Count > 0)
+                {
+                    Matrix currentMat = CanvasMatrixTransform.Matrix;
+                    double viewW = CanvasContainer.ActualWidth > 0 ? CanvasContainer.ActualWidth : ActualWidth;
+                    double viewH = CanvasContainer.ActualHeight > 0 ? CanvasContainer.ActualHeight : ActualHeight;
+                    if (viewW <= 0) viewW = 1200;
+                    if (viewH <= 0) viewH = 800;
+
+                    foreach (var c in _cards)
+                    {
+                        Point p = currentMat.Transform(new Point(c.X, c.Y));
+                        double sw = c.Width * currentMat.M11;
+                        double sh = c.Height * currentMat.M22;
+                        Rect screenRect = new Rect(p.X, p.Y, Math.Max(10, sw), Math.Max(10, sh));
+                        Rect viewRect = new Rect(0, 0, viewW, viewH);
+                        if (screenRect.IntersectsWith(viewRect))
+                        {
+                            cardsInView = true;
+                            break;
+                        }
+                    }
+                }
+
+                // If no camera was stored (like legacy .dropboard files) or camera points to empty space, Auto-Fit all cards!
+                if (_cards.Count > 0 && (!hasSavedCamera || !cardsInView))
+                {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        ZoomToFitAllCards(animated: false);
+                    }), System.Windows.Threading.DispatcherPriority.Loaded);
+                }
+
+                if (isSessionRestore)
+                {
+                    if (root.TryGetProperty("currentFilePath", out JsonElement cfpEl))
+                    {
+                        string recentPath = cfpEl.GetString() ?? "";
+                        if (!string.IsNullOrEmpty(recentPath) && File.Exists(recentPath))
+                        {
+                            _currentFilePath = recentPath;
+                            _projectName = System.IO.Path.GetFileNameWithoutExtension(recentPath);
+                            TxtProjectTitle.Text = _projectName;
+                        }
+                        else
+                        {
+                            _currentFilePath = "";
+                            _projectName = root.TryGetProperty("name", out JsonElement nEl) ? (nEl.GetString() ?? "untitled") : "untitled";
+                            TxtProjectTitle.Text = _projectName;
+                        }
+                    }
+                    else
+                    {
+                        _currentFilePath = "";
+                        _projectName = "untitled";
+                        TxtProjectTitle.Text = "untitled";
+                    }
+                }
+                else
+                {
+                    _currentFilePath = filePath;
+                    _projectName = System.IO.Path.GetFileNameWithoutExtension(filePath);
+                    TxtProjectTitle.Text = _projectName;
+                }
+
+                UpdateStatusCounts();
+                EmptyStateOverlay.Visibility = _cards.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+                if (_cards.Count > 0)
+                {
+                    ShowToast($"Restored: {_projectName}", ToastType.Success);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (!isSessionRestore)
+                {
+                    ShowToast($"Failed to load file: {ex.Message}", ToastType.Error);
+                }
+            }
+            finally
+            {
+                _isRestoringSession = false;
+            }
+        }
+
+        #endregion
+
+        #region Window Drag & Controls
+
+        private void TitleDragArea_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            // Deselect cards and groups when clicking on top bar (super convenient especially in 0% transparent BG mode)
+            DeselectAllCards();
+            _selectedGroups.Clear();
+
+            if (e.ClickCount == 2 && e.ChangedButton == MouseButton.Left)
+            {
+                BtnMaximize_Click(sender, e);
+                return;
+            }
+
+            if (e.ChangedButton == MouseButton.Left)
+            {
+                DragMove();
+            }
+        }
+
+        private void FloatingDock_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            DeselectAllCards();
+            _selectedGroups.Clear();
+        }
+
+        private void BtnPin_Click(object sender, RoutedEventArgs e)
+        {
+            Topmost = !Topmost;
+            PinDot.Fill = Topmost ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(85, 85, 85));
+            _settings.IsPinned = Topmost;
+            _settings.Save();
+            ShowToast(Topmost ? "Window Pinned (Always on Top)" : "Window Unpinned (Normal)", ToastType.Info);
+        }
+
+        private void BtnMinimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+        private void BtnMaximize_Click(object sender, RoutedEventArgs e)
+        {
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+        }
+
+        private void BtnClose_Click(object sender, RoutedEventArgs e) => Close();
+
+        #endregion
+
+        #region Native Win32 Free-Form Border Resizing (All 4 Edges & 4 Corners)
+
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+            IntPtr hwnd = new WindowInteropHelper(this).Handle;
+            HwndSource source = HwndSource.FromHwnd(hwnd);
+            source?.AddHook(WndProc);
+        }
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetDC(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
+
+        [DllImport("gdi32.dll")]
+        private static extern uint GetPixel(IntPtr hdc, int nXPos, int nYPos);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetCursorPos(out POINT lpPoint);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int X;
+            public int Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct COPYDATASTRUCT
+        {
+            public IntPtr dwData;
+            public int cbData;
+            public IntPtr lpData;
+        }
+
+        private const int WM_NCHITTEST = 0x0084;
+        private const int WM_NCLBUTTONDOWN = 0x00A1;
+        private const int WM_SYSCOMMAND = 0x0112;
+        private const int WM_COPYDATA = 0x004A;
+        private const int SC_SIZE = 0xF000;
+
+        private const int HTCLIENT = 1;
+        private const int HTLEFT = 10;
+        private const int HTRIGHT = 11;
+        private const int HTTOP = 12;
+        private const int HTTOPLEFT = 13;
+        private const int HTTOPRIGHT = 14;
+        private const int HTBOTTOM = 15;
+        private const int HTBOTTOMLEFT = 16;
+        private const int HTBOTTOMRIGHT = 17;
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            switch (msg)
+            {
+                case WM_NCHITTEST:
+                {
+                    if (WindowState == WindowState.Maximized)
+                    {
+                        break;
+                    }
+
+                    short x = unchecked((short)(long)lParam);
+                    short y = unchecked((short)((long)lParam >> 16));
+
+                    if (GetWindowRect(hwnd, out RECT rc))
+                    {
+                        const int border = 8;
+                        bool left = x >= rc.Left && x < rc.Left + border;
+                        bool right = x <= rc.Right && x > rc.Right - border;
+                        bool top = y >= rc.Top && y < rc.Top + border;
+                        bool bottom = y <= rc.Bottom && y > rc.Bottom - border;
+
+                        if (top && left) { handled = true; return (IntPtr)HTTOPLEFT; }
+                        if (top && right) { handled = true; return (IntPtr)HTTOPRIGHT; }
+                        if (bottom && left) { handled = true; return (IntPtr)HTBOTTOMLEFT; }
+                        if (bottom && right) { handled = true; return (IntPtr)HTBOTTOMRIGHT; }
+                        if (left) { handled = true; return (IntPtr)HTLEFT; }
+                        if (right) { handled = true; return (IntPtr)HTRIGHT; }
+                        if (top) { handled = true; return (IntPtr)HTTOP; }
+                        if (bottom) { handled = true; return (IntPtr)HTBOTTOM; }
+                    }
+                    break;
+                }
+
+                case WM_NCLBUTTONDOWN:
+                {
+                    int hit = wParam.ToInt32();
+                    if (hit >= HTLEFT && hit <= HTBOTTOMRIGHT)
+                    {
+                        int direction = 0;
+                        switch (hit)
+                        {
+                            case HTLEFT: direction = 1; break;
+                            case HTRIGHT: direction = 2; break;
+                            case HTTOP: direction = 3; break;
+                            case HTTOPLEFT: direction = 4; break;
+                            case HTTOPRIGHT: direction = 5; break;
+                            case HTBOTTOM: direction = 6; break;
+                            case HTBOTTOMLEFT: direction = 7; break;
+                            case HTBOTTOMRIGHT: direction = 8; break;
+                        }
+                        if (direction != 0)
+                        {
+                            SendMessage(hwnd, WM_SYSCOMMAND, (IntPtr)(SC_SIZE + direction), lParam);
+                            handled = true;
+                            return IntPtr.Zero;
+                        }
+                    }
+                    break;
+                }
+
+                case WM_COPYDATA:
+                {
+                    try
+                    {
+                        var cds = Marshal.PtrToStructure<COPYDATASTRUCT>(lParam);
+                        if (cds.dwData.ToInt64() == 1001 && cds.lpData != IntPtr.Zero)
+                        {
+                            string? filePath = Marshal.PtrToStringUni(cds.lpData);
+                            if (!string.IsNullOrEmpty(filePath))
+                            {
+                                Dispatcher.InvokeAsync(() =>
+                                {
+                                    if (filePath.EndsWith(".dropboard", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        LoadDropboardFile(filePath, isSessionRestore: false);
+                                    }
+                                    else
+                                    {
+                                        try
+                                        {
+                                            BitmapImage bmp = new BitmapImage(new Uri(filePath));
+                                            AddImageCard(bmp, localPath: filePath);
+                                        }
+                                        catch { }
+                                    }
+                                    if (WindowState == WindowState.Minimized)
+                                    {
+                                        WindowState = WindowState.Normal;
+                                    }
+                                    Activate();
+                                });
+                                handled = true;
+                                return (IntPtr)1;
+                            }
+                        }
+                    }
+                    catch { }
+                    break;
+                }
+            }
+
+            return IntPtr.Zero;
+        }
+
+        #endregion
+    }
+}

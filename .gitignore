@@ -7,12 +7,14 @@
 *.VC.db
 *.VC.opendb
 
-# Build output directory
+# Build output & Intermediate directories (C++, .NET, WPF)
 build/
 bin/
 out/
-
-# Intermediate build artifacts (if building outside tracked build dir)
+**/[Bb]in/
+**/[Oo]bj/
+**/[Dd]ebug/
+**/[Rr]elease/
 x64/
 Debug/
 Release/
@@ -21,6 +23,8 @@ Release/
 *.ilk
 *.exp
 *.idb
+*.nupkg
+packages/
 
 # C++ Test & Coverage
 *.coverage

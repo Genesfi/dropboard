@@ -1,7 +1,8 @@
 :root {
   color-scheme: dark;
-  --bg-app: #0d0f14;
-  --bg-viewport: #11141b;
+  --canvas-bg-alpha: 1;
+  --bg-app: rgba(13, 15, 20, var(--canvas-bg-alpha));
+  --bg-viewport: rgba(17, 20, 27, var(--canvas-bg-alpha));
   --bg-surface: #171b24;
   --bg-surface-elevated: #1e2330;
   --bg-glass: rgba(22, 26, 36, 0.75);
@@ -34,15 +35,23 @@
   -webkit-user-drag: none;
 }
 
+html, body {
+  background: transparent !important;
+}
+
 body {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
-  background-color: var(--bg-app);
   color: var(--text-primary);
   font-family: var(--font-main);
   display: flex;
   flex-direction: column;
+}
+
+body.canvas-clear-glass .viewport {
+  background-color: transparent !important;
+  background-image: none !important;
 }
 
 /* ==========================================================================
@@ -61,7 +70,7 @@ body {
   position: relative;
   width: 100vw;
   box-sizing: border-box;
-  overflow: hidden;
+  overflow: visible !important;
 }
 
 .titlebar-left {
@@ -292,28 +301,42 @@ body {
 /* Opacity Popover */
 .opacity-container {
   position: relative;
+  overflow: visible !important;
 }
 
 .opacity-popover {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  background: var(--bg-surface-elevated);
+  background: rgba(22, 26, 36, 0.94);
   border: 1px solid var(--border-subtle);
   box-shadow: var(--shadow-floating);
   border-radius: var(--radius-md);
-  padding: 10px 12px;
-  width: 196px;
+  padding: 12px 14px;
+  width: 248px;
   display: none;
   flex-direction: column;
-  gap: 8px;
-  z-index: 1001;
-  backdrop-filter: blur(14px);
+  gap: 12px;
+  z-index: 10001 !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
 }
 
 .opacity-popover.show {
   display: flex;
   animation: popIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.opacity-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.opacity-section-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 2px 0;
 }
 
 .opacity-popover-header {
@@ -322,18 +345,49 @@ body {
   justify-content: space-between;
 }
 
-.opacity-popover-header label {
+.opacity-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.opacity-badge-pill {
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(56, 189, 248, 0.14);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  white-space: nowrap;
+}
+
+.opacity-val-badge {
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--accent-blue);
+  background: rgba(59, 130, 246, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.opacity-sublabel {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.3;
 }
 
 .opacity-reset-btn {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: var(--accent-blue);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
   font-family: var(--font-main);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
   padding: 2px 7px;
   border-radius: 999px;
@@ -352,6 +406,7 @@ body {
   accent-color: var(--accent-blue);
   cursor: pointer;
   margin: 2px 0;
+  height: 4px;
 }
 
 .opacity-presets {
@@ -361,11 +416,11 @@ body {
 }
 
 .opacity-preset-btn {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 600;
   padding: 3px 0;
   border-radius: 4px;
@@ -374,16 +429,18 @@ body {
   text-align: center;
 }
 
-.opacity-preset-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
-  color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.25);
+.opacity-preset-btn:hover,
+.opacity-preset-btn.active {
+  background: rgba(56, 189, 248, 0.18);
+  color: #ffffff;
+  border-color: rgba(56, 189, 248, 0.4);
 }
 
 .opacity-hint {
   font-size: 9.5px;
   color: var(--text-muted);
-  line-height: 1.3;
+  text-align: center;
+  margin-top: -2px;
 }
 
 #btn-opacity-toggle.is-translucent {
@@ -801,7 +858,7 @@ body.has-autohide-dock .floating-dock.dock-left.is-revealed {
   touch-action: none;
   background-color: var(--bg-viewport);
   background-image: 
-    radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 0);
+    radial-gradient(rgba(255, 255, 255, calc(0.06 * var(--canvas-bg-alpha, 1))) 1px, transparent 0);
   background-size: 24px 24px;
   cursor: default;
 }

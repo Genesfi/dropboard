@@ -100,18 +100,46 @@
           <span id="opacity-label">100%</span>
         </button>
         <div class="opacity-popover" id="opacity-popover">
-          <div class="opacity-popover-header">
-            <label>Window Transparency</label>
-            <button class="opacity-reset-btn" id="btn-reset-opacity" title="Reset opacity to 100% solid">↺ Reset 100%</button>
+          <!-- Section 1: Canvas Background (Ghost Mode) -->
+          <div class="opacity-section">
+            <div class="opacity-popover-header">
+              <div class="opacity-section-title">
+                <span>Canvas BG</span>
+                <span class="opacity-badge-pill">Photos Stay Solid ✨</span>
+              </div>
+              <span class="opacity-val-badge" id="canvas-bg-opacity-label">100%</span>
+            </div>
+            <span class="opacity-sublabel">Transparansi area canvas (tembus ke desktop)</span>
+            <input type="range" id="canvas-bg-slider" min="0" max="100" value="100" />
+            <div class="opacity-presets">
+              <button class="opacity-preset-btn canvas-preset-btn" data-canvas-val="0">0% Glass</button>
+              <button class="opacity-preset-btn canvas-preset-btn" data-canvas-val="30">30%</button>
+              <button class="opacity-preset-btn canvas-preset-btn" data-canvas-val="70">70%</button>
+              <button class="opacity-preset-btn canvas-preset-btn active" data-canvas-val="100">100% Solid</button>
+            </div>
           </div>
-          <input type="range" id="opacity-slider" min="30" max="100" value="100" />
-          <div class="opacity-presets">
-            <button class="opacity-preset-btn" data-val="100">100%</button>
-            <button class="opacity-preset-btn" data-val="75">75%</button>
-            <button class="opacity-preset-btn" data-val="50">50%</button>
-            <button class="opacity-preset-btn" data-val="30">30%</button>
+
+          <div class="opacity-section-divider"></div>
+
+          <!-- Section 2: Window Opacity (Global Tracing Mode) -->
+          <div class="opacity-section">
+            <div class="opacity-popover-header">
+              <div class="opacity-section-title">
+                <span>Window (Global)</span>
+              </div>
+              <button class="opacity-reset-btn" id="btn-reset-opacity" title="Reset opacity to 100% solid">↺ Reset</button>
+            </div>
+            <span class="opacity-sublabel">Seluruh window pudar (Tracing overlay)</span>
+            <input type="range" id="opacity-slider" min="30" max="100" value="100" />
+            <div class="opacity-presets">
+              <button class="opacity-preset-btn win-preset-btn" data-val="100">100%</button>
+              <button class="opacity-preset-btn win-preset-btn" data-val="75">75%</button>
+              <button class="opacity-preset-btn win-preset-btn" data-val="50">50%</button>
+              <button class="opacity-preset-btn win-preset-btn" data-val="30">30%</button>
+            </div>
           </div>
-          <div class="opacity-hint">Tip: Double-click % icon or press Ctrl+Alt+0 to reset</div>
+
+          <div class="opacity-hint">Tip: Double-click tombol % untuk reset ke 100%</div>
         </div>
       </div>
 

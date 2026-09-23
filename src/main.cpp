@@ -27,6 +27,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         // Returning 0 removes the standard title bar entirely while preserving resize borders and Aero snap!
         return 0;
 
+    case WM_ERASEBKGND:
+        return 1;
+
     case WM_COPYDATA: {
         COPYDATASTRUCT* cds = reinterpret_cast<COPYDATASTRUCT*>(lParam);
         if (cds && cds->dwData == 1001 && cds->lpData && g_webViewHost) {
@@ -194,6 +197,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     // Enable Per-Monitor DPI Awareness v2
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
+    // Set WebView2 default background to transparent (A=0) before environment initialization
+    SetEnvironmentVariableW(L"WEBVIEW2_DEFAULT_BACKGROUND_COLOR", L"0");
+
     // Initialize COM
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr)) return 1;
@@ -235,7 +241,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     wc.hIcon = hAppIcon;
     wc.hIconSm = hAppIconSm;
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    HBRUSH darkBrush = CreateSolidBrush(RGB(13, 15, 20));
+    HBRUSH darkBrush = CreateSolidBrush(RGB(0, 0, 0));
     wc.hbrBackground = darkBrush;
     wc.lpszClassName = CLASS_NAME;
 
@@ -250,9 +256,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     int posY = (screenHeight - initialHeight) / 2;
 
     DWORD windowStyle = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    DWORD windowExStyle = WS_EX_APPWINDOW;
 
     HWND hWnd = CreateWindowExW(
-        WS_EX_APPWINDOW,
+        windowExStyle,
         CLASS_NAME,
         L"DropBoard",
         windowStyle,
@@ -274,8 +281,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow) {
     SetWindowPos(hWnd, nullptr, 0, 0, 0, 0,
         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
-    // Enable Windows 10/11 DWM shadow for frameless window
-    MARGINS margins = { 1, 1, 1, 1 };
+    // Enable DWM alpha transparency across entire client area
+    MARGINS margins = { -1, -1, -1, -1 };
     DwmExtendFrameIntoClientArea(hWnd, &margins);
 
     // Set DWM Immersive Dark Mode
