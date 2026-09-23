@@ -501,16 +501,14 @@ namespace DropBoard.Native
             _currentGap = _settings.ArrangeGap >= 0 ? _settings.ArrangeGap : 24.0;
             TxtGap.Text = FormatGapText(_currentGap);
 
-            if (_settings.IsPinned)
-            {
-                Topmost = true;
-                PinDot.Fill = new SolidColorBrush(Color.FromRgb(56, 189, 248));
-            }
+            Topmost = _settings.IsPinned;
+            UpdateTitlebarPinVisuals();
 
             _dockPosition = string.IsNullOrEmpty(_settings.DockPosition) ? "top" : _settings.DockPosition;
             _isDockAutoHide = _settings.AutoHideDock;
             ApplyDockLayout();
             UpdateDockAutoHideUI();
+            ApplyTransparentTitlebar(_settings.TransparentTitlebar);
 
             if (_settings.WindowWidth >= 400 && _settings.WindowHeight >= 300)
             {
@@ -547,7 +545,7 @@ namespace DropBoard.Native
             Loaded += (s, e) =>
             {
                 InitializeSession(initialFilePath);
-                UpdateResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width);
+                UpdateResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width, ActualHeight > 0 ? ActualHeight : Height);
                 UpdateStorageStats();
             };
         }
@@ -555,7 +553,10 @@ namespace DropBoard.Native
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
             _autoSaveTimer.Stop();
-            PerformAutoSave(isClosing: true);
+            if (_settings.AutoSaveEnabled)
+            {
+                PerformAutoSave(isClosing: true);
+            }
 
             // Save persistent app settings
             if (WindowState == WindowState.Normal)
@@ -588,6 +589,7 @@ namespace DropBoard.Native
         private void ScheduleAutoSave()
         {
             if (_isRestoringSession) return;
+            if (!_settings.AutoSaveEnabled) return;
             _autoSaveTimer.Stop();
             _autoSaveTimer.Start();
         }
@@ -608,12 +610,7 @@ namespace DropBoard.Native
             byte alpha = (byte)(percent * 255 / 100);
             RootGrid.Background = new SolidColorBrush(Color.FromArgb(alpha, 13, 15, 20));
 
-            if (percent == 0)
-                CanvasBgText.Text = "0% BG";
-            else if (percent == 100)
-                CanvasBgText.Text = "100% BG";
-            else
-                CanvasBgText.Text = $"{percent}% BG";
+            CanvasBgText.Text = $"{percent}%";
         }
 
         private void BtnOpacityToggle_Click(object sender, MouseButtonEventArgs e)
@@ -687,8 +684,9 @@ namespace DropBoard.Native
                 Vector delta = current - _lastPanPoint;
                 _lastPanPoint = current;
 
+                double panSens = Math.Clamp(_settings.PanSensitivity > 0 ? _settings.PanSensitivity : 1.0, 0.2, 3.0);
                 Matrix matrix = CanvasMatrixTransform.Matrix;
-                matrix.Translate(delta.X, delta.Y);
+                matrix.Translate(delta.X * panSens, delta.Y * panSens);
                 CanvasMatrixTransform.Matrix = matrix;
                 SyncActiveHwndPositions(updateSize: false);
                 e.Handled = true;
@@ -869,6 +867,10 @@ namespace DropBoard.Native
             if (_isResizingGroup)
             {
                 _isResizingGroup = false;
+                if (_resizingGroup != null)
+                {
+                    ReflowGroupCards(_resizingGroup, _resizingGroup.Width, _resizingGroup.Height, _resizingGroup.X, _resizingGroup.Y, animated: false);
+                }
                 _resizingGroup = null;
                 _groupResizeMemberCards.Clear();
                 CanvasContainer.ReleaseMouseCapture();
@@ -884,15 +886,58 @@ namespace DropBoard.Native
 
         private void CanvasContainer_MouseWheel(object sender, MouseWheelEventArgs e)
         {
-            Point mousePos = e.GetPosition(CanvasContainer);
-            PerformCanvasZoom(e.Delta, mousePos);
+            string mode = string.IsNullOrEmpty(_settings.NavMode) ? "macos" : _settings.NavMode.ToLowerInvariant();
+            bool isCtrlDown = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+            bool isShiftDown = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+
+            if (mode == "mouse")
+            {
+                // Classic Mouse (PureRef style): plain wheel zooms canvas
+                Point mousePos = e.GetPosition(CanvasContainer);
+                PerformCanvasZoom(e.Delta, mousePos);
+                e.Handled = true;
+                return;
+            }
+
+            // For macOS Trackpad and Windows Precision:
+            // Ctrl+Wheel or Pinch zooms canvas
+            if (isCtrlDown)
+            {
+                Point mousePos = e.GetPosition(CanvasContainer);
+                PerformCanvasZoom(e.Delta, mousePos);
+                e.Handled = true;
+                return;
+            }
+
+            // Normal 2-finger swipe / wheel pans canvas
+            double panSens = Math.Clamp(_settings.PanSensitivity > 0 ? _settings.PanSensitivity : 1.0, 0.2, 3.0);
+            double panDelta = (e.Delta / 3.0) * panSens;
+            if (_settings.InvertPan)
+            {
+                panDelta = -panDelta;
+            }
+
+            Matrix matrix = CanvasMatrixTransform.Matrix;
+            if (isShiftDown)
+            {
+                matrix.Translate(panDelta, 0);
+            }
+            else
+            {
+                matrix.Translate(0, panDelta);
+            }
+            CanvasMatrixTransform.Matrix = matrix;
+            SyncActiveHwndPositions(updateSize: false);
+            ScheduleAutoSave();
             e.Handled = true;
         }
 
         private void PerformCanvasZoom(int delta, Point? centerPos = null)
         {
             Point mousePos = centerPos ?? new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2);
-            double zoomFactor = delta > 0 ? 1.15 : (1.0 / 1.15);
+            double sens = Math.Clamp(_settings.ZoomSensitivity > 0 ? _settings.ZoomSensitivity : 1.0, 0.2, 3.0);
+            double step = 0.15 * sens;
+            double zoomFactor = delta > 0 ? (1.0 + step) : (1.0 / (1.0 + step));
 
             Matrix matrix = CanvasMatrixTransform.Matrix;
 
@@ -1874,6 +1919,8 @@ namespace DropBoard.Native
             _cards.Add(item);
             WorldCanvas.Children.Add(container);
 
+            CheckCardGroupAffiliation(item);
+
             UpdateStatusCounts();
             if (autoSelect)
             {
@@ -2148,16 +2195,65 @@ namespace DropBoard.Native
 
         private void BtnGridArrange_Click(object sender, RoutedEventArgs e)
         {
-            var targetCards = _selectedCards.Count > 0 ? _selectedCards.ToList() : _cards.ToList();
-            if (targetCards.Count == 0) return;
-
             RecordUndo("Arrange Grid");
             _gridArrangeCount++;
+
+            // Handle Grouped Cards: If entire board is being arranged, auto-layout groups internally so members stay inside!
+            if (_selectedCards.Count == 0)
+            {
+                foreach (var group in _groups)
+                {
+                    AutoLayoutGroup(group, animated: true, recordUndo: false);
+                    FitGroupToCards(group, recordUndo: false);
+                }
+            }
+            else
+            {
+                // If selection consists only of cards in a specific group, layout only within that group!
+                var groupIds = _selectedCards.Where(c => !string.IsNullOrEmpty(c.GroupId)).Select(c => c.GroupId!).Distinct().ToList();
+                if (groupIds.Count == 1 && _selectedCards.All(c => !string.IsNullOrEmpty(c.GroupId)))
+                {
+                    var grp = _groups.FirstOrDefault(g => g.Id == groupIds[0]);
+                    if (grp != null)
+                    {
+                        AutoLayoutGroup(grp, animated: true, recordUndo: false);
+                        FitGroupToCards(grp, recordUndo: false);
+                        ScheduleAutoSave();
+                        ShowToast($"Arranged cards in {grp.Title}", ToastType.Success);
+                        return;
+                    }
+                }
+            }
+
+            // Target cards for canvas grid: only cards that do NOT belong to any group!
+            var targetCards = _selectedCards.Count > 0 
+                ? _selectedCards.Where(c => string.IsNullOrEmpty(c.GroupId)).ToList()
+                : _cards.Where(c => string.IsNullOrEmpty(c.GroupId)).ToList();
+
+            if (targetCards.Count == 0)
+            {
+                if (_groups.Count > 0)
+                {
+                    double curX = _groups.Min(g => g.X);
+                    double curY = _groups.Min(g => g.Y);
+                    foreach (var g in _groups)
+                    {
+                        Canvas.SetLeft(g.Container, curX);
+                        Canvas.SetTop(g.Container, curY);
+                        g.X = curX;
+                        g.Y = curY;
+                        curX += g.Width + _currentGap;
+                    }
+                    ScheduleAutoSave();
+                    ShowToast($"Arranged {_groups.Count} scene groups", ToastType.Success);
+                    ZoomToFitAllCards(animated: true, showToast: false);
+                }
+                return;
+            }
 
             int total = targetCards.Count;
             int baseCols = total <= 3 ? total : (total <= 6 ? 3 : (total <= 12 ? 4 : 5));
 
-            // On consecutive spam clicks, cycle column counts and shuffle card sequence!
             int colVariation = (_gridArrangeCount - 1) % 3;
             int cols = colVariation == 0 ? baseCols : (colVariation == 1 ? Math.Max(2, baseCols - 1) : Math.Min(6, baseCols + 1));
 
@@ -2180,13 +2276,21 @@ namespace DropBoard.Native
             }
             else
             {
-                Matrix matrix = CanvasMatrixTransform.Matrix;
-                matrix.Invert();
-                Point centerScreen = new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2);
-                Point centerWorld = matrix.Transform(centerScreen);
+                if (_groups.Count > 0)
+                {
+                    startX = _groups.Max(g => g.X + g.Width) + (gap * 2);
+                    startY = _groups.Min(g => g.Y);
+                }
+                else
+                {
+                    Matrix matrix = CanvasMatrixTransform.Matrix;
+                    matrix.Invert();
+                    Point centerScreen = new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2);
+                    Point centerWorld = matrix.Transform(centerScreen);
 
-                startX = centerWorld.X - (totalGridWidth / 2);
-                startY = centerWorld.Y - 200;
+                    startX = centerWorld.X - (totalGridWidth / 2);
+                    startY = centerWorld.Y - 200;
+                }
             }
 
             // PureRef Masonry Column Tracking: pack into the shortest column to eliminate gaps
@@ -2218,7 +2322,7 @@ namespace DropBoard.Native
 
             ScheduleAutoSave();
             string msg = _selectedCards.Count > 0 
-                ? $"Grid Layout #{_gridArrangeCount}: {targetCards.Count} selected cards ({cols} Columns)" 
+                ? $"Grid Layout #{_gridArrangeCount}: {targetCards.Count} cards ({cols} Columns)" 
                 : $"Grid Layout #{_gridArrangeCount}: {cols} Columns (Gap: {(int)_currentGap}px)";
             ShowToast(msg, ToastType.Success);
 
@@ -2233,8 +2337,58 @@ namespace DropBoard.Native
 
         private void BtnPipelineArrange_Click(object sender, RoutedEventArgs e)
         {
-            var targetCards = _selectedCards.Count > 0 ? _selectedCards.ToList() : _cards.ToList();
-            if (targetCards.Count == 0) return;
+            if (_selectedCards.Count == 0)
+            {
+                // Auto-layout any groups internally first
+                foreach (var g in _groups)
+                {
+                    AutoLayoutGroup(g, animated: true, recordUndo: false);
+                    FitGroupToCards(g, recordUndo: false);
+                }
+            }
+            else
+            {
+                // If selection consists only of cards in a specific group, layout only within that group!
+                var groupIds = _selectedCards.Where(c => !string.IsNullOrEmpty(c.GroupId)).Select(c => c.GroupId!).Distinct().ToList();
+                if (groupIds.Count == 1 && _selectedCards.All(c => !string.IsNullOrEmpty(c.GroupId)))
+                {
+                    var grp = _groups.FirstOrDefault(g => g.Id == groupIds[0]);
+                    if (grp != null)
+                    {
+                        AutoLayoutGroup(grp, animated: true, recordUndo: false);
+                        FitGroupToCards(grp, recordUndo: false);
+                        ScheduleAutoSave();
+                        ShowToast($"Arranged cards in {grp.Title}", ToastType.Success);
+                        return;
+                    }
+                }
+            }
+
+            // Target cards for pipeline: only cards that do NOT belong to any group!
+            var targetCards = _selectedCards.Count > 0 
+                ? _selectedCards.Where(c => string.IsNullOrEmpty(c.GroupId)).ToList()
+                : _cards.Where(c => string.IsNullOrEmpty(c.GroupId)).ToList();
+
+            if (targetCards.Count == 0)
+            {
+                if (_groups.Count > 0)
+                {
+                    double curX = _groups.Min(g => g.X);
+                    double curY = _groups.Min(g => g.Y);
+                    foreach (var g in _groups)
+                    {
+                        Canvas.SetLeft(g.Container, curX);
+                        Canvas.SetTop(g.Container, curY);
+                        g.X = curX;
+                        g.Y = curY;
+                        curX += g.Width + _currentGap;
+                    }
+                    ScheduleAutoSave();
+                    ShowToast($"Arranged {_groups.Count} scene groups horizontally", ToastType.Success);
+                    ZoomToFitAllCards(animated: true, showToast: false);
+                }
+                return;
+            }
 
             RecordUndo("Arrange Pipeline");
             _pipelineArrangeCount++;
@@ -2911,71 +3065,9 @@ namespace DropBoard.Native
 
         private void ApplyDockLayout()
         {
-            bool isLeft = _dockPosition == "left";
-
-            if (isLeft)
-            {
-                FloatingDock.HorizontalAlignment = HorizontalAlignment.Left;
-                FloatingDock.VerticalAlignment = VerticalAlignment.Center;
-                FloatingDock.Margin = new Thickness(12, 0, 0, 0);
-                DockStackPanel.Orientation = Orientation.Vertical;
-
-                foreach (UIElement child in DockStackPanel.Children)
-                {
-                    if (child is Button btn)
-                    {
-                        btn.Width = 34;
-                        btn.Height = 34;
-                        btn.Padding = new Thickness(0);
-                        if (btn.Content is StackPanel sp)
-                        {
-                            foreach (UIElement item in sp.Children)
-                            {
-                                if (item is TextBlock tb)
-                                    tb.Visibility = Visibility.Collapsed;
-                                else if (item is FrameworkElement fe)
-                                    fe.Margin = new Thickness(0);
-                            }
-                        }
-                    }
-                    else if (child is System.Windows.Shapes.Rectangle rect)
-                    {
-                        rect.Width = 20;
-                        rect.Height = 1;
-                        rect.Margin = new Thickness(0, 4, 0, 4);
-                    }
-                }
-
-                TxtDockPos.Text = "Top Bar";
-                BtnDockPosToggle.ToolTip = "Switch Toolbar Position (Top Bar Horizontal)";
-            }
-            else
-            {
-                FloatingDock.HorizontalAlignment = HorizontalAlignment.Center;
-                FloatingDock.VerticalAlignment = VerticalAlignment.Top;
-                FloatingDock.Margin = new Thickness(0, 52, 0, 0);
-                DockStackPanel.Orientation = Orientation.Horizontal;
-
-                foreach (UIElement child in DockStackPanel.Children)
-                {
-                    if (child is Button btn)
-                    {
-                        btn.Width = double.NaN;
-                        btn.Height = double.NaN;
-                    }
-                    else if (child is System.Windows.Shapes.Rectangle rect)
-                    {
-                        rect.Width = 1;
-                        rect.Height = 16;
-                        rect.Margin = new Thickness(5, 0, 5, 0);
-                    }
-                }
-
-                TxtDockPos.Text = "Sidebar";
-                BtnDockPosToggle.ToolTip = "Switch Toolbar Position (Left Sidebar 1x Mode)";
-
-                UpdateResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width);
-            }
+            double curW = ActualWidth > 0 ? ActualWidth : Width;
+            double curH = ActualHeight > 0 ? ActualHeight : Height;
+            UpdateResponsiveLayout(curW, curH);
         }
 
         private void RevealDock()
@@ -3029,7 +3121,8 @@ namespace DropBoard.Native
 
             if (_dockPosition == "left")
             {
-                DoubleAnimation animX = new DoubleAnimation(-75, TimeSpan.FromMilliseconds(220))
+                double hideDist = FloatingDock.ActualWidth > 55 ? -(FloatingDock.ActualWidth + 30) : -85;
+                DoubleAnimation animX = new DoubleAnimation(hideDist, TimeSpan.FromMilliseconds(220))
                 {
                     EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
                 };
@@ -3080,11 +3173,12 @@ namespace DropBoard.Native
             Point pt = e.GetPosition(this);
             if (_dockPosition == "left")
             {
-                if ((pt.X <= 60 && pt.Y > 40) || FloatingDock.IsMouseOver)
+                double dockW = FloatingDock.ActualWidth > 0 ? FloatingDock.ActualWidth : 44;
+                if ((pt.X <= (dockW + 15) && pt.Y > 40) || FloatingDock.IsMouseOver)
                 {
                     RevealDock();
                 }
-                else if ((pt.X > 140 || pt.Y <= 40) && !FloatingDock.IsMouseOver)
+                else if ((pt.X > (dockW + 70) || pt.Y <= 40) && !FloatingDock.IsMouseOver)
                 {
                     HideDock();
                 }
@@ -3105,22 +3199,124 @@ namespace DropBoard.Native
 
         private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
         {
-            UpdateResponsiveLayout(e.NewSize.Width);
+            UpdateResponsiveLayout(e.NewSize.Width, e.NewSize.Height);
             SyncActiveHwndPositions(updateSize: false);
         }
 
-        private void UpdateResponsiveLayout(double width)
+        private void UpdateResponsiveLayout(double width, double height = 0)
         {
             if (width <= 0) return;
+            if (height <= 0) height = ActualHeight > 0 ? ActualHeight : Height;
 
-            // 1. Dock Toolbar (when top horizontal mode)
-            if (_dockPosition == "top")
+            bool isLeft = _dockPosition == "left";
+
+            // 1. Dock Toolbar Responsive Layout (Top Horizontal vs Left Sidebar)
+            if (isLeft)
             {
+                FloatingDock.HorizontalAlignment = HorizontalAlignment.Left;
+                FloatingDock.VerticalAlignment = VerticalAlignment.Center;
+                FloatingDock.Margin = new Thickness(10, 0, 0, 0);
+
+                // Auto 2-Kolom (Photoshop Style) jika tinggi window sempit (< 620px)
+                bool isTwoColumn = height < 620;
+                bool isUltraCompact = height < 460;
+                double btnSize = isUltraCompact ? 28.0 : (isTwoColumn ? 32.0 : 34.0);
+
+                // Batasi tinggi dock agar tidak pernah meluap menabrak titlebar atau status bar
+                FloatingDock.MaxHeight = Math.Max(160, height - 90);
+
+                if (isTwoColumn)
+                {
+                    // 2 Kolom: lebar pas untuk 2 tombol + padding
+                    FloatingDock.Width = (btnSize * 2) + 16;
+                    FloatingDock.Padding = new Thickness(4, 4, 4, 4);
+                    DockWrapPanel.Orientation = Orientation.Horizontal;
+
+                    foreach (UIElement child in DockWrapPanel.Children)
+                    {
+                        if (child is Button btn)
+                        {
+                            btn.Width = btnSize;
+                            btn.Height = btnSize;
+                            btn.Padding = new Thickness(0);
+                            btn.Margin = new Thickness(1);
+                            if (btn.Content is StackPanel sp)
+                            {
+                                foreach (UIElement item in sp.Children)
+                                {
+                                    if (item is TextBlock tb)
+                                        tb.Visibility = Visibility.Collapsed;
+                                    else if (item is FrameworkElement fe)
+                                        fe.Margin = new Thickness(0);
+                                }
+                            }
+                        }
+                        else if (child is System.Windows.Shapes.Rectangle rect)
+                        {
+                            // Sembunyikan divider pada mode 2 kolom agar sangat rapi dan hemat ruang
+                            rect.Visibility = Visibility.Collapsed;
+                        }
+                    }
+                }
+                else
+                {
+                    // 1 Kolom memanjang ke bawah (Normal tinggi)
+                    FloatingDock.Width = 44;
+                    FloatingDock.Padding = new Thickness(4, 3, 4, 3);
+                    DockWrapPanel.Orientation = Orientation.Vertical;
+
+                    foreach (UIElement child in DockWrapPanel.Children)
+                    {
+                        if (child is Button btn)
+                        {
+                            btn.Width = 34;
+                            btn.Height = 34;
+                            btn.Padding = new Thickness(0);
+                            btn.Margin = new Thickness(0, 0, 0, 2);
+                            if (btn.Content is StackPanel sp)
+                            {
+                                foreach (UIElement item in sp.Children)
+                                {
+                                    if (item is TextBlock tb)
+                                        tb.Visibility = Visibility.Collapsed;
+                                    else if (item is FrameworkElement fe)
+                                        fe.Margin = new Thickness(0);
+                                }
+                            }
+                        }
+                        else if (child is System.Windows.Shapes.Rectangle rect)
+                        {
+                            rect.Visibility = Visibility.Visible;
+                            rect.Width = 20;
+                            rect.Height = 1;
+                            rect.Margin = new Thickness(0, 4, 0, 4);
+                        }
+                    }
+                }
+
+                TxtDockPos.Text = "Top Bar";
+                BtnDockPosToggle.ToolTip = "Switch Toolbar Position (Top Bar Horizontal)";
+                if (IconDockPosSidebar != null) IconDockPosSidebar.Visibility = Visibility.Collapsed;
+                if (IconDockPosTopbar != null) IconDockPosTopbar.Visibility = Visibility.Visible;
+            }
+            else // top horizontal mode
+            {
+                FloatingDock.HorizontalAlignment = HorizontalAlignment.Center;
+                FloatingDock.VerticalAlignment = VerticalAlignment.Top;
+                FloatingDock.Margin = new Thickness(0, 52, 0, 0);
+                FloatingDock.Width = double.NaN;
+                FloatingDock.MaxHeight = double.PositiveInfinity;
+                FloatingDock.Padding = new Thickness(6, 3, 6, 3);
+                DockWrapPanel.Orientation = Orientation.Horizontal;
+
                 bool compactDock = width <= 1080;
-                foreach (UIElement child in DockStackPanel.Children)
+                foreach (UIElement child in DockWrapPanel.Children)
                 {
                     if (child is Button btn)
                     {
+                        btn.Width = double.NaN;
+                        btn.Height = double.NaN;
+                        btn.Margin = new Thickness(0);
                         btn.Padding = compactDock ? new Thickness(6, 4, 6, 4) : new Thickness(7, 4, 7, 4);
                         if (btn.Content is StackPanel sp)
                         {
@@ -3137,12 +3333,24 @@ namespace DropBoard.Native
                             }
                         }
                     }
+                    else if (child is System.Windows.Shapes.Rectangle rect)
+                    {
+                        rect.Visibility = Visibility.Visible;
+                        rect.Width = 1;
+                        rect.Height = 16;
+                        rect.Margin = new Thickness(5, 0, 5, 0);
+                    }
                 }
+
+                TxtDockPos.Text = "Sidebar";
+                BtnDockPosToggle.ToolTip = "Switch Toolbar Position (Left Sidebar 1x Mode)";
+                if (IconDockPosSidebar != null) IconDockPosSidebar.Visibility = Visibility.Visible;
+                if (IconDockPosTopbar != null) IconDockPosTopbar.Visibility = Visibility.Collapsed;
             }
 
-            // 2. Titlebar Responsive Collapsing
-            // Threshold 920px: Titlebar action buttons collapse labels to icon-only
-            bool compactTitleBtns = width <= 920;
+            // 2. Titlebar Responsive Anti-Overlap
+            // Threshold 1120px: Collapse New, Open, Save, Save As to pure SVG icons (saves ~160px)
+            bool compactTitleBtns = width <= 1120;
             if (TxtBtnNew != null) TxtBtnNew.Visibility = compactTitleBtns ? Visibility.Collapsed : Visibility.Visible;
             if (TxtBtnOpen != null) TxtBtnOpen.Visibility = compactTitleBtns ? Visibility.Collapsed : Visibility.Visible;
             if (TxtBtnSave != null) TxtBtnSave.Visibility = compactTitleBtns ? Visibility.Collapsed : Visibility.Visible;
@@ -3150,7 +3358,6 @@ namespace DropBoard.Native
             if (TxtBtnPin != null) TxtBtnPin.Visibility = compactTitleBtns ? Visibility.Collapsed : Visibility.Visible;
             if (TxtBtnAbout != null) TxtBtnAbout.Visibility = compactTitleBtns ? Visibility.Collapsed : Visibility.Visible;
 
-            // Zero out right margin on icons and adjust button padding when in icon-only mode so icons are 100% centered
             Thickness iconMargin = compactTitleBtns ? new Thickness(0) : new Thickness(0, 0, 5, 0);
             Thickness iconMarginPinAbout = compactTitleBtns ? new Thickness(0) : new Thickness(0, 0, 4, 0);
             Thickness btnPadding = compactTitleBtns ? new Thickness(6, 4, 6, 4) : new Thickness(8, 4, 8, 4);
@@ -3169,34 +3376,37 @@ namespace DropBoard.Native
             if (BtnPin != null) BtnPin.Padding = btnPadding;
             if (BtnAbout != null) BtnAbout.Padding = btnPadding;
 
-            // Threshold 760px: Hide ref counter & meta divider, hide Save As, hide About button
+            // Threshold 900px: Hide Save As, ref counter, meta divider
+            bool hide900 = width <= 900;
+            if (TxtRefCountTop != null) TxtRefCountTop.Visibility = hide900 ? Visibility.Collapsed : Visibility.Visible;
+            if (TxtMetaDivider != null) TxtMetaDivider.Visibility = hide900 ? Visibility.Collapsed : Visibility.Visible;
+            if (BtnSaveAs != null) BtnSaveAs.Visibility = hide900 ? Visibility.Collapsed : Visibility.Visible;
+            if (TxtProjectTitle != null) TxtProjectTitle.MaxWidth = hide900 ? 90 : 160;
+
+            // Threshold 760px: Hide Studio badge, folder icon, about button
             bool hide760 = width <= 760;
-            if (TxtRefCountTop != null) TxtRefCountTop.Visibility = hide760 ? Visibility.Collapsed : Visibility.Visible;
-            if (TxtMetaDivider != null) TxtMetaDivider.Visibility = hide760 ? Visibility.Collapsed : Visibility.Visible;
-            if (BtnSaveAs != null) BtnSaveAs.Visibility = hide760 ? Visibility.Collapsed : Visibility.Visible;
+            if (BrandBadgeStudio != null) BrandBadgeStudio.Visibility = hide760 ? Visibility.Collapsed : Visibility.Visible;
+            if (IconFolder != null) IconFolder.Visibility = hide760 ? Visibility.Collapsed : Visibility.Visible;
             if (BtnAbout != null) BtnAbout.Visibility = hide760 ? Visibility.Collapsed : Visibility.Visible;
-            if (TxtProjectTitle != null) TxtProjectTitle.MaxWidth = hide760 ? 60 : 160;
+            if (TxtProjectTitle != null) TxtProjectTitle.MaxWidth = hide760 ? 60 : 90;
 
-            // Threshold 620px: Hide Studio badge, folder icon, project title
+            // Threshold 620px: Hide project title, hide New button
             bool hide620 = width <= 620;
-            if (BrandBadgeStudio != null) BrandBadgeStudio.Visibility = hide620 ? Visibility.Collapsed : Visibility.Visible;
-            if (IconFolder != null) IconFolder.Visibility = hide620 ? Visibility.Collapsed : Visibility.Visible;
             if (TxtProjectTitle != null) TxtProjectTitle.Visibility = hide620 ? Visibility.Collapsed : Visibility.Visible;
+            if (BtnNew != null) BtnNew.Visibility = hide620 ? Visibility.Collapsed : Visibility.Visible;
 
-            // Threshold 520px: Hide Settings button, hide New button (keep primary Open & Save)
+            // Threshold 520px: Hide Settings button
             bool hide520 = width <= 520;
             if (BtnSettings != null) BtnSettings.Visibility = hide520 ? Visibility.Collapsed : Visibility.Visible;
-            if (BtnNew != null) BtnNew.Visibility = hide520 ? Visibility.Collapsed : Visibility.Visible;
 
-            // Threshold 450px: Hide Pin button, hide brand title text "DropBoard" (leaves clean vector Brand Icon)
+            // Threshold 450px: Hide Pin button, brand title
             bool hide450 = width <= 450;
             if (BtnPin != null) BtnPin.Visibility = hide450 ? Visibility.Collapsed : Visibility.Visible;
             if (TxtBrandTitle != null) TxtBrandTitle.Visibility = hide450 ? Visibility.Collapsed : Visibility.Visible;
 
-            // Opacity slider container: ALWAYS VISIBLE across all window sizes down to 360px!
+            // Opacity slider container: ALWAYS VISIBLE across all window sizes
             if (BorderOpacityContainer != null) BorderOpacityContainer.Visibility = Visibility.Visible;
 
-            // On ultra-compact window (<= 410px), collapse text badge "0% BG" and shorten slider track
             bool compactOpacity = width <= 410;
             if (CanvasBgText != null) CanvasBgText.Visibility = compactOpacity ? Visibility.Collapsed : Visibility.Visible;
             if (CanvasBgSlider != null) CanvasBgSlider.Width = compactOpacity ? 42 : 60;
@@ -3208,6 +3418,26 @@ namespace DropBoard.Native
             BtnDockPin.ToolTip = _isDockAutoHide 
                 ? "Toolbar is in Auto-Hide (Float) mode. Click to Pin permanently." 
                 : "Toolbar is Pinned. Click to enable Auto-Hide (Float).";
+
+            if (DockPinLine != null && DockPinPath != null)
+            {
+                if (_isDockAutoHide)
+                {
+                    var slate = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+                    DockPinLine.Stroke = slate;
+                    DockPinPath.Stroke = slate;
+                    DockPinPath.Fill = Brushes.Transparent;
+                    BtnDockPin.Background = Brushes.Transparent;
+                }
+                else
+                {
+                    var cyan = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                    DockPinLine.Stroke = cyan;
+                    DockPinPath.Stroke = cyan;
+                    DockPinPath.Fill = new SolidColorBrush(Color.FromArgb(45, 56, 189, 248));
+                    BtnDockPin.Background = new SolidColorBrush(Color.FromArgb(25, 56, 189, 248));
+                }
+            }
 
             if (_isDockAutoHide)
             {
@@ -3844,22 +4074,134 @@ namespace DropBoard.Native
             group.FrameBorder.Width = newW;
             group.FrameBorder.Height = newH;
 
-            // Proportional scaling for all member cards inside group!
-            if (_groupResizeMemberCards.Count > 0 && initial.Width > 0 && initial.Height > 0)
-            {
-                double scaleX = newW / initial.Width;
-                double scaleY = newH / initial.Height;
-                double uniformScale = (scaleX + scaleY) / 2.0;
+            // Dynamically reflow and fit all member cards into the new container dimensions!
+            ReflowGroupCards(group, newW, newH, newX, newY, animated: false);
+        }
 
-                foreach (var cs in _groupResizeMemberCards)
-                {
-                    cs.Card.Width = Math.Max(20, cs.InitWidth * uniformScale);
-                    cs.Card.Height = Math.Max(20, cs.InitHeight * uniformScale);
-                    cs.Card.X = newX + (cs.RelX * scaleX);
-                    cs.Card.Y = newY + (cs.RelY * scaleY);
-                }
-                SyncActiveHwndPositions(updateSize: true);
+        public void ReflowGroupCards(GroupItem group, double groupW, double groupH, double groupX, double groupY, bool animated = false)
+        {
+            var memberCards = _cards.Where(c => c.GroupId == group.Id).ToList();
+            if (memberCards.Count == 0) return;
+
+            double pad = 16.0;
+            double topPad = 34.0;
+            double gap = 12.0;
+
+            double availW = Math.Max(80.0, groupW - (pad * 2));
+            double availH = Math.Max(60.0, groupH - topPad - pad);
+
+            var visualCards = memberCards.Where(c => !c.IsPaletteCard).ToList();
+            var paletteCards = memberCards.Where(c => c.IsPaletteCard).ToList();
+
+            double paletteRowH = 0;
+            if (paletteCards.Count > 0)
+            {
+                paletteRowH = (paletteCards.Count * 76.0) + (paletteCards.Count * gap);
             }
+
+            double visualAvailH = Math.Max(40.0, availH - paletteRowH);
+
+            if (visualCards.Count > 0)
+            {
+                int bestCols = 1;
+                double bestFitScore = double.MaxValue;
+                int maxPossibleCols = Math.Min(visualCards.Count, 6);
+
+                // Find the optimal column count that fits visual cards with minimal wasted vertical/horizontal ratio
+                for (int c = 1; c <= maxPossibleCols; c++)
+                {
+                    int r = (int)Math.Ceiling((double)visualCards.Count / c);
+                    double cellW = (availW - ((c - 1) * gap)) / c;
+                    double cellH = (visualAvailH - ((r - 1) * gap)) / r;
+
+                    if (cellW <= 20 || cellH <= 20) continue;
+
+                    double cellAspect = cellW / Math.Max(1.0, cellH);
+                    // Preference around 1.15 aspect ratio
+                    double score = Math.Abs(Math.Log(cellAspect / 1.15));
+                    if (score < bestFitScore)
+                    {
+                        bestFitScore = score;
+                        bestCols = c;
+                    }
+                }
+
+                int cols = bestCols;
+                int rows = (int)Math.Ceiling((double)visualCards.Count / cols);
+
+                double maxCellW = Math.Max(30.0, (availW - ((cols - 1) * gap)) / cols);
+                double maxCellH = Math.Max(30.0, (visualAvailH - ((rows - 1) * gap)) / rows);
+
+                for (int i = 0; i < visualCards.Count; i++)
+                {
+                    var card = visualCards[i];
+                    int col = i % cols;
+                    int row = i / cols;
+
+                    double cellX = groupX + pad + (col * (maxCellW + gap));
+                    double cellY = groupY + topPad + (row * (maxCellH + gap));
+
+                    double aspect = card.AspectRatio > 0.05 ? card.AspectRatio : (card.Width / Math.Max(1.0, card.Height));
+                    double cardW = maxCellW;
+                    double cardH = Math.Round(cardW / aspect);
+
+                    if (cardH > maxCellH)
+                    {
+                        cardH = maxCellH;
+                        cardW = Math.Round(cardH * aspect);
+                    }
+
+                    double finalX = cellX + ((maxCellW - cardW) / 2.0);
+                    double finalY = cellY + ((maxCellH - cardH) / 2.0);
+
+                    card.Width = Math.Max(30, cardW);
+                    card.Height = Math.Max(30, cardH);
+                    if (card.IsCropped)
+                    {
+                        double visW_pct = Math.Max(0.05, (100.0 - card.CropLeft - card.CropRight) / 100.0);
+                        double visH_pct = Math.Max(0.05, (100.0 - card.CropTop - card.CropBottom) / 100.0);
+                        card.BaseWidth = Math.Round(card.Width / visW_pct);
+                        card.BaseHeight = Math.Round(card.Height / visH_pct);
+                    }
+                    else
+                    {
+                        card.BaseWidth = card.Width;
+                        card.BaseHeight = card.Height;
+                    }
+
+                    if (animated)
+                    {
+                        AnimateCardPosition(card, finalX, finalY);
+                    }
+                    else
+                    {
+                        card.X = finalX;
+                        card.Y = finalY;
+                    }
+                }
+            }
+
+            // Position palette cards neatly below the visual cards in the group!
+            if (paletteCards.Count > 0)
+            {
+                double curPalY = visualCards.Count > 0 
+                    ? visualCards.Max(c => c.Y + c.Height) + gap 
+                    : groupY + topPad;
+
+                foreach (var pal in paletteCards)
+                {
+                    double palW = Math.Min(availW, Math.Max(220.0, availW * 0.95));
+                    double palH = Math.Clamp(pal.Height > 0 ? pal.Height : 74.0, 50.0, 95.0);
+                    pal.Width = palW;
+                    pal.Height = palH;
+                    pal.X = groupX + pad + ((availW - palW) / 2.0);
+                    pal.Y = curPalY;
+                    Panel.SetZIndex(pal.Container, 25);
+                    curPalY += palH + gap;
+                }
+            }
+
+            SyncActiveHwndPositions(updateSize: true);
         }
 
         public void FitGroupToCards(GroupItem group, bool recordUndo = true)
@@ -3908,8 +4250,12 @@ namespace DropBoard.Native
 
         public void AutoLayoutGroup(GroupItem group, bool animated = true, bool recordUndo = false)
         {
-            var memberCards = _cards.Where(c => c.GroupId == group.Id).ToList();
-            if (memberCards.Count == 0) return;
+            var memberCards = _cards.Where(c => c.GroupId == group.Id && !c.IsPaletteCard).ToList();
+            if (memberCards.Count == 0)
+            {
+                FitGroupToCards(group, recordUndo: false);
+                return;
+            }
 
             if (recordUndo) RecordUndo("Auto-Arrange Group");
 
@@ -4016,7 +4362,34 @@ namespace DropBoard.Native
             }
 
             double totalW = (colX[cols - 1] + colWidths[cols - 1] + pad) - group.X;
-            double maxColH = colY.Max() - gap + pad - group.Y;
+            double finalBottomY = colY.Max() - gap;
+
+            var paletteCards = _cards.Where(c => c.GroupId == group.Id && c.IsPaletteCard).ToList();
+            if (paletteCards.Count > 0)
+            {
+                double curPalY = finalBottomY + gap;
+                double palWidth = Math.Max(220.0, totalW - (pad * 2));
+                foreach (var pal in paletteCards)
+                {
+                    double palH = Math.Clamp(pal.Height > 0 ? pal.Height : 74.0, 50.0, 95.0);
+                    pal.Width = palWidth;
+                    pal.Height = palH;
+                    if (animated)
+                    {
+                        AnimateCardPosition(pal, startX, curPalY);
+                    }
+                    else
+                    {
+                        pal.X = startX;
+                        pal.Y = curPalY;
+                    }
+                    Panel.SetZIndex(pal.Container, 25);
+                    curPalY += palH + gap;
+                }
+                finalBottomY = curPalY - gap;
+            }
+
+            double maxColH = finalBottomY + pad - group.Y;
 
             group.Width = Math.Max(200, totalW);
             group.Height = Math.Max(140, maxColH);
@@ -4092,29 +4465,54 @@ namespace DropBoard.Native
                 string? prevGroupId = card.GroupId;
                 card.GroupId = targetGroup.Id;
 
-                var memberCards = _cards.Where(c => c.GroupId == targetGroup.Id).ToList();
-                if (memberCards.Count >= 2)
+                if (card.IsPaletteCard || card.IsNote)
                 {
-                    // Check if newly added/moved card overlaps with existing cards
-                    Rect cardRectExact = new Rect(card.X, card.Y, card.Width, card.Height);
-                    bool overlaps = memberCards.Where(c => c != card).Any(other =>
+                    Panel.SetZIndex(card.Container, 25);
+                    var otherCards = _cards.Where(c => c.GroupId == targetGroup.Id && c != card).ToList();
+                    if (otherCards.Count > 0)
                     {
-                        Rect otherRect = new Rect(other.X, other.Y, other.Width, other.Height);
-                        return otherRect.IntersectsWith(cardRectExact);
-                    });
+                        Rect cardRectExact = new Rect(card.X, card.Y, card.Width, card.Height);
+                        bool overlaps = otherCards.Any(other =>
+                        {
+                            Rect otherRect = new Rect(other.X, other.Y, other.Width, other.Height);
+                            return otherRect.IntersectsWith(cardRectExact);
+                        });
 
-                    if (overlaps || prevGroupId != targetGroup.Id)
+                        if (overlaps || prevGroupId != targetGroup.Id)
+                        {
+                            double bottomY = otherCards.Max(o => o.Y + o.Height);
+                            card.Y = bottomY + 14.0;
+                            card.X = otherCards.Min(o => o.X);
+                        }
+                    }
+                    FitGroupToCards(targetGroup, recordUndo: false);
+                }
+                else
+                {
+                    var memberCards = _cards.Where(c => c.GroupId == targetGroup.Id && !c.IsPaletteCard).ToList();
+                    if (memberCards.Count >= 2)
                     {
-                        AutoLayoutGroup(targetGroup, animated: true, recordUndo: false);
+                        // Check if newly added/moved card overlaps with existing cards
+                        Rect cardRectExact = new Rect(card.X, card.Y, card.Width, card.Height);
+                        bool overlaps = memberCards.Where(c => c != card).Any(other =>
+                        {
+                            Rect otherRect = new Rect(other.X, other.Y, other.Width, other.Height);
+                            return otherRect.IntersectsWith(cardRectExact);
+                        });
+
+                        if (overlaps || prevGroupId != targetGroup.Id)
+                        {
+                            AutoLayoutGroup(targetGroup, animated: true, recordUndo: false);
+                        }
+                        else
+                        {
+                            FitGroupToCards(targetGroup, recordUndo: false);
+                        }
                     }
                     else
                     {
                         FitGroupToCards(targetGroup, recordUndo: false);
                     }
-                }
-                else
-                {
-                    FitGroupToCards(targetGroup, recordUndo: false);
                 }
 
                 if (!string.IsNullOrEmpty(prevGroupId) && prevGroupId != targetGroup.Id)
@@ -4170,6 +4568,8 @@ namespace DropBoard.Native
             ChkInvertPan.IsChecked = _settings.InvertPan;
 
             ChkAutoHideDock.IsChecked = _settings.AutoHideDock;
+            if (ChkTransparentTitlebar != null)
+                ChkTransparentTitlebar.IsChecked = _settings.TransparentTitlebar;
 
             UpdateNavModeVisuals(_settings.NavMode);
             UpdateDockPosVisuals(_settings.DockPosition);
@@ -4243,14 +4643,33 @@ namespace DropBoard.Native
         private void UpdateNavModeVisuals(string mode)
         {
             if (CardNavMac == null || CardNavWin == null || CardNavMouse == null) return;
-            CardNavMac.BorderBrush = mode == "macos" ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(30, 41, 59));
-            CardNavMac.BorderThickness = new Thickness(mode == "macos" ? 1.5 : 1.0);
+            var activeBorder = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+            var inactiveBorder = new SolidColorBrush(Color.FromRgb(30, 41, 59));
+            var activeText = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+            var inactiveText = new SolidColorBrush(Color.FromRgb(241, 245, 249));
+            var inactiveIcon = new SolidColorBrush(Color.FromRgb(148, 163, 184));
 
-            CardNavWin.BorderBrush = mode == "windows" ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(30, 41, 59));
-            CardNavWin.BorderThickness = new Thickness(mode == "windows" ? 1.5 : 1.0);
+            bool isMac = mode == "macos";
+            CardNavMac.BorderBrush = isMac ? activeBorder : inactiveBorder;
+            CardNavMac.BorderThickness = new Thickness(isMac ? 1.5 : 1.0);
+            if (TxtNavMacTitle != null) TxtNavMacTitle.Foreground = isMac ? activeText : inactiveText;
+            if (IconNavMacScreen != null) IconNavMacScreen.Stroke = isMac ? activeText : inactiveIcon;
+            if (IconNavMacBase != null) IconNavMacBase.Stroke = isMac ? activeText : inactiveIcon;
+            if (IconNavMacPad != null) IconNavMacPad.Stroke = isMac ? activeText : inactiveIcon;
 
-            CardNavMouse.BorderBrush = mode == "mouse" ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(30, 41, 59));
-            CardNavMouse.BorderThickness = new Thickness(mode == "mouse" ? 1.5 : 1.0);
+            bool isWin = mode == "windows";
+            CardNavWin.BorderBrush = isWin ? activeBorder : inactiveBorder;
+            CardNavWin.BorderThickness = new Thickness(isWin ? 1.5 : 1.0);
+            if (TxtNavWinTitle != null) TxtNavWinTitle.Foreground = isWin ? activeText : inactiveText;
+            if (IconNavWinPath != null) IconNavWinPath.Fill = isWin ? activeText : inactiveIcon;
+
+            bool isMouse = mode == "mouse";
+            CardNavMouse.BorderBrush = isMouse ? activeBorder : inactiveBorder;
+            CardNavMouse.BorderThickness = new Thickness(isMouse ? 1.5 : 1.0);
+            if (TxtNavMouseTitle != null) TxtNavMouseTitle.Foreground = isMouse ? activeText : inactiveText;
+            if (IconNavMouseBody != null) IconNavMouseBody.Stroke = isMouse ? activeText : inactiveIcon;
+            if (IconNavMouseWheel != null) IconNavMouseWheel.Stroke = isMouse ? activeText : inactiveIcon;
+            if (IconNavMouseDiv != null) IconNavMouseDiv.Stroke = isMouse ? activeText : inactiveIcon;
         }
 
         private void SliderPanSens_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -4294,11 +4713,25 @@ namespace DropBoard.Native
         private void UpdateDockPosVisuals(string pos)
         {
             if (CardDockTop == null || CardDockLeft == null) return;
-            CardDockTop.BorderBrush = pos == "top" ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(30, 41, 59));
-            CardDockTop.BorderThickness = new Thickness(pos == "top" ? 1.5 : 1.0);
+            var activeBorder = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+            var inactiveBorder = new SolidColorBrush(Color.FromRgb(30, 41, 59));
+            var activeText = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+            var inactiveText = new SolidColorBrush(Color.FromRgb(241, 245, 249));
+            var inactiveIcon = new SolidColorBrush(Color.FromRgb(148, 163, 184));
 
-            CardDockLeft.BorderBrush = pos == "left" ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(30, 41, 59));
-            CardDockLeft.BorderThickness = new Thickness(pos == "left" ? 1.5 : 1.0);
+            bool isTop = pos == "top";
+            CardDockTop.BorderBrush = isTop ? activeBorder : inactiveBorder;
+            CardDockTop.BorderThickness = new Thickness(isTop ? 1.5 : 1.0);
+            if (TxtDockTopTitle != null) TxtDockTopTitle.Foreground = isTop ? activeText : inactiveText;
+            if (IconDockTopWin != null) IconDockTopWin.Stroke = isTop ? activeText : inactiveIcon;
+            if (IconDockTopBar != null) IconDockTopBar.Fill = isTop ? activeText : inactiveIcon;
+
+            bool isLeft = pos == "left";
+            CardDockLeft.BorderBrush = isLeft ? activeBorder : inactiveBorder;
+            CardDockLeft.BorderThickness = new Thickness(isLeft ? 1.5 : 1.0);
+            if (TxtDockLeftTitle != null) TxtDockLeftTitle.Foreground = isLeft ? activeText : inactiveText;
+            if (IconDockLeftWin != null) IconDockLeftWin.Stroke = isLeft ? activeText : inactiveIcon;
+            if (IconDockLeftBar != null) IconDockLeftBar.Fill = isLeft ? activeText : inactiveIcon;
         }
 
         private void ChkAutoHideDock_Changed(object sender, RoutedEventArgs e)
@@ -4309,6 +4742,87 @@ namespace DropBoard.Native
             _settings.Save();
             UpdateDockAutoHideUI();
             ShowToast(_isDockAutoHide ? "Toolbar: Auto-Hide (Float)" : "Toolbar: Pinned", ToastType.Info);
+        }
+
+        private void BtnTitlebarGlass_Click(object sender, RoutedEventArgs e)
+        {
+            bool newState = !_settings.TransparentTitlebar;
+            _settings.TransparentTitlebar = newState;
+            _settings.Save();
+            ApplyTransparentTitlebar(newState);
+            ShowToast(newState ? "Top Bar: Transparent Glass Active" : "Top Bar: Solid Studio Dark", ToastType.Info);
+        }
+
+        private void MenuTransparentTopBar_Click(object sender, RoutedEventArgs e)
+        {
+            if (MenuTransparentTopBar == null) return;
+            bool newState = MenuTransparentTopBar.IsChecked;
+            _settings.TransparentTitlebar = newState;
+            _settings.Save();
+            ApplyTransparentTitlebar(newState);
+            ShowToast(newState ? "Top Bar: Transparent Glass Active" : "Top Bar: Solid Studio Dark", ToastType.Info);
+        }
+
+        private void ChkTransparentTitlebar_Changed(object sender, RoutedEventArgs e)
+        {
+            if (ChkTransparentTitlebar == null) return;
+            bool isTrans = ChkTransparentTitlebar.IsChecked == true;
+            if (_settings.TransparentTitlebar == isTrans) return;
+            _settings.TransparentTitlebar = isTrans;
+            _settings.Save();
+            ApplyTransparentTitlebar(isTrans);
+            ShowToast(isTrans ? "Top Bar: Transparent Glass Active" : "Top Bar: Solid Studio Dark", ToastType.Info);
+        }
+
+        private void ApplyTransparentTitlebar(bool isTransparent)
+        {
+            if (TopTitleBar == null) return;
+            if (isTransparent)
+            {
+                TopTitleBar.Background = Brushes.Transparent;
+                TopTitleBar.BorderThickness = new Thickness(0);
+            }
+            else
+            {
+                TopTitleBar.Background = new SolidColorBrush(Color.FromRgb(13, 15, 20)); // #FF0D0F14
+                TopTitleBar.BorderThickness = new Thickness(0, 0, 0, 1);
+            }
+
+            // Update top bar quick toggle button visuals
+            if (BtnTitlebarGlass != null)
+            {
+                var cyanBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                var slateBrush = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+
+                if (isTransparent)
+                {
+                    BtnTitlebarGlass.Background = new SolidColorBrush(Color.FromArgb(38, 56, 189, 248)); // #2638BDF8
+                    BtnTitlebarGlass.BorderBrush = new SolidColorBrush(Color.FromArgb(90, 56, 189, 248));
+                    BtnTitlebarGlass.ToolTip = "Top Bar: Transparent Glass (Click for Solid Dark)";
+                    if (GlassWinRect != null) GlassWinRect.Stroke = cyanBrush;
+                    if (GlassWinLine != null) GlassWinLine.Stroke = cyanBrush;
+                    if (GlassWinHeader != null) GlassWinHeader.Fill = new SolidColorBrush(Color.FromArgb(60, 56, 189, 248));
+                    if (GlassDot1 != null) GlassDot1.Fill = cyanBrush;
+                    if (GlassDot2 != null) GlassDot2.Fill = cyanBrush;
+                }
+                else
+                {
+                    BtnTitlebarGlass.Background = new SolidColorBrush(Color.FromArgb(10, 255, 255, 255)); // #0AFFFFFF
+                    BtnTitlebarGlass.BorderBrush = new SolidColorBrush(Color.FromArgb(20, 255, 255, 255));
+                    BtnTitlebarGlass.ToolTip = "Top Bar: Solid Studio Dark (Click for Transparent Glass)";
+                    if (GlassWinRect != null) GlassWinRect.Stroke = slateBrush;
+                    if (GlassWinLine != null) GlassWinLine.Stroke = slateBrush;
+                    if (GlassWinHeader != null) GlassWinHeader.Fill = Brushes.Transparent;
+                    if (GlassDot1 != null) GlassDot1.Fill = slateBrush;
+                    if (GlassDot2 != null) GlassDot2.Fill = slateBrush;
+                }
+            }
+
+            if (MenuTransparentTopBar != null)
+                MenuTransparentTopBar.IsChecked = isTransparent;
+
+            if (ChkTransparentTitlebar != null && ChkTransparentTitlebar.IsChecked != isTransparent)
+                ChkTransparentTitlebar.IsChecked = isTransparent;
         }
 
         private void BtnOpenCacheFolder_Click(object sender, RoutedEventArgs e)
@@ -5631,7 +6145,7 @@ namespace DropBoard.Native
                 FontSize = 10.5,
                 Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
                 VerticalAlignment = VerticalAlignment.Center,
-                Visibility = item.IsNote ? Visibility.Collapsed : Visibility.Visible
+                Visibility = (item.IsNote || item.IsPaletteCard) ? Visibility.Collapsed : Visibility.Visible
             };
             moveSp.Children.Add(moveGrip);
             moveSp.Children.Add(moveTxt);
@@ -5639,10 +6153,10 @@ namespace DropBoard.Native
             Border btnMove = new Border
             {
                 Background = Brushes.Transparent,
-                Padding = item.IsNote ? new Thickness(4, 3, 4, 3) : new Thickness(6, 3, 6, 3),
+                Padding = (item.IsNote || item.IsPaletteCard) ? new Thickness(4, 3, 4, 3) : new Thickness(6, 3, 6, 3),
                 CornerRadius = new CornerRadius(4),
                 Cursor = Cursors.SizeAll,
-                ToolTip = item.IsNote ? "Drag to Move Note" : "Drag to Move Reference Card",
+                ToolTip = item.IsNote ? "Drag to Move Note" : (item.IsPaletteCard ? "Drag to Move Palette Card" : "Drag to Move Reference Card"),
                 Child = moveSp
             };
             btnMove.MouseLeftButtonDown += (s, e) =>
@@ -5690,6 +6204,12 @@ namespace DropBoard.Native
                     SetWebViewHitTesting(true);
                     btnMove.ReleaseMouseCapture();
                     SyncActiveHwndPositions(updateSize: false);
+
+                    foreach (CardItem c in _selectedCards.ToList())
+                    {
+                        CheckCardGroupAffiliation(c);
+                    }
+
                     RecordUndo("Move Reference");
                     ScheduleAutoSave();
                     e.Handled = true;
@@ -6192,8 +6712,8 @@ namespace DropBoard.Native
                     BorderBrush = new SolidColorBrush(Color.FromArgb(80, 56, 189, 248)),
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(4),
-                    Padding = new Thickness(6, 3, 6, 3),
-                    Margin = new Thickness(2, 0, 2, 0),
+                    Padding = new Thickness(5, 2, 5, 2),
+                    Margin = new Thickness(1, 0, 1, 0),
                     Cursor = Cursors.Hand,
                     ToolTip = "Color Harmony Mood (Colorful, Bright, Muted, Deep, Dark, Dominant)",
                     Child = moodSp
@@ -6208,22 +6728,13 @@ namespace DropBoard.Native
 
                 // 2. Swatch count Stepper: [ - ] 5 [ + ]
                 StackPanel countSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-                TextBlock txtColorsLabel = new TextBlock
-                {
-                    Text = "Colors:",
-                    FontSize = 10.0,
-                    Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(2, 0, 4, 0)
-                };
-                countSp.Children.Add(txtColorsLabel);
 
                 Border CreateStepBtn(string text, string tip, Action onStep)
                 {
                     Border sb = new Border
                     {
-                        Width = 18,
-                        Height = 18,
+                        Width = 17,
+                        Height = 17,
                         Background = new SolidColorBrush(Color.FromArgb(35, 255, 255, 255)),
                         CornerRadius = new CornerRadius(3),
                         Cursor = Cursors.Hand,
@@ -6261,7 +6772,7 @@ namespace DropBoard.Native
                     FontWeight = FontWeights.Bold,
                     Foreground = new SolidColorBrush(Color.FromRgb(241, 245, 249)),
                     VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(5, 0, 5, 0)
+                    Margin = new Thickness(4, 0, 4, 0)
                 };
 
                 Border btnPlus = CreateStepBtn("+", "Increase color count (max 10)", () =>
@@ -6279,13 +6790,13 @@ namespace DropBoard.Native
                 countSp.Children.Add(btnPlus);
 
                 // 3. Randomize Button
-                Border btnRandom = CreatePillButton("🎲 Random", Color.FromRgb(251, 191, 36), "Re-sample random palette colors", () =>
+                Border btnRandom = CreatePillButton("🎲", Color.FromRgb(251, 191, 36), "Re-sample random palette colors", () =>
                 {
                     RefreshPaletteCardFromSource(item, isRandom: true);
                 }, isBold: true);
 
-                // 4. Rows Toggle Button: 1 Row <-> 2 Rows (Coolors / Adobe style)
-                Border btnRows = CreatePillButton(item.PaletteRows == 2 ? "2 Rows" : "1 Row", Color.FromRgb(147, 197, 253), "Toggle 1 or 2 rows layout", () =>
+                // 4. Rows Toggle Button: 1 Row <-> 2 Rows
+                Border btnRows = CreatePillButton(item.PaletteRows == 2 ? "2R" : "1R", Color.FromRgb(147, 197, 253), "Toggle 1 or 2 rows layout", () =>
                 {
                     item.PaletteRows = item.PaletteRows == 1 ? 2 : 1;
                     UpdatePaletteCardContent(item);
@@ -6294,59 +6805,33 @@ namespace DropBoard.Native
                     ShowToast($"Layout: {item.PaletteRows} row(s)", ToastType.Info);
                 }, isBold: true);
 
-                // 5. Toggle Sampling Pins on Source Image Button
-                Border btnPins = CreatePillButton("📍 Pins", Color.FromRgb(56, 189, 248), "Toggle live sampling pins on reference image", () =>
+                // 5. More Actions Button (Pins, AE Export, Copy, Zoom, Delete)
+                Border btnMore = new Border
                 {
-                    if (item.LinkedSourceImageCard == null || !_cards.Contains(item.LinkedSourceImageCard))
+                    Background = Brushes.Transparent,
+                    Padding = new Thickness(5, 2, 5, 2),
+                    CornerRadius = new CornerRadius(4),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "More Actions (Pins, AE Export, Copy, Delete)",
+                    Child = new TextBlock
                     {
-                        var candidate = _selectedCards.FirstOrDefault(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null)
-                                     ?? _cards.FirstOrDefault(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null);
-                        if (candidate != null)
-                        {
-                            item.LinkedSourceImageCard = candidate;
-                            candidate.LinkedPaletteCard = item;
-                            if (candidate.ActivePalettePins == null || candidate.ActivePalettePins.Count == 0)
-                            {
-                                candidate.ActivePalettePins = item.ActivePalettePins;
-                            }
-                            ScheduleAutoSave();
-                            ShowToast("Connected palette to reference image!", ToastType.Success);
-                        }
+                        Text = "•••",
+                        FontSize = 9.5,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                        VerticalAlignment = VerticalAlignment.Center
                     }
-
-                    if (item.LinkedSourceImageCard != null)
-                    {
-                        var src = item.LinkedSourceImageCard;
-                        src.LinkedPaletteCard = item;
-                        if (src.ActivePalettePins == null || src.ActivePalettePins.Count == 0)
-                        {
-                            src.ActivePalettePins = item.ActivePalettePins;
-                        }
-
-                        if (src.IsPaletteMode)
-                            CloseCanvasPaletteMode(src);
-                        else
-                            StartCanvasPaletteMode(src);
-                    }
-                    else
-                    {
-                        ShowToast("Select an image to link this palette to", ToastType.Info);
-                    }
-                }, isBold: true);
-
-                // 6. Ae Export Button
-                Border btnAeExport = CreatePillButton("Ae Export", Color.FromRgb(165, 180, 252), "Export palette image to Adobe After Effects", () =>
+                };
+                btnMore.MouseEnter += (s, e) => btnMore.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                btnMore.MouseLeave += (s, e) => btnMore.Background = Brushes.Transparent;
+                btnMore.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnMore.PreviewMouseLeftButtonUp += (s, e) =>
                 {
-                    ExportCanvasPaletteToAe(item);
-                }, isBold: true);
+                    e.Handled = true;
+                    ShowPaletteCardMoreMenu(btnMore, item);
+                };
 
-                // 7. Copy Button
-                Border btnCopy = CreatePillButton("Copy", Color.FromRgb(209, 213, 219), "Copy Palette Image to Clipboard", () =>
-                {
-                    CopyCardToClipboard(item);
-                });
-
-                // 8. Delete Button
+                // 6. Delete Button
                 Border btnDel = CreatePillButton("✕", Color.FromRgb(239, 68, 68), "Delete Palette Card", () =>
                 {
                     RemoveCard(item);
@@ -6359,10 +6844,8 @@ namespace DropBoard.Native
                 sp.Children.Add(CreateDivider());
                 sp.Children.Add(btnRandom);
                 sp.Children.Add(btnRows);
-                sp.Children.Add(btnPins);
-                sp.Children.Add(btnAeExport);
-                sp.Children.Add(btnCopy);
                 sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnMore);
                 sp.Children.Add(btnDel);
             }
             else if (item.IsPaletteMode)
@@ -7573,6 +8056,99 @@ namespace DropBoard.Native
             cm.IsOpen = true;
         }
 
+        private void ShowPaletteCardMoreMenu(FrameworkElement anchor, CardItem item)
+        {
+            _isCardSubMenuOpen = true;
+            ContextMenu cm = new ContextMenu
+            {
+                PlacementTarget = anchor,
+                Placement = PlacementMode.Bottom,
+                VerticalOffset = 3
+            };
+            cm.Closed += (s, e) =>
+            {
+                _isCardSubMenuOpen = false;
+                if (item.HoverToolbar != null && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                {
+                    DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                    anim.Completed += (s2, e2) =>
+                    {
+                        if (!_isCardSubMenuOpen && !item.Container.IsMouseOver && !item.HoverToolbar.IsMouseOver && !item.IsSelected)
+                        {
+                            item.HoverToolbar.IsHitTestVisible = false;
+                        }
+                    };
+                    item.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, anim);
+                }
+            };
+
+            MenuItem miPins = new MenuItem { Header = "📍 Toggle Sampling Pins" };
+            miPins.Click += (s, e) =>
+            {
+                if (item.LinkedSourceImageCard == null || !_cards.Contains(item.LinkedSourceImageCard))
+                {
+                    var candidate = _selectedCards.FirstOrDefault(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null)
+                                 ?? _cards.FirstOrDefault(c => !c.IsPaletteCard && !c.IsNote && c.Bitmap != null);
+                    if (candidate != null)
+                    {
+                        item.LinkedSourceImageCard = candidate;
+                        candidate.LinkedPaletteCard = item;
+                        if (candidate.ActivePalettePins == null || candidate.ActivePalettePins.Count == 0)
+                        {
+                            candidate.ActivePalettePins = item.ActivePalettePins;
+                        }
+                        ScheduleAutoSave();
+                        ShowToast("Connected palette to reference image!", ToastType.Success);
+                    }
+                }
+
+                if (item.LinkedSourceImageCard != null)
+                {
+                    var src = item.LinkedSourceImageCard;
+                    src.LinkedPaletteCard = item;
+                    if (src.ActivePalettePins == null || src.ActivePalettePins.Count == 0)
+                    {
+                        src.ActivePalettePins = item.ActivePalettePins;
+                    }
+
+                    if (src.IsPaletteMode)
+                        CloseCanvasPaletteMode(src);
+                    else
+                        StartCanvasPaletteMode(src);
+                }
+                else
+                {
+                    ShowToast("Select an image to link this palette to", ToastType.Info);
+                }
+            };
+
+            MenuItem miAe = new MenuItem { Header = "🎬 Export to After Effects" };
+            miAe.Click += (s, e) => ExportCanvasPaletteToAe(item);
+
+            MenuItem miCopy = new MenuItem { Header = "📋 Copy Palette Image" };
+            miCopy.Click += (s, e) => CopyCardToClipboard(item);
+
+            MenuItem miZoom = new MenuItem { Header = "🔍 Zoom to Palette" };
+            miZoom.Click += (s, e) => ZoomToCard(item);
+
+            MenuItem miDel = new MenuItem
+            {
+                Header = "🗑 Delete Palette Card",
+                Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)),
+                FontWeight = FontWeights.SemiBold
+            };
+            miDel.Click += (s, e) => RemoveCard(item);
+
+            cm.Items.Add(miPins);
+            cm.Items.Add(miAe);
+            cm.Items.Add(miCopy);
+            cm.Items.Add(miZoom);
+            cm.Items.Add(new Separator());
+            cm.Items.Add(miDel);
+
+            cm.IsOpen = true;
+        }
+
         #region Standalone Live Color Palette Card System
 
         private CardItem AddPaletteCard(
@@ -7753,7 +8329,7 @@ namespace DropBoard.Native
                 {
                     if (Panel.GetZIndex(container) == 500)
                     {
-                        Panel.SetZIndex(container, 0);
+                        Panel.SetZIndex(container, 25);
                     }
                 }
                 if (item.IsSelected || _isCardSubMenuOpen) return;
@@ -7860,12 +8436,23 @@ namespace DropBoard.Native
 
             _cards.Add(item);
             WorldCanvas.Children.Add(container);
+            Panel.SetZIndex(container, 25);
 
             if (sourceCard != null)
             {
                 sourceCard.LinkedPaletteCard = item;
                 item.LinkedSourceImageCard = sourceCard;
+                if (!string.IsNullOrEmpty(sourceCard.GroupId))
+                {
+                    item.GroupId = sourceCard.GroupId;
+                    var grp = _groups.FirstOrDefault(g => g.Id == sourceCard.GroupId);
+                    if (grp != null)
+                    {
+                        FitGroupToCards(grp, recordUndo: false);
+                    }
+                }
             }
+            CheckCardGroupAffiliation(item);
 
             UpdateStatusCounts();
             if (autoSelect)
@@ -11132,10 +11719,26 @@ namespace DropBoard.Native
             _selectedGroups.Clear();
         }
 
+        private void UpdateTitlebarPinVisuals()
+        {
+            if (PinDot == null || PinHead == null) return;
+            bool isPinned = Topmost;
+            var strokeBrush = isPinned ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(156, 163, 175));
+            PinDot.Fill = isPinned ? strokeBrush : new SolidColorBrush(Color.FromRgb(85, 85, 85));
+            if (PinLine1 != null) PinLine1.Stroke = strokeBrush;
+            if (PinLine4 != null) PinLine4.Stroke = strokeBrush;
+            PinHead.Stroke = strokeBrush;
+            PinHead.Fill = isPinned ? new SolidColorBrush(Color.FromArgb(90, 56, 189, 248)) : Brushes.Transparent;
+            if (BtnPin != null)
+            {
+                BtnPin.ToolTip = isPinned ? "Window Pinned (Always on Top). Click to Unpin." : "Pin Window Always on Top";
+            }
+        }
+
         private void BtnPin_Click(object sender, RoutedEventArgs e)
         {
             Topmost = !Topmost;
-            PinDot.Fill = Topmost ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(85, 85, 85));
+            UpdateTitlebarPinVisuals();
             _settings.IsPinned = Topmost;
             _settings.Save();
             ShowToast(Topmost ? "Window Pinned (Always on Top)" : "Window Unpinned (Normal)", ToastType.Info);
@@ -11210,6 +11813,7 @@ namespace DropBoard.Native
         private const int WM_NCLBUTTONDOWN = 0x00A1;
         private const int WM_SYSCOMMAND = 0x0112;
         private const int WM_COPYDATA = 0x004A;
+        private const int WM_MOUSEHWHEEL = 0x020E;
         private const int SC_SIZE = 0xF000;
 
         private const int HTCLIENT = 1;
@@ -11321,6 +11925,25 @@ namespace DropBoard.Native
                     }
                     catch { }
                     break;
+                }
+
+                case WM_MOUSEHWHEEL:
+                {
+                    short wheelDelta = unchecked((short)((long)wParam >> 16));
+                    Dispatcher.InvokeAsync(() =>
+                    {
+                        double panSens = Math.Clamp(_settings.PanSensitivity > 0 ? _settings.PanSensitivity : 1.0, 0.2, 3.0);
+                        double panDelta = (wheelDelta / 3.0) * panSens;
+                        if (_settings.InvertPan) panDelta = -panDelta;
+
+                        Matrix matrix = CanvasMatrixTransform.Matrix;
+                        matrix.Translate(-panDelta, 0);
+                        CanvasMatrixTransform.Matrix = matrix;
+                        SyncActiveHwndPositions(updateSize: false);
+                        ScheduleAutoSave();
+                    });
+                    handled = true;
+                    return IntPtr.Zero;
                 }
             }
 

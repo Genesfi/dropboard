@@ -21,6 +21,7 @@ namespace DropBoard.Native.Services
         public double ZoomSensitivity { get; set; } = 1.0;
         public bool InvertPan { get; set; } = false;
         public bool AutoSaveEnabled { get; set; } = true;
+        public bool TransparentTitlebar { get; set; } = false;
 
         private static string SettingsFilePath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
