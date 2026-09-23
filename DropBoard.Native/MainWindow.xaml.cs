@@ -11,6 +11,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Data;
+using System.Windows.Ink;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -128,6 +129,11 @@ namespace DropBoard.Native
         public int PaletteRows { get; set; } = 1;
         public string? LinkedSourceCardId { get; set; } = null;
         public string? GroupId { get; set; } = null;
+        public bool IsDrawCard { get; set; } = false;
+        public string DrawInkBase64 { get; set; } = "";
+        public string DrawPenColor { get; set; } = "#38BDF8";
+        public double DrawPenSize { get; set; } = 3.0;
+        public bool DrawIsEraser { get; set; } = false;
     }
 
     public class CardItem
@@ -176,6 +182,16 @@ namespace DropBoard.Native
         public bool NoteHasShadow { get; set; } = false;
         public TextBox? NoteEditor { get; set; } = null;
         public Border? BtnNoteShadow { get; set; } = null;
+
+        // Hand-Drawn Sketch / Draw Card Integration
+        public bool IsDrawCard { get; set; } = false;
+        public System.Windows.Controls.InkCanvas? DrawCanvas { get; set; } = null;
+        public string DrawInkBase64 { get; set; } = "";
+        public string DrawPenColor { get; set; } = "#38BDF8";
+        public double DrawPenSize { get; set; } = 3.0;
+        public bool DrawIsEraser { get; set; } = false;
+        public Border? BtnDrawPen { get; set; } = null;
+        public Border? BtnDrawEraser { get; set; } = null;
 
         // HWND lockstep position and size cache
         public int LastPixelX { get; set; } = int.MinValue;
@@ -470,6 +486,19 @@ namespace DropBoard.Native
             {
                 SetWebViewHitTesting(false);
             }
+            else if ((e.Key == Key.B || e.Key == Key.P) && Keyboard.Modifiers == ModifierKeys.None && !_isPanning && !_isDraggingCards && !_isResizingCard)
+            {
+                if (!(FocusManager.GetFocusedElement(this) is TextBox))
+                {
+                    ToggleBrushMode();
+                    e.Handled = true;
+                }
+            }
+            else if ((e.Key == Key.V || e.Key == Key.Escape) && _isBrushMode)
+            {
+                ToggleBrushMode(false);
+                e.Handled = true;
+            }
             else if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.None && !_isPanning && !_isDraggingCards && !_isResizingCard)
             {
                 if (!(FocusManager.GetFocusedElement(this) is TextBox))
@@ -655,6 +684,7 @@ namespace DropBoard.Native
                 InitializeSession(initialFilePath);
                 UpdateResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width, ActualHeight > 0 ? ActualHeight : Height);
                 UpdateStorageStats();
+                SetupBrushModeSwatches();
             };
         }
 
@@ -2109,6 +2139,292 @@ namespace DropBoard.Native
             return item;
         }
 
+        private CardItem AddDrawCard(
+            Point? worldPosition = null,
+            double? customWidth = null,
+            double? customHeight = null,
+            string initialInkBase64 = "",
+            string penColor = "#38BDF8",
+            double penSize = 3.0,
+            bool autoSelect = true)
+        {
+            EmptyStateOverlay.Visibility = Visibility.Collapsed;
+
+            double w = customWidth ?? 380;
+            double h = customHeight ?? 280;
+
+            // InkCanvas element
+            InkCanvas inkCanvas = new InkCanvas
+            {
+                Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)),
+                Cursor = Cursors.Pen,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch
+            };
+
+            // Setup high-quality drawing attributes
+            Color drawingColor = Colors.DeepSkyBlue;
+            try
+            {
+                drawingColor = (Color)ColorConverter.ConvertFromString(penColor);
+            }
+            catch { }
+
+            inkCanvas.DefaultDrawingAttributes = new DrawingAttributes
+            {
+                Color = drawingColor,
+                Width = penSize,
+                Height = penSize,
+                FitToCurve = true,
+                IgnorePressure = false,
+                StylusTip = StylusTip.Ellipse
+            };
+
+            // Restore strokes if provided
+            if (!string.IsNullOrEmpty(initialInkBase64))
+            {
+                try
+                {
+                    byte[] strokeBytes = Convert.FromBase64String(initialInkBase64);
+                    using MemoryStream ms = new MemoryStream(strokeBytes);
+                    inkCanvas.Strokes = new StrokeCollection(ms);
+                }
+                catch { }
+            }
+
+            // Dummy background placeholder for uniform CardItem contract
+            BitmapSource dummyBmp = BitmapSource.Create(1, 1, 96, 96, PixelFormats.Bgra32, null, new byte[] { 0, 0, 0, 0 }, 4);
+            Image dummyImg = new Image
+            {
+                Source = dummyBmp,
+                Visibility = Visibility.Collapsed
+            };
+
+            // Wrap InkCanvas inside Viewbox so all strokes scale smoothly with corner handles
+            Viewbox vb = new Viewbox
+            {
+                Stretch = Stretch.Fill,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch
+            };
+            vb.Child = inkCanvas;
+
+            Border contentBorder = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)), // Nearly 100% transparent hit test surface
+                BorderBrush = new SolidColorBrush(Color.FromArgb(180, 56, 189, 248)),
+                BorderThickness = new Thickness(0), // 100% borderless when idle!
+                CornerRadius = new CornerRadius(0),
+                Padding = new Thickness(0),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Child = vb
+            };
+
+            Grid container = new Grid
+            {
+                Width = w,
+                Height = h,
+                Cursor = Cursors.SizeAll
+            };
+            container.Children.Add(dummyImg);
+            container.Children.Add(contentBorder);
+
+            // 4 Corner Handles
+            Border handleTL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Top, Cursors.SizeNWSE);
+            Border handleTR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Top, Cursors.SizeNESW);
+            Border handleBL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Bottom, Cursors.SizeNESW);
+            Border handleBR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Bottom, Cursors.SizeNWSE);
+
+            container.Children.Add(handleTL);
+            container.Children.Add(handleTR);
+            container.Children.Add(handleBL);
+            container.Children.Add(handleBR);
+            _highestZ++;
+            Panel.SetZIndex(container, _highestZ + 1000);
+
+            CardItem item = new CardItem
+            {
+                Container = container,
+                ContentBorder = contentBorder,
+                ImageControl = dummyImg,
+                Bitmap = dummyBmp,
+                OriginalBitmap = dummyBmp,
+                BaseWidth = w,
+                BaseHeight = h,
+                AspectRatio = w / Math.Max(1.0, h),
+                HandleTL = handleTL,
+                HandleTR = handleTR,
+                HandleBL = handleBL,
+                HandleBR = handleBR,
+                IsDrawCard = true,
+                DrawCanvas = inkCanvas,
+                DrawInkBase64 = initialInkBase64,
+                DrawPenColor = penColor,
+                DrawPenSize = penSize
+            };
+
+            // Event to update serialized ink data
+            void UpdateInkData()
+            {
+                try
+                {
+                    using MemoryStream ms = new MemoryStream();
+                    inkCanvas.Strokes.Save(ms);
+                    item.DrawInkBase64 = Convert.ToBase64String(ms.ToArray());
+                    ScheduleAutoSave();
+                }
+                catch { }
+            }
+
+            inkCanvas.StrokeCollected += (s, e) => UpdateInkData();
+            inkCanvas.StrokeErased += (s, e) => UpdateInkData();
+
+            // Attach Hover Quick-Action Toolbar
+            Border hoverToolbar = CreateCardHoverToolbar(item);
+            item.HoverToolbar = hoverToolbar;
+            Canvas toolbarHost = new Canvas
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                Width = 0,
+                Height = 0,
+                ClipToBounds = false
+            };
+            Panel.SetZIndex(toolbarHost, 9999);
+            Canvas.SetTop(hoverToolbar, -38.0);
+            toolbarHost.Children.Add(hoverToolbar);
+            container.Children.Add(toolbarHost);
+
+            hoverToolbar.SizeChanged += (s, e) =>
+            {
+                if (e.NewSize.Width > 0)
+                {
+                    Canvas.SetLeft(hoverToolbar, -e.NewSize.Width / 2.0);
+                    Canvas.SetTop(hoverToolbar, -38.0);
+                }
+            };
+
+            // Context Menu
+            container.ContextMenu = CreateCardContextMenu(item);
+            container.MouseRightButtonDown += (s, e) =>
+            {
+                if (!item.IsSelected)
+                {
+                    SelectCard(item, addToSelection: false);
+                }
+                e.Handled = true;
+            };
+            container.MouseRightButtonUp += (s, e) =>
+            {
+                if (container.ContextMenu != null)
+                {
+                    container.ContextMenu.PlacementTarget = container;
+                    container.ContextMenu.IsOpen = true;
+                }
+                e.Handled = true;
+            };
+
+            // Drag card logic
+            void TriggerDrawCardDrag(MouseEventArgs e)
+            {
+                if (Keyboard.IsKeyDown(Key.Space)) return;
+
+                if (e is MouseButtonEventArgs mbe && mbe.ClickCount == 2)
+                {
+                    SelectCard(item, addToSelection: false);
+                    ZoomToCard(item);
+                    e.Handled = true;
+                    return;
+                }
+
+                RecordUndo("Move Sketch Card");
+
+                bool isShift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+                if (isShift)
+                {
+                    if (item.IsSelected)
+                        DeselectCard(item);
+                    else
+                        SelectCard(item, addToSelection: true);
+                }
+                else
+                {
+                    if (!item.IsSelected)
+                    {
+                        SelectCard(item, addToSelection: false);
+                    }
+                }
+
+                _isDraggingCards = true;
+                _cardDragStartMousePoint = e.GetPosition(CanvasContainer);
+                _cardsInitialPositions.Clear();
+                foreach (CardItem sel in _selectedCards)
+                {
+                    _cardsInitialPositions[sel] = new Point(sel.X, sel.Y);
+                }
+                SetWebViewHitTesting(false);
+
+                CanvasContainer.CaptureMouse();
+                e.Handled = true;
+            }
+
+            contentBorder.MouseLeftButtonDown += (s, e) => TriggerDrawCardDrag(e);
+            inkCanvas.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                if (Keyboard.IsKeyDown(Key.Space)) return;
+                TriggerDrawCardDrag(e);
+            };
+
+            // Resize handle events
+            AttachResizeHandleEvents(item, handleTL, ResizeCorner.TopLeft);
+            AttachResizeHandleEvents(item, handleTR, ResizeCorner.TopRight);
+            AttachResizeHandleEvents(item, handleBL, ResizeCorner.BottomLeft);
+            AttachResizeHandleEvents(item, handleBR, ResizeCorner.BottomRight);
+
+            // Determine World placement
+            Point pos;
+            if (worldPosition.HasValue)
+            {
+                pos = worldPosition.Value;
+            }
+            else
+            {
+                Matrix matrix = CanvasMatrixTransform.Matrix;
+                matrix.Invert();
+                Point centerScreen = new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2);
+                pos = matrix.Transform(centerScreen);
+                pos.X += (_cards.Count % 5) * 35 - (w / 2);
+                pos.Y += (_cards.Count % 5) * 35 - (h / 2);
+            }
+
+            item.X = pos.X;
+            item.Y = pos.Y;
+
+            if (!_isRestoringSession && !_isApplyingSnapshot)
+            {
+                RecordUndo("Add Sketch Card");
+            }
+
+            _cards.Add(item);
+            WorldCanvas.Children.Add(container);
+
+            CheckCardGroupAffiliation(item);
+            UpdateStatusCounts();
+
+            if (autoSelect)
+            {
+                SelectCard(item, addToSelection: false);
+            }
+
+            if (!_isRestoringSession)
+            {
+                ScheduleAutoSave();
+            }
+
+            return item;
+        }
+
         private static T? FindVisualParent<T>(DependencyObject child) where T : DependencyObject
         {
             DependencyObject? parentObject = VisualTreeHelper.GetParent(child);
@@ -2289,6 +2605,13 @@ namespace DropBoard.Native
                 card.ContentBorder.BorderThickness = new Thickness(1.5);
                 card.ContentBorder.CornerRadius = new CornerRadius(12);
             }
+            else if (card.IsDrawCard)
+            {
+                card.ContentBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(180, 56, 189, 248)); // Thin selection outline
+                card.ContentBorder.BorderThickness = new Thickness(1);
+                card.ContentBorder.CornerRadius = new CornerRadius(0);
+                card.ContentBorder.Effect = null;
+            }
             else
             {
                 card.ContentBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)); // Blue border
@@ -2344,6 +2667,11 @@ namespace DropBoard.Native
                 card.ContentBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255));
                 card.ContentBorder.BorderThickness = new Thickness(1);
                 card.ContentBorder.CornerRadius = new CornerRadius(12);
+            }
+            else if (card.IsDrawCard)
+            {
+                card.ContentBorder.BorderThickness = new Thickness(0); // 100% borderless when idle!
+                card.ContentBorder.Effect = null;
             }
             else
             {
@@ -3222,6 +3550,195 @@ namespace DropBoard.Native
                 note.NoteEditor?.SelectAll();
             }), System.Windows.Threading.DispatcherPriority.Input);
         }
+
+        #region Freehand Canvas Brush Tool Engine
+
+        private bool _isBrushMode = false;
+        private string _activeBrushColor = "#38BDF8";
+        private double _activeBrushSize = 4.0;
+        private bool _activeBrushIsEraser = false;
+
+        private void SetupBrushModeSwatches()
+        {
+            if (BrushColorSwatches == null) return;
+            BrushColorSwatches.Children.Clear();
+
+            string[] colors = new string[] { "#38BDF8", "#FFFFFF", "#FBBF24", "#EF4444", "#10B981", "#A78BFA", "#0F172A" };
+            foreach (var hex in colors)
+            {
+                Border swatch = new Border
+                {
+                    Width = 14,
+                    Height = 14,
+                    CornerRadius = new CornerRadius(7),
+                    Margin = new Thickness(2, 0, 2, 0),
+                    Cursor = Cursors.Hand,
+                    BorderThickness = new Thickness(hex == _activeBrushColor && !_activeBrushIsEraser ? 2 : 1),
+                    BorderBrush = (hex == _activeBrushColor && !_activeBrushIsEraser) ? Brushes.White : new SolidColorBrush(Color.FromArgb(100, 255, 255, 255)),
+                    ToolTip = $"Brush Color: {hex}"
+                };
+                try { swatch.Background = (Brush)new BrushConverter().ConvertFromString(hex)!; } catch { }
+
+                swatch.MouseLeftButtonDown += (s, e) =>
+                {
+                    _activeBrushColor = hex;
+                    _activeBrushIsEraser = false;
+                    UpdateBrushModeOverlayAttributes();
+                    SetupBrushModeSwatches();
+                    e.Handled = true;
+                };
+
+                BrushColorSwatches.Children.Add(swatch);
+            }
+        }
+
+        private void UpdateBrushModeOverlayAttributes()
+        {
+            if (CanvasBrushOverlay == null) return;
+
+            Color c = Colors.DeepSkyBlue;
+            try { c = (Color)ColorConverter.ConvertFromString(_activeBrushColor); } catch { }
+
+            CanvasBrushOverlay.DefaultDrawingAttributes = new DrawingAttributes
+            {
+                Color = c,
+                Width = _activeBrushSize,
+                Height = _activeBrushSize,
+                FitToCurve = true,
+                IgnorePressure = false,
+                StylusTip = StylusTip.Ellipse
+            };
+
+            CanvasBrushOverlay.EditingMode = _activeBrushIsEraser
+                ? InkCanvasEditingMode.EraseByPoint
+                : InkCanvasEditingMode.Ink;
+
+            double eraserRadius = Math.Max(14.0, _activeBrushSize * 3.5);
+            CanvasBrushOverlay.EraserShape = new EllipseStylusShape(eraserRadius, eraserRadius);
+
+            if (TxtBrushSize != null) TxtBrushSize.Text = $"{(int)_activeBrushSize}px ▾";
+            if (TxtBrushEraser != null)
+            {
+                TxtBrushEraser.Foreground = _activeBrushIsEraser
+                    ? new SolidColorBrush(Color.FromRgb(245, 158, 11))
+                    : new SolidColorBrush(Color.FromRgb(156, 163, 175));
+            }
+        }
+
+        private void ToggleBrushMode(bool? forceState = null)
+        {
+            bool nextState = forceState ?? !_isBrushMode;
+            if (_isBrushMode == nextState) return;
+            _isBrushMode = nextState;
+
+            if (_isBrushMode)
+            {
+                DeselectAllCards();
+                CanvasBrushOverlay.Visibility = Visibility.Visible;
+                CanvasBrushOverlay.IsHitTestVisible = true;
+                CanvasBrushOverlay.Cursor = Cursors.Pen;
+                CanvasBrushOverlay.Strokes.Clear();
+
+                UpdateBrushModeOverlayAttributes();
+                SetupBrushModeSwatches();
+
+                BrushModeBar.Visibility = Visibility.Visible;
+
+                // Visual highlight on Dock Brush button
+                BtnAddDraw.Background = new SolidColorBrush(Color.FromArgb(60, 56, 189, 248));
+                BtnAddDraw.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                IconBrushPath.Stroke = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                IconBrushLine.Stroke = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                TxtBrushBtn.Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+
+                ShowToast("Brush Mode: Draw freely anywhere! (Press V or 'Finish' to transform)", ToastType.Info, 2500);
+            }
+            else
+            {
+                // Commit any drawn strokes into a transformable freehand card!
+                if (CanvasBrushOverlay.Strokes.Count > 0)
+                {
+                    Rect bounds = CanvasBrushOverlay.Strokes.GetBounds();
+                    if (bounds.Width > 0 && bounds.Height > 0)
+                    {
+                        double overlayLeft = Canvas.GetLeft(CanvasBrushOverlay);
+                        if (double.IsNaN(overlayLeft)) overlayLeft = 0;
+                        double overlayTop = Canvas.GetTop(CanvasBrushOverlay);
+                        if (double.IsNaN(overlayTop)) overlayTop = 0;
+
+                        double pad = 8;
+                        double cardX = Math.Round(bounds.Left + overlayLeft - pad);
+                        double cardY = Math.Round(bounds.Top + overlayTop - pad);
+                        double cardW = Math.Max(40, Math.Round(bounds.Width + pad * 2));
+                        double cardH = Math.Max(30, Math.Round(bounds.Height + pad * 2));
+
+                        // Shift strokes relative to card local origin
+                        Matrix shift = Matrix.Identity;
+                        shift.Translate(-bounds.Left + pad, -bounds.Top + pad);
+                        CanvasBrushOverlay.Strokes.Transform(shift, false);
+
+                        string base64 = "";
+                        try
+                        {
+                            using MemoryStream ms = new MemoryStream();
+                            CanvasBrushOverlay.Strokes.Save(ms);
+                            base64 = Convert.ToBase64String(ms.ToArray());
+                        }
+                        catch { }
+
+                        var newCard = AddDrawCard(
+                            worldPosition: new Point(cardX, cardY),
+                            customWidth: cardW,
+                            customHeight: cardH,
+                            initialInkBase64: base64,
+                            penColor: _activeBrushColor,
+                            penSize: _activeBrushSize,
+                            autoSelect: true);
+
+                        ShowToast("Created freehand sketch! Ready to transform.", ToastType.Success);
+                    }
+                    CanvasBrushOverlay.Strokes.Clear();
+                }
+
+                CanvasBrushOverlay.Visibility = Visibility.Collapsed;
+                CanvasBrushOverlay.IsHitTestVisible = false;
+                BrushModeBar.Visibility = Visibility.Collapsed;
+
+                // Reset Dock button visual
+                BtnAddDraw.Background = Brushes.Transparent;
+                BtnAddDraw.BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                IconBrushPath.Stroke = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+                IconBrushLine.Stroke = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+                TxtBrushBtn.Foreground = new SolidColorBrush(Color.FromRgb(209, 213, 219));
+            }
+        }
+
+        private void BtnAddDraw_Click(object sender, RoutedEventArgs e)
+        {
+            ToggleBrushMode();
+        }
+
+        private void BtnBrushSizeToggle_Click(object sender, RoutedEventArgs e)
+        {
+            double[] sizes = new double[] { 2.0, 4.0, 8.0, 16.0 };
+            int curIdx = Array.IndexOf(sizes, _activeBrushSize);
+            _activeBrushSize = sizes[(curIdx + 1) % sizes.Length];
+            UpdateBrushModeOverlayAttributes();
+        }
+
+        private void BtnBrushEraserToggle_Click(object sender, RoutedEventArgs e)
+        {
+            _activeBrushIsEraser = !_activeBrushIsEraser;
+            UpdateBrushModeOverlayAttributes();
+            SetupBrushModeSwatches();
+        }
+
+        private void BtnBrushDone_Click(object sender, RoutedEventArgs e)
+        {
+            ToggleBrushMode(false);
+        }
+
+        #endregion
 
         private string? ShowUrlInputDialog(string initialUrl = "")
         {
@@ -5420,7 +5937,12 @@ namespace DropBoard.Native
                     PaletteRows = c.PaletteRows,
                     LinkedSourceCardId = c.IsPaletteCard ? c.LinkedSourceImageCard?.Id : null,
                     PalettePinsData = c.IsPaletteCard && c.ActivePalettePins != null && c.ActivePalettePins.Count > 0
-                        ? JsonSerializer.Serialize(c.ActivePalettePins) : ""
+                        ? JsonSerializer.Serialize(c.ActivePalettePins) : "",
+                    IsDrawCard = c.IsDrawCard,
+                    DrawInkBase64 = c.DrawInkBase64,
+                    DrawPenColor = c.DrawPenColor,
+                    DrawPenSize = c.DrawPenSize,
+                    DrawIsEraser = c.DrawIsEraser
                 }).ToList()
             };
         }
@@ -5547,6 +6069,30 @@ namespace DropBoard.Native
                             ApplyNoteBackground(existingCard, cs.NoteBgColor);
                             ApplyNoteShadow(existingCard);
                         }
+                        else if (existingCard.IsDrawCard)
+                        {
+                            existingCard.DrawPenColor = cs.DrawPenColor;
+                            existingCard.DrawPenSize = cs.DrawPenSize;
+                            existingCard.DrawIsEraser = cs.DrawIsEraser;
+                            if (existingCard.DrawInkBase64 != cs.DrawInkBase64 && existingCard.DrawCanvas != null)
+                            {
+                                existingCard.DrawInkBase64 = cs.DrawInkBase64;
+                                try
+                                {
+                                    if (string.IsNullOrEmpty(cs.DrawInkBase64))
+                                    {
+                                        existingCard.DrawCanvas.Strokes.Clear();
+                                    }
+                                    else
+                                    {
+                                        byte[] raw = Convert.FromBase64String(cs.DrawInkBase64);
+                                        using var ms = new System.IO.MemoryStream(raw);
+                                        existingCard.DrawCanvas.Strokes = new System.Windows.Ink.StrokeCollection(ms);
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
                         else if (cs.Bitmap != null && existingCard.Bitmap != cs.Bitmap && !existingCard.IsPlayingYouTube)
                         {
                             existingCard.Bitmap = cs.Bitmap;
@@ -5592,6 +6138,19 @@ namespace DropBoard.Native
                                 autoSelect: false);
                             newNote.Id = cs.Id;
                             newNote.GroupId = cs.GroupId;
+                        }
+                        else if (cs.IsDrawCard)
+                        {
+                            var newDraw = AddDrawCard(
+                                worldPosition: new Point(cs.X, cs.Y),
+                                customWidth: cs.Width,
+                                customHeight: cs.Height,
+                                initialInkBase64: cs.DrawInkBase64,
+                                penColor: cs.DrawPenColor,
+                                penSize: cs.DrawPenSize,
+                                autoSelect: false);
+                            newDraw.Id = cs.Id;
+                            newDraw.GroupId = cs.GroupId;
                         }
                         else
                         {
@@ -7027,6 +7586,250 @@ namespace DropBoard.Native
                 sp.Children.Add(CreateDivider());
                 sp.Children.Add(btnMore);
             }
+            else if (item.IsDrawCard)
+            {
+                Border CreateDivider() => new Border
+                {
+                    Width = 1,
+                    Height = 12,
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    Margin = new Thickness(3, 0, 3, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                // 1. Pen Tool Button
+                Border btnPen = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(50, 56, 189, 248)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(6, 2, 6, 2),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Pen Tool (Draw with mouse/stylus)",
+                    Child = new TextBlock
+                    {
+                        Text = "✏ Pen",
+                        FontSize = 10,
+                        FontWeight = FontWeights.SemiBold,
+                        Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                };
+                item.BtnDrawPen = btnPen;
+
+                // 2. Eraser Tool Button
+                Border btnEraser = new Border
+                {
+                    Background = Brushes.Transparent,
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(6, 2, 6, 2),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Eraser Tool (Erase stroke)",
+                    Child = new TextBlock
+                    {
+                        Text = "🧹 Erase",
+                        FontSize = 10,
+                        FontWeight = FontWeights.SemiBold,
+                        Foreground = new SolidColorBrush(Color.FromRgb(209, 213, 219)),
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                };
+                item.BtnDrawEraser = btnEraser;
+
+                void RefreshToolVisuals()
+                {
+                    if (item.DrawIsEraser)
+                    {
+                        btnPen.Background = Brushes.Transparent;
+                        btnPen.BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                        if (btnPen.Child is TextBlock tbP) tbP.Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+
+                        btnEraser.Background = new SolidColorBrush(Color.FromArgb(50, 245, 158, 11));
+                        btnEraser.BorderBrush = new SolidColorBrush(Color.FromRgb(245, 158, 11));
+                        if (btnEraser.Child is TextBlock tbE) tbE.Foreground = new SolidColorBrush(Color.FromRgb(245, 158, 11));
+                    }
+                    else
+                    {
+                        btnPen.Background = new SolidColorBrush(Color.FromArgb(50, 56, 189, 248));
+                        btnPen.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                        if (btnPen.Child is TextBlock tbP) tbP.Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+
+                        btnEraser.Background = Brushes.Transparent;
+                        btnEraser.BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                        if (btnEraser.Child is TextBlock tbE) tbE.Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+                    }
+                }
+
+                btnPen.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnPen.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    item.DrawIsEraser = false;
+                    if (item.DrawCanvas != null)
+                    {
+                        item.DrawCanvas.EditingMode = InkCanvasEditingMode.Ink;
+                        try { item.DrawCanvas.DefaultDrawingAttributes.Color = (Color)ColorConverter.ConvertFromString(item.DrawPenColor); } catch { }
+                    }
+                    RefreshToolVisuals();
+                };
+
+                btnEraser.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnEraser.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    item.DrawIsEraser = true;
+                    if (item.DrawCanvas != null)
+                    {
+                        item.DrawCanvas.EditingMode = InkCanvasEditingMode.EraseByStroke;
+                    }
+                    RefreshToolVisuals();
+                };
+
+                // 3. Brush Size Button (2px, 4px, 8px, 16px)
+                TextBlock txtSize = new TextBlock
+                {
+                    Text = $"{(int)item.DrawPenSize}px ▾",
+                    FontSize = 10,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(241, 245, 249)),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Border btnBrushSize = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(6, 2, 6, 2),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Toggle Brush Size (2px, 4px, 8px, 16px)",
+                    Child = txtSize
+                };
+                btnBrushSize.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnBrushSize.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    double[] sizes = new double[] { 2.0, 4.0, 8.0, 16.0 };
+                    int curIdx = Array.IndexOf(sizes, item.DrawPenSize);
+                    double nextSize = sizes[(curIdx + 1) % sizes.Length];
+                    item.DrawPenSize = nextSize;
+                    txtSize.Text = $"{(int)nextSize}px ▾";
+                    if (item.DrawCanvas != null)
+                    {
+                        item.DrawCanvas.DefaultDrawingAttributes.Width = nextSize;
+                        item.DrawCanvas.DefaultDrawingAttributes.Height = nextSize;
+                    }
+                    ScheduleAutoSave();
+                };
+
+                // 4. Color Swatch Picker Button
+                Border colorDot = new Border
+                {
+                    Width = 11,
+                    Height = 11,
+                    CornerRadius = new CornerRadius(5.5),
+                    BorderThickness = new Thickness(1),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(160, 255, 255, 255)),
+                    Margin = new Thickness(0, 0, 3, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                void UpdateColorDot()
+                {
+                    try { colorDot.Background = (Brush)new BrushConverter().ConvertFromString(item.DrawPenColor)!; }
+                    catch { colorDot.Background = new SolidColorBrush(Color.FromRgb(56, 189, 248)); }
+                }
+                UpdateColorDot();
+
+                StackPanel colorSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                colorSp.Children.Add(colorDot);
+                colorSp.Children.Add(new TextBlock
+                {
+                    Text = "▾",
+                    FontSize = 9.5,
+                    Foreground = new SolidColorBrush(Color.FromRgb(209, 213, 219)),
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+
+                Border btnColor = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 2, 5, 2),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Pick Pen Color",
+                    Child = colorSp
+                };
+                btnColor.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnColor.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    ShowDrawColorMenu(btnColor, item, chosenHex =>
+                    {
+                        item.DrawPenColor = chosenHex;
+                        if (item.DrawCanvas != null)
+                        {
+                            try
+                            {
+                                item.DrawCanvas.DefaultDrawingAttributes.Color = (Color)ColorConverter.ConvertFromString(chosenHex);
+                            }
+                            catch { }
+                        }
+                        item.DrawIsEraser = false;
+                        if (item.DrawCanvas != null) item.DrawCanvas.EditingMode = InkCanvasEditingMode.Ink;
+                        RefreshToolVisuals();
+                        UpdateColorDot();
+                        ScheduleAutoSave();
+                    });
+                };
+
+                // 5. Clear All Strokes
+                Border btnClear = CreatePillButton("Clear", Color.FromRgb(248, 113, 113), "Clear all sketch strokes", () =>
+                {
+                    if (item.DrawCanvas != null)
+                    {
+                        item.DrawCanvas.Strokes.Clear();
+                        item.DrawInkBase64 = "";
+                        ScheduleAutoSave();
+                        ShowToast("Cleared sketch strokes", ToastType.Info);
+                    }
+                });
+
+                // 6. Copy as Transparent PNG
+                Border btnCopyPng = CreatePillButton("Copy PNG", Color.FromRgb(52, 211, 153), "Copy sketch to clipboard as transparent PNG", () =>
+                {
+                    CopyDrawCardToClipboard(item);
+                }, isBold: true);
+
+                // 7. Delete Card
+                Border btnDel = CreatePillButton("✕", Color.FromRgb(239, 68, 68), "Delete Sketch Card (Del)", () =>
+                {
+                    RemoveCard(item);
+                }, isBold: true);
+
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnPen);
+                sp.Children.Add(btnEraser);
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnBrushSize);
+                sp.Children.Add(btnColor);
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnClear);
+                sp.Children.Add(btnCopyPng);
+                sp.Children.Add(btnDel);
+            }
             else if (item.IsPaletteCard)
             {
                 Border CreateDivider() => new Border
@@ -8439,6 +9242,78 @@ namespace DropBoard.Native
             cm.IsOpen = true;
         }
 
+        private void ShowDrawColorMenu(FrameworkElement anchor, CardItem item, Action<string> onColorChosen)
+        {
+            _isCardSubMenuOpen = true;
+            ContextMenu cm = new ContextMenu
+            {
+                PlacementTarget = anchor,
+                Placement = PlacementMode.Bottom,
+                VerticalOffset = 3,
+                Background = new SolidColorBrush(Color.FromRgb(22, 27, 36)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255)),
+                Padding = new Thickness(4)
+            };
+            cm.Closed += (s, e) =>
+            {
+                _isCardSubMenuOpen = false;
+            };
+
+            var colors = new (string Name, string Hex)[]
+            {
+                ("Cyan", "#38BDF8"),
+                ("White", "#FFFFFF"),
+                ("Yellow", "#FBBF24"),
+                ("Red", "#EF4444"),
+                ("Green", "#22C55E"),
+                ("Orange", "#F97316"),
+                ("Dark Slate", "#1E293B")
+            };
+
+            foreach (var (name, hex) in colors)
+            {
+                MenuItem mi = new MenuItem
+                {
+                    Header = name,
+                    Foreground = new SolidColorBrush(Color.FromRgb(241, 245, 249)),
+                    FontSize = 11.5
+                };
+
+                Border dot = new Border
+                {
+                    Width = 12,
+                    Height = 12,
+                    CornerRadius = new CornerRadius(6),
+                    BorderThickness = new Thickness(1),
+                    BorderBrush = Brushes.White,
+                    Background = (Brush)new BrushConverter().ConvertFromString(hex)!
+                };
+                mi.Icon = dot;
+                mi.Click += (s, e) => onColorChosen(hex);
+                cm.Items.Add(mi);
+            }
+
+            cm.IsOpen = true;
+        }
+
+        private void CopyDrawCardToClipboard(CardItem item)
+        {
+            if (item.DrawCanvas == null) return;
+            try
+            {
+                int w = Math.Max(10, (int)item.Width);
+                int h = Math.Max(10, (int)item.Height);
+                RenderTargetBitmap rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+                rtb.Render(item.DrawCanvas);
+                Clipboard.SetImage(rtb);
+                ShowToast("Copied sketch to clipboard as transparent PNG!", ToastType.Success);
+            }
+            catch (Exception ex)
+            {
+                ShowToast($"Failed to copy sketch: {ex.Message}", ToastType.Error);
+            }
+        }
+
         private void ShowPaletteCardMoreMenu(FrameworkElement anchor, CardItem item)
         {
             _isCardSubMenuOpen = true;
@@ -9557,6 +10432,22 @@ namespace DropBoard.Native
             ShowToast("Duplicated note", ToastType.Success);
         }
 
+        private void DuplicateDrawCard(CardItem item)
+        {
+            RecordUndo("Duplicate Sketch");
+            Point newPos = new Point(item.X + 24, item.Y + 24);
+            AddDrawCard(
+                worldPosition: newPos,
+                customWidth: item.Width,
+                customHeight: item.Height,
+                initialInkBase64: item.DrawInkBase64,
+                penColor: item.DrawPenColor,
+                penSize: item.DrawPenSize,
+                autoSelect: true);
+            ScheduleAutoSave();
+            ShowToast("Duplicated sketch", ToastType.Success);
+        }
+
         private void CleanupCard(CardItem card)
         {
             if (card.IsPaletteMode)
@@ -9602,6 +10493,17 @@ namespace DropBoard.Native
         {
             try
             {
+                if (item.IsDrawCard)
+                {
+                    CopyDrawCardToClipboard(item);
+                    return;
+                }
+                if (item.IsNote)
+                {
+                    Clipboard.SetText(item.NoteText);
+                    ShowToast("Copied note text to clipboard", ToastType.Success);
+                    return;
+                }
                 if (item.IsPaletteCard && item.ActivePalettePins != null && item.ActivePalettePins.Count > 0)
                 {
                     string title = item.LinkedSourceImageCard != null && !string.IsNullOrEmpty(item.LinkedSourceImageCard.LocalPath)
@@ -11569,7 +12471,7 @@ namespace DropBoard.Native
                     width = c.Width,
                     height = c.Height,
                     localPath = c.LocalPath,
-                    imageData = c.IsNote || (!string.IsNullOrEmpty(c.LocalPath) && File.Exists(c.LocalPath))
+                    imageData = c.IsNote || c.IsDrawCard || (!string.IsNullOrEmpty(c.LocalPath) && File.Exists(c.LocalPath))
                         ? ""
                         : (string.IsNullOrEmpty(c.Base64Data) ? (c.Base64Data = BitmapToBase64(c.OriginalBitmap ?? c.Bitmap)) : c.Base64Data),
                     isYouTube = c.IsYouTube,
@@ -11590,6 +12492,10 @@ namespace DropBoard.Native
                     linkedSourceCardId = c.IsPaletteCard ? (c.LinkedSourceImageCard?.Id ?? "") : "",
                     palettePinsData = c.IsPaletteCard && c.ActivePalettePins != null && c.ActivePalettePins.Count > 0
                         ? JsonSerializer.Serialize(c.ActivePalettePins) : "",
+                    isDrawCard = c.IsDrawCard,
+                    drawInkData = c.DrawInkBase64,
+                    drawPenColor = c.DrawPenColor,
+                    drawPenSize = c.DrawPenSize,
                     crop = new
                     {
                         top = c.CropTop,
@@ -11839,6 +12745,33 @@ namespace DropBoard.Native
                                 addedPal.GroupId = palGidEl.GetString()!;
                             if (card.TryGetProperty("linkedSourceCardId", out JsonElement lscEl) && !string.IsNullOrEmpty(lscEl.GetString()))
                                 addedPal.PendingLinkedSourceCardId = lscEl.GetString()!;
+                            continue;
+                        }
+
+                        bool isDraw = card.TryGetProperty("isDrawCard", out JsonElement idcEl) && idcEl.GetBoolean();
+                        if (isDraw)
+                        {
+                            string inkData = card.TryGetProperty("drawInkData", out JsonElement didEl) ? (didEl.GetString() ?? "") : "";
+                            string penColor = card.TryGetProperty("drawPenColor", out JsonElement dpcEl) ? (dpcEl.GetString() ?? "#38BDF8") : "#38BDF8";
+                            double penSize = card.TryGetProperty("drawPenSize", out JsonElement dpsEl) ? dpsEl.GetDouble() : 3.0;
+
+                            double x = card.TryGetProperty("x", out JsonElement xEl) ? xEl.GetDouble() : 0;
+                            double y = card.TryGetProperty("y", out JsonElement yEl) ? yEl.GetDouble() : 0;
+                            double? w = card.TryGetProperty("width", out JsonElement wEl) ? wEl.GetDouble() : null;
+                            double? h = card.TryGetProperty("height", out JsonElement hEl) ? hEl.GetDouble() : null;
+
+                            var addedDraw = AddDrawCard(
+                                worldPosition: new Point(x, y),
+                                customWidth: w,
+                                customHeight: h,
+                                initialInkBase64: inkData,
+                                penColor: penColor,
+                                penSize: penSize,
+                                autoSelect: false);
+                            if (card.TryGetProperty("id", out JsonElement drawIdEl) && !string.IsNullOrEmpty(drawIdEl.GetString()))
+                                addedDraw.Id = drawIdEl.GetString()!;
+                            if (card.TryGetProperty("groupId", out JsonElement drawGidEl) && !string.IsNullOrEmpty(drawGidEl.GetString()))
+                                addedDraw.GroupId = drawGidEl.GetString()!;
                             continue;
                         }
 

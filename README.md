@@ -33,6 +33,12 @@ DropBoard is a high-performance, GPU-accelerated reference board and creative pr
 - **Storyboard Pipeline**: Sequences scenes sequentially in horizontal stage rows with input nodes aligned cleanly on the left.
 - **Zero-Collision Shelf**: Unconnected / standalone nodes are automatically organized in a dedicated top Overview shelf.
 
+### 🎨 Freehand Canvas Brush Tool
+- **Panel-less Infinite Canvas Inking**: Draw directly anywhere across the canvas, in between cards, or directly on top of reference images with zero box panels or dark backgrounds.
+- **Stylus Pressure & Vector Curves**: Fully supports graphic pen tablets (Wacom, Huion, etc.) with Windows Ink pressure sensitivity and smooth antialiased Bézier curves.
+- **Transformable Sketch Objects**: Once finished (<kbd>V</kbd> / <kbd>Esc</kbd>), strokes automatically convert into a borderless, transparent foreground object that can be moved anywhere and scaled proportionally with 4-corner handles.
+- **Point Eraser & Color Studio**: Erase by point (Photoshop / Clip Studio Paint style), switch brush sizes (`2px`, `4px`, `8px`, `16px`), pick palette colors, and copy transparent PNGs directly to the clipboard.
+
 ### ✂️ Non-Destructive Crop & Masking
 - Crop and isolate specific details from reference images with 8-point interactive handles without modifying the original source image.
 
@@ -54,9 +60,13 @@ DropBoard is a high-performance, GPU-accelerated reference board and creative pr
 | **Touchpad 2-Finger Pinch** | Smooth Pinch Zoom In / Out at Cursor |
 | <kbd>Space</kbd> + Drag / Middle Click | Pan Canvas (Mouse) |
 | <kbd>Mouse Wheel</kbd> / <kbd>Ctrl</kbd> + Wheel | Zoom In / Out (Mouse) |
+| <kbd>B</kbd> / <kbd>P</kbd> | Toggle Freehand Canvas Brush Mode |
+| <kbd>V</kbd> / <kbd>Esc</kbd> | Finish Brush & Transform Selection |
+| <kbd>N</kbd> | Add Sticky Note / Text Card |
 | <kbd>Ctrl</kbd> + <kbd>V</kbd> | Paste Image or URL from Clipboard |
-| <kbd>Ctrl</kbd> + <kbd>D</kbd> | Duplicate Selected Items (Preserves Cable Connections) |
-| <kbd>Ctrl</kbd> + <kbd>A</kbd> | Select All (Cards, Groups, Nodes) |
+| <kbd>Ctrl</kbd> + <kbd>C</kbd> | Copy Selected Image / Sketch as Transparent PNG |
+| <kbd>Ctrl</kbd> + <kbd>D</kbd> | Duplicate Selected Items |
+| <kbd>Ctrl</kbd> + <kbd>A</kbd> | Select All (Cards, Groups, Notes) |
 | <kbd>Delete</kbd> / <kbd>Backspace</kbd> | Delete Selection |
 | <kbd>Ctrl</kbd> + <kbd>Z</kbd> | Undo |
 | <kbd>Ctrl</kbd> + <kbd>Y</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> | Redo |
