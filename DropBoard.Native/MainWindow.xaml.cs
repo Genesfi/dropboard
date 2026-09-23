@@ -120,6 +120,7 @@ namespace DropBoard.Native
         public string NoteTextColor { get; set; } = "#FFFFFF";
         public string NoteBgColor { get; set; } = "Transparent";
         public TextAlignment NoteAlignment { get; set; } = TextAlignment.Left;
+        public bool NoteHasShadow { get; set; } = false;
         public bool IsPaletteCard { get; set; } = false;
         public string PalettePinsData { get; set; } = "";
         public int PaletteColorCount { get; set; } = 5;
@@ -172,7 +173,9 @@ namespace DropBoard.Native
         public string NoteTextColor { get; set; } = "#FFFFFF";
         public string NoteBgColor { get; set; } = "Transparent";
         public TextAlignment NoteAlignment { get; set; } = TextAlignment.Left;
+        public bool NoteHasShadow { get; set; } = false;
         public TextBox? NoteEditor { get; set; } = null;
+        public Border? BtnNoteShadow { get; set; } = null;
 
         // HWND lockstep position and size cache
         public int LastPixelX { get; set; } = int.MinValue;
@@ -345,10 +348,12 @@ namespace DropBoard.Native
 
         private readonly DispatcherTimer _autoSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(1000) };
         private bool _isRestoringSession = false;
+        private bool _isImportingBatch = false;
 
         // Canvas Pan & Zoom
         private Point _lastPanPoint;
         private bool _isPanning = false;
+        private double _panDistanceAccumulator = 0;
 
         // Marquee Selection Box
         private bool _isMarqueeSelecting = false;
@@ -483,6 +488,109 @@ namespace DropBoard.Native
             }
         }
 
+        #region Performance Optimization & Caching (300+ Images Support)
+
+        private static readonly DropShadowEffect CardActiveShadow = CreateFrozenCardShadow();
+
+        private static DropShadowEffect CreateFrozenCardShadow()
+        {
+            var ds = new DropShadowEffect
+            {
+                BlurRadius = 24,
+                ShadowDepth = 6,
+                Direction = 270,
+                Opacity = 0.65,
+                Color = Colors.Black
+            };
+            ds.Freeze();
+            return ds;
+        }
+
+        private static BitmapImage LoadOptimizedBitmap(string filePath, int maxDecodeWidth = 900)
+        {
+            BitmapImage bi = new BitmapImage();
+            bi.BeginInit();
+            bi.UriSource = new Uri(filePath, UriKind.Absolute);
+            bi.CacheOption = BitmapCacheOption.OnLoad;
+            if (maxDecodeWidth > 0)
+            {
+                bi.DecodePixelWidth = maxDecodeWidth;
+            }
+            bi.EndInit();
+            bi.Freeze();
+            return bi;
+        }
+
+        private static BitmapImage LoadOptimizedBitmapFromStream(Stream stream, int maxDecodeWidth = 900)
+        {
+            BitmapImage bi = new BitmapImage();
+            bi.BeginInit();
+            bi.StreamSource = stream;
+            bi.CacheOption = BitmapCacheOption.OnLoad;
+            if (maxDecodeWidth > 0)
+            {
+                bi.DecodePixelWidth = maxDecodeWidth;
+            }
+            bi.EndInit();
+            bi.Freeze();
+            return bi;
+        }
+
+        private void UpdateViewportCulling()
+        {
+            if (_cards.Count <= 30 || CanvasContainer.ActualWidth <= 0 || CanvasContainer.ActualHeight <= 0)
+            {
+                for (int i = 0; i < _cards.Count; i++)
+                {
+                    if (_cards[i].Container.Visibility != Visibility.Visible)
+                        _cards[i].Container.Visibility = Visibility.Visible;
+                }
+                return;
+            }
+
+            try
+            {
+                Matrix inv = CanvasMatrixTransform.Matrix;
+                if (!inv.HasInverse) return;
+                inv.Invert();
+
+                Point p0 = inv.Transform(new Point(0, 0));
+                Point p1 = inv.Transform(new Point(CanvasContainer.ActualWidth, CanvasContainer.ActualHeight));
+
+                double minX = Math.Min(p0.X, p1.X);
+                double maxX = Math.Max(p0.X, p1.X);
+                double minY = Math.Min(p0.Y, p1.Y);
+                double maxY = Math.Max(p0.Y, p1.Y);
+
+                // Viewport buffer margin 450px world-space di sekeliling layar
+                double buffer = 450.0;
+                Rect visibleRect = new Rect(minX - buffer, minY - buffer, (maxX - minX) + (buffer * 2), (maxY - minY) + (buffer * 2));
+
+                for (int i = 0; i < _cards.Count; i++)
+                {
+                    var card = _cards[i];
+                    if (card.IsSelected || card.IsPlayingYouTube)
+                    {
+                        if (card.Container.Visibility != Visibility.Visible)
+                            card.Container.Visibility = Visibility.Visible;
+                        continue;
+                    }
+
+                    Rect cardRect = new Rect(card.X, card.Y, Math.Max(1, card.Width), Math.Max(1, card.Height));
+                    bool isVisible = visibleRect.IntersectsWith(cardRect);
+                    Visibility targetVis = isVisible ? Visibility.Visible : Visibility.Collapsed;
+
+                    if (card.Container.Visibility != targetVis)
+                    {
+                        card.Container.Visibility = targetVis;
+                    }
+                }
+            }
+            catch { }
+        }
+
+        #endregion
+
         private static string FormatGapText(double gap) => gap == 0 ? "Gap: No Gap" : $"Gap: {(int)gap}px";
 
         public MainWindow(string? initialFilePath = null)
@@ -588,7 +696,7 @@ namespace DropBoard.Native
 
         private void ScheduleAutoSave()
         {
-            if (_isRestoringSession) return;
+            if (_isRestoringSession || _isImportingBatch) return;
             if (!_settings.AutoSaveEnabled) return;
             _autoSaveTimer.Stop();
             _autoSaveTimer.Start();
@@ -636,6 +744,22 @@ namespace DropBoard.Native
         #endregion
 
         #region Infinite Canvas Navigation (Pan & Zoom)
+
+        private void CanvasContainer_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            // Middle-click or Space+Left-click: ALWAYS triggers Pan, even over text notes or other controls!
+            if (e.ChangedButton == MouseButton.Middle || 
+               (e.ChangedButton == MouseButton.Left && Keyboard.IsKeyDown(Key.Space)))
+            {
+                _isPanning = true;
+                _lastPanPoint = e.GetPosition(CanvasContainer);
+                SetWebViewHitTesting(false);
+                CanvasContainer.CaptureMouse();
+                Cursor = Cursors.Hand;
+                e.Handled = true;
+                return;
+            }
+        }
 
         private void CanvasContainer_MouseDown(object sender, MouseButtonEventArgs e)
         {
@@ -689,6 +813,14 @@ namespace DropBoard.Native
                 matrix.Translate(delta.X * panSens, delta.Y * panSens);
                 CanvasMatrixTransform.Matrix = matrix;
                 SyncActiveHwndPositions(updateSize: false);
+
+                _panDistanceAccumulator += delta.Length;
+                if (_cards.Count > 30 && _panDistanceAccumulator > 140)
+                {
+                    UpdateViewportCulling();
+                    _panDistanceAccumulator = 0;
+                }
+
                 e.Handled = true;
                 return;
             }
@@ -709,15 +841,27 @@ namespace DropBoard.Native
                 MarqueeSelectionBox.Width = w;
                 MarqueeSelectionBox.Height = h;
 
-                // Hit test cards in marquee box
+                // Hit test cards in marquee box with zero-lag batching
                 Rect marqueeRect = new Rect(x, y, w, h);
+                bool selectionChanged = false;
                 foreach (CardItem card in _cards)
                 {
                     Rect cardRect = new Rect(card.X, card.Y, card.Width, card.Height);
-                    if (marqueeRect.IntersectsWith(cardRect))
+                    bool inside = marqueeRect.IntersectsWith(cardRect);
+                    if (inside && !card.IsSelected)
                     {
-                        SelectCard(card, addToSelection: true);
+                        SelectCard(card, addToSelection: true, updateCounts: false);
+                        selectionChanged = true;
                     }
+                    else if (!inside && card.IsSelected && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
+                    {
+                        DeselectCard(card);
+                        selectionChanged = true;
+                    }
+                }
+                if (selectionChanged)
+                {
+                    UpdateStatusCounts();
                 }
                 e.Handled = true;
                 return;
@@ -808,10 +952,12 @@ namespace DropBoard.Native
             if (_isPanning)
             {
                 _isPanning = false;
+                _panDistanceAccumulator = 0;
                 SetWebViewHitTesting(true);
                 CanvasContainer.ReleaseMouseCapture();
                 Cursor = Cursors.Arrow;
                 SyncActiveHwndPositions(updateSize: false);
+                UpdateViewportCulling();
                 e.Handled = true;
                 stateChanged = true;
             }
@@ -850,6 +996,7 @@ namespace DropBoard.Native
                 _cardsInitialPositions.Clear();
                 CanvasContainer.ReleaseMouseCapture();
                 SyncActiveHwndPositions(updateSize: false);
+                UpdateViewportCulling();
                 e.Handled = true;
                 stateChanged = true;
             }
@@ -928,6 +1075,7 @@ namespace DropBoard.Native
             }
             CanvasMatrixTransform.Matrix = matrix;
             SyncActiveHwndPositions(updateSize: false);
+            UpdateViewportCulling();
             ScheduleAutoSave();
             e.Handled = true;
         }
@@ -952,6 +1100,7 @@ namespace DropBoard.Native
             TxtZoom.Text = $"Zoom: {zoomPercent}%";
 
             SyncActiveHwndPositions(updateSize: true);
+            UpdateViewportCulling();
 
             ScheduleAutoSave();
         }
@@ -984,7 +1133,8 @@ namespace DropBoard.Native
             double? cropBottom = null,
             bool isYouTube = false,
             string youTubeId = "",
-            string youTubeUrl = "")
+            string youTubeUrl = "",
+            bool recordUndo = true)
         {
             EmptyStateOverlay.Visibility = Visibility.Collapsed;
 
@@ -1057,7 +1207,7 @@ namespace DropBoard.Native
                 VerticalAlignment = VerticalAlignment.Stretch,
                 Stretch = isYouTube ? Stretch.UniformToFill : Stretch.Uniform
             };
-            RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+            RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.Linear);
 
             // Card solid background border with shadow (sharp rectangular)
             Border contentBorder = new Border
@@ -1069,14 +1219,7 @@ namespace DropBoard.Native
                 Padding = new Thickness(0),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
-                Effect = new DropShadowEffect
-                {
-                    BlurRadius = 25,
-                    ShadowDepth = 8,
-                    Direction = 270,
-                    Opacity = 0.65,
-                    Color = Colors.Black
-                },
+                Effect = _cards.Count > 30 ? null : CardActiveShadow,
                 Child = image
             };
 
@@ -1229,6 +1372,10 @@ namespace DropBoard.Native
                 {
                     Panel.SetZIndex(container, 500);
                 }
+                if (!item.IsSelected && contentBorder.Effect == null)
+                {
+                    contentBorder.Effect = CardActiveShadow;
+                }
                 hoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
                 hoverToolbar.Opacity = 1.0;
                 hoverToolbar.IsHitTestVisible = true;
@@ -1240,6 +1387,10 @@ namespace DropBoard.Native
                     if (Panel.GetZIndex(container) == 500)
                     {
                         Panel.SetZIndex(container, 10);
+                    }
+                    if (_cards.Count > 30)
+                    {
+                        contentBorder.Effect = null;
                     }
                 }
                 if (item.IsPlayingYouTube || item.IsSelected || _isCardSubMenuOpen || item.IsPaletteMode) return;
@@ -1352,7 +1503,7 @@ namespace DropBoard.Native
             item.X = pos.X;
             item.Y = pos.Y;
 
-            if (!_isRestoringSession && !_isApplyingSnapshot)
+            if (recordUndo && !_isRestoringSession && !_isApplyingSnapshot)
             {
                 RecordUndo("Add Card");
             }
@@ -1522,6 +1673,26 @@ namespace DropBoard.Native
             }
         }
 
+        private void ApplyNoteShadow(CardItem card)
+        {
+            if (card.NoteEditor == null) return;
+            if (card.NoteHasShadow)
+            {
+                card.NoteEditor.Effect = new DropShadowEffect
+                {
+                    Color = Colors.Black,
+                    BlurRadius = 8,
+                    ShadowDepth = 2,
+                    Direction = 315,
+                    Opacity = 0.95
+                };
+            }
+            else
+            {
+                card.NoteEditor.Effect = null;
+            }
+        }
+
         private CardItem AddNoteCard(
             string text = "Type your note here...",
             Point? worldPosition = null,
@@ -1532,6 +1703,7 @@ namespace DropBoard.Native
             string textColor = "#FFFFFF",
             string bgColor = "Transparent",
             TextAlignment alignment = TextAlignment.Left,
+            bool hasShadow = false,
             bool autoSelect = true)
         {
             EmptyStateOverlay.Visibility = Visibility.Collapsed;
@@ -1675,10 +1847,12 @@ namespace DropBoard.Native
                 NoteTextColor = textColor,
                 NoteBgColor = bgColor,
                 NoteAlignment = alignment,
+                NoteHasShadow = hasShadow,
                 NoteEditor = editor
             };
 
             ApplyNoteBackground(item, bgColor);
+            ApplyNoteShadow(item);
 
             editor.TextChanged += (s, e) =>
             {
@@ -2090,15 +2264,20 @@ namespace DropBoard.Native
             }
         }
 
-        private void SelectCard(CardItem card, bool addToSelection)
+        private void SelectCard(CardItem card, bool addToSelection, bool updateCounts = true)
         {
+            if (card.IsSelected && addToSelection) return;
+
             if (!addToSelection)
             {
                 DeselectAllCards();
             }
 
             card.IsSelected = true;
-            _selectedCards.Add(card);
+            if (!_selectedCards.Contains(card))
+            {
+                _selectedCards.Add(card);
+            }
 
             if (card.IsNote)
             {
@@ -2115,25 +2294,40 @@ namespace DropBoard.Native
                 card.ContentBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)); // Blue border
                 card.ContentBorder.BorderThickness = new Thickness(2);
                 card.ContentBorder.CornerRadius = new CornerRadius(0);
+                // Pasang GPU DropShadow hanya jika seleksi sedikit (<= 5) agar GPU DirectX tidak lag
+                card.ContentBorder.Effect = _selectedCards.Count <= 5 ? CardActiveShadow : null;
             }
 
-            // Reveal 4 corner handles
-            card.HandleTL.Visibility = Visibility.Visible;
-            card.HandleTR.Visibility = Visibility.Visible;
-            card.HandleBL.Visibility = Visibility.Visible;
-            card.HandleBR.Visibility = Visibility.Visible;
+            // Tampilkan 4 corner handles hanya jika seleksi tidak terlalu banyak (<= 15)
+            Visibility handleVis = _selectedCards.Count <= 15 ? Visibility.Visible : Visibility.Collapsed;
+            card.HandleTL.Visibility = handleVis;
+            card.HandleTR.Visibility = handleVis;
+            card.HandleBL.Visibility = handleVis;
+            card.HandleBR.Visibility = handleVis;
 
             _highestZ++;
             Panel.SetZIndex(card.Container, _highestZ + 1000);
 
             if (card.HoverToolbar != null)
             {
-                card.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
-                card.HoverToolbar.Opacity = 1.0;
-                card.HoverToolbar.IsHitTestVisible = true;
+                // Pada multi-selection masal, jangan tampilkan puluhan hover toolbar serentak
+                if (_selectedCards.Count <= 1)
+                {
+                    card.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
+                    card.HoverToolbar.Opacity = 1.0;
+                    card.HoverToolbar.IsHitTestVisible = true;
+                }
+                else
+                {
+                    card.HoverToolbar.Opacity = 0.0;
+                    card.HoverToolbar.IsHitTestVisible = false;
+                }
             }
 
-            UpdateStatusCounts();
+            if (updateCounts)
+            {
+                UpdateStatusCounts();
+            }
         }
 
         private void DeselectCard(CardItem card)
@@ -2156,6 +2350,10 @@ namespace DropBoard.Native
                 card.ContentBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
                 card.ContentBorder.BorderThickness = new Thickness(1);
                 card.ContentBorder.CornerRadius = new CornerRadius(0);
+                if (_cards.Count > 30)
+                {
+                    card.ContentBorder.Effect = null;
+                }
             }
 
             card.HandleTL.Visibility = Visibility.Collapsed;
@@ -2777,31 +2975,12 @@ namespace DropBoard.Native
             if (Clipboard.ContainsFileDropList())
             {
                 var files = Clipboard.GetFileDropList();
-                if (files != null)
+                if (files != null && files.Count > 0)
                 {
-                    int count = 0;
-                    foreach (string? file in files)
-                    {
-                        if (string.IsNullOrEmpty(file)) continue;
-                        string ext = System.IO.Path.GetExtension(file).ToLower();
-                        if (ext is ".jpg" or ".jpeg" or ".png" or ".webp" or ".bmp" or ".gif")
-                        {
-                            BitmapImage bmp = new BitmapImage();
-                            bmp.BeginInit();
-                            bmp.UriSource = new Uri(file, UriKind.Absolute);
-                            bmp.CacheOption = BitmapCacheOption.OnLoad;
-                            bmp.EndInit();
-                            bmp.Freeze();
-
-                            AddImageCard(bmp, localPath: file);
-                            count++;
-                        }
-                    }
-                    if (count > 0)
-                    {
-                        ShowToast($"Pasted {count} image file(s)", ToastType.Success);
-                        return;
-                    }
+                    var fileList = files.Cast<string>().ToList();
+                    Point pastePos = ScreenToWorld(new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2));
+                    ImportImageFilesBatch(fileList, pastePos);
+                    return;
                 }
             }
 
@@ -2845,6 +3024,114 @@ namespace DropBoard.Native
             e.Handled = true;
         }
 
+        private async void ImportImageFilesBatch(IEnumerable<string> filePaths, Point startWorldPos)
+        {
+            var filesList = filePaths
+                .Where(f => !string.IsNullOrEmpty(f) && File.Exists(f))
+                .Where(f =>
+                {
+                    string ext = System.IO.Path.GetExtension(f).ToLowerInvariant();
+                    return ext is ".jpg" or ".jpeg" or ".png" or ".webp" or ".bmp" or ".gif";
+                })
+                .ToList();
+
+            int total = filesList.Count;
+            if (total == 0) return;
+
+            _isImportingBatch = true;
+            try
+            {
+                bool showModal = total >= 6;
+                if (showModal)
+                {
+                    TxtImportProgressTitle.Text = $"Importing {total} Images...";
+                    TxtImportProgressStatus.Text = "Optimizing and preparing references...";
+                    TxtImportProgressPercent.Text = "0%";
+                    TxtImportProgressCount.Text = $"0 of {total} processed";
+                    ImportProgressBarFill.Width = 0;
+                    ImportProgressModalOverlay.Opacity = 1.0;
+                    ImportProgressModalOverlay.Visibility = Visibility.Visible;
+                }
+
+                Point curPos = startWorldPos;
+                int processed = 0;
+                int batchSize = 6;
+
+                for (int i = 0; i < total; i += batchSize)
+                {
+                    int currentBatchCount = Math.Min(batchSize, total - i);
+                    var batchSlice = filesList.GetRange(i, currentBatchCount);
+
+                    // Decode images completely off-thread to keep UI 100% fluid at 60 FPS
+                    var decodedList = await Task.Run(() =>
+                    {
+                        var list = new List<(BitmapImage Bmp, string Path)>();
+                        foreach (string file in batchSlice)
+                        {
+                            try
+                            {
+                                BitmapImage bi = new BitmapImage();
+                                bi.BeginInit();
+                                bi.UriSource = new Uri(file, UriKind.Absolute);
+                                bi.CacheOption = BitmapCacheOption.OnLoad;
+                                bi.DecodePixelWidth = 1000;
+                                bi.EndInit();
+                                bi.Freeze();
+                                list.Add((bi, file));
+                            }
+                            catch { }
+                        }
+                        return list;
+                    });
+
+                    // Attach to Canvas in UI thread without synchronous file I/O or multi-card undo cloning
+                    foreach (var item in decodedList)
+                    {
+                        AddImageCard(item.Bmp, curPos, localPath: item.Path, autoSelect: false, recordUndo: false);
+                        curPos.X += 30;
+                        curPos.Y += 30;
+                        processed++;
+                    }
+
+                    if (showModal)
+                    {
+                        double pct = (double)processed / total;
+                        ImportProgressBarFill.Width = Math.Clamp(332.0 * pct, 0, 332.0);
+                        TxtImportProgressPercent.Text = $"{(int)(pct * 100)}%";
+                        TxtImportProgressCount.Text = $"{processed} of {total} processed";
+                        if (decodedList.Count > 0)
+                        {
+                            TxtImportProgressStatus.Text = $"Loaded {System.IO.Path.GetFileName(decodedList[^1].Path)}";
+                        }
+                    }
+
+                    // Yield briefly to UI thread for smooth rendering and progress animation
+                    await Task.Delay(8);
+                }
+
+                RecordUndo($"Import {total} Images");
+                UpdateViewportCulling();
+                GC.Collect(2, GCCollectionMode.Forced, false);
+
+                if (showModal)
+                {
+                    DoubleAnimation fadeAnim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(220));
+                    fadeAnim.Completed += (s, e) =>
+                    {
+                        ImportProgressModalOverlay.Visibility = Visibility.Collapsed;
+                    };
+                    ImportProgressModalOverlay.BeginAnimation(UIElement.OpacityProperty, fadeAnim);
+                }
+
+                ShowToast($"Successfully imported {total} image{(total > 1 ? "s" : "")}!", ToastType.Success);
+            }
+            finally
+            {
+                _isImportingBatch = false;
+                ScheduleAutoSave();
+            }
+        }
+
         private void Window_Drop(object sender, DragEventArgs e)
         {
             Point dropScreenPos = e.GetPosition(CanvasContainer);
@@ -2853,6 +3140,7 @@ namespace DropBoard.Native
             if (e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
+                var imageFiles = new List<string>();
                 foreach (string file in files)
                 {
                     string ext = System.IO.Path.GetExtension(file).ToLower();
@@ -2862,24 +3150,13 @@ namespace DropBoard.Native
                     }
                     else if (ext is ".jpg" or ".jpeg" or ".png" or ".webp" or ".bmp" or ".gif")
                     {
-                        try
-                        {
-                            BitmapImage bmp = new BitmapImage();
-                            bmp.BeginInit();
-                            bmp.UriSource = new Uri(file, UriKind.Absolute);
-                            bmp.CacheOption = BitmapCacheOption.OnLoad;
-                            bmp.EndInit();
-                            bmp.Freeze();
-
-                            AddImageCard(bmp, worldPos, localPath: file);
-                            worldPos.X += 30;
-                            worldPos.Y += 30;
-                        }
-                        catch (Exception ex)
-                        {
-                            MessageBox.Show($"Could not load {System.IO.Path.GetFileName(file)}: {ex.Message}", "DropBoard", MessageBoxButton.OK, MessageBoxImage.Warning);
-                        }
+                        imageFiles.Add(file);
                     }
+                }
+
+                if (imageFiles.Count > 0)
+                {
+                    ImportImageFilesBatch(imageFiles, worldPos);
                 }
             }
             else if (e.Data.GetDataPresent(DataFormats.UnicodeText) || e.Data.GetDataPresent(DataFormats.Text))
@@ -2906,13 +3183,10 @@ namespace DropBoard.Native
                 Multiselect = true
             };
 
-            if (dlg.ShowDialog() == true)
+            if (dlg.ShowDialog() == true && dlg.FileNames.Length > 0)
             {
-                foreach (string filename in dlg.FileNames)
-                {
-                    BitmapImage bmp = new BitmapImage(new Uri(filename));
-                    AddImageCard(bmp, localPath: filename);
-                }
+                Point startPos = ScreenToWorld(new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2));
+                ImportImageFilesBatch(dlg.FileNames, startPos);
             }
         }
 
@@ -5139,6 +5413,7 @@ namespace DropBoard.Native
                     NoteTextColor = c.NoteTextColor,
                     NoteBgColor = c.NoteBgColor,
                     NoteAlignment = c.NoteAlignment,
+                    NoteHasShadow = c.NoteHasShadow,
                     IsPaletteCard = c.IsPaletteCard,
                     PaletteColorCount = c.PaletteColorCount,
                     PaletteMood = c.PaletteMood,
@@ -5260,6 +5535,7 @@ namespace DropBoard.Native
                             existingCard.NoteTextColor = cs.NoteTextColor;
                             existingCard.NoteBgColor = cs.NoteBgColor;
                             existingCard.NoteAlignment = cs.NoteAlignment;
+                            existingCard.NoteHasShadow = cs.NoteHasShadow;
                             if (existingCard.NoteEditor != null)
                             {
                                 existingCard.NoteEditor.Text = cs.NoteText;
@@ -5269,6 +5545,7 @@ namespace DropBoard.Native
                                 try { existingCard.NoteEditor.Foreground = (Brush)new BrushConverter().ConvertFromString(cs.NoteTextColor)!; } catch { }
                             }
                             ApplyNoteBackground(existingCard, cs.NoteBgColor);
+                            ApplyNoteShadow(existingCard);
                         }
                         else if (cs.Bitmap != null && existingCard.Bitmap != cs.Bitmap && !existingCard.IsPlayingYouTube)
                         {
@@ -5311,6 +5588,7 @@ namespace DropBoard.Native
                                 textColor: cs.NoteTextColor,
                                 bgColor: cs.NoteBgColor,
                                 alignment: cs.NoteAlignment,
+                                hasShadow: cs.NoteHasShadow,
                                 autoSelect: false);
                             newNote.Id = cs.Id;
                             newNote.GroupId = cs.GroupId;
@@ -6646,6 +6924,71 @@ namespace DropBoard.Native
                     });
                 };
 
+                // 5.5 Text Drop Shadow Toggle Button (SVG Icon)
+                var pShadow = new System.Windows.Shapes.Path
+                {
+                    Data = Geometry.Parse("M2 3h8v2H7v7H5V5H2V3zm5.5 5h6.5v1.8h-2.2v5.2H9.8v-5.2H7.5V8z"),
+                    SnapsToDevicePixels = true
+                };
+                Viewbox vbShadow = new Viewbox
+                {
+                    Width = 12,
+                    Height = 12,
+                    Child = pShadow,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                };
+                Border btnShadow = new Border
+                {
+                    Width = 22,
+                    Height = 20,
+                    CornerRadius = new CornerRadius(3),
+                    BorderThickness = new Thickness(1),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Toggle Text Drop Shadow (Contrast & Visibility on Any Canvas)",
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Child = vbShadow
+                };
+                item.BtnNoteShadow = btnShadow;
+
+                void RefreshShadowBtn()
+                {
+                    if (item.NoteHasShadow)
+                    {
+                        btnShadow.Background = new SolidColorBrush(Color.FromArgb(55, 56, 189, 248));
+                        btnShadow.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                        pShadow.Fill = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                    }
+                    else
+                    {
+                        btnShadow.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                        btnShadow.BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255));
+                        pShadow.Fill = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+                    }
+                }
+                RefreshShadowBtn();
+
+                btnShadow.MouseEnter += (s, e) =>
+                {
+                    if (!item.NoteHasShadow)
+                        btnShadow.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+                };
+                btnShadow.MouseLeave += (s, e) =>
+                {
+                    RefreshShadowBtn();
+                };
+                btnShadow.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnShadow.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    item.NoteHasShadow = !item.NoteHasShadow;
+                    ApplyNoteShadow(item);
+                    RefreshShadowBtn();
+                    ScheduleAutoSave();
+                    ShowToast(item.NoteHasShadow ? "Text drop shadow enabled" : "Text drop shadow disabled", ToastType.Info);
+                };
+
                 // 6. Overflow More Actions Button (•••)
                 Border btnMore = new Border
                 {
@@ -6680,6 +7023,7 @@ namespace DropBoard.Native
                 sp.Children.Add(CreateDivider());
                 sp.Children.Add(btnBgPicker);
                 sp.Children.Add(btnColor);
+                sp.Children.Add(btnShadow);
                 sp.Children.Add(CreateDivider());
                 sp.Children.Add(btnMore);
             }
@@ -8019,33 +8363,72 @@ namespace DropBoard.Native
                 }
             };
 
-            MenuItem miCopy = new MenuItem { Header = "Copy Note Text" };
-            miCopy.Click += (s, e) =>
+            MenuItem CreateIconMenuItem(string header, string svgPathData, Action onClick, Color? textColor = null, Color? iconColor = null)
             {
-                try
+                var mi = new MenuItem
                 {
-                    Clipboard.SetText(item.NoteText);
-                    ShowToast("Copied note text to clipboard", ToastType.Success);
-                }
-                catch (Exception ex)
+                    Header = header,
+                    Foreground = new SolidColorBrush(textColor ?? Color.FromRgb(241, 245, 249)),
+                    FontSize = 12
+                };
+
+                var p = new System.Windows.Shapes.Path
                 {
-                    ShowToast("Copy failed: " + ex.Message, ToastType.Error);
-                }
-            };
+                    Data = Geometry.Parse(svgPathData),
+                    Stroke = new SolidColorBrush(iconColor ?? textColor ?? Color.FromRgb(148, 163, 184)),
+                    StrokeThickness = 1.6,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    SnapsToDevicePixels = true
+                };
 
-            MenuItem miDup = new MenuItem { Header = "Duplicate Note" };
-            miDup.Click += (s, e) => DuplicateNoteCard(item);
+                var vb = new Viewbox
+                {
+                    Width = 14,
+                    Height = 14,
+                    Child = p,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                };
 
-            MenuItem miZoom = new MenuItem { Header = "Zoom to Note" };
-            miZoom.Click += (s, e) => ZoomToCard(item);
+                mi.Icon = vb;
+                mi.Click += (s, e) => onClick();
+                return mi;
+            }
 
-            MenuItem miDel = new MenuItem
-            {
-                Header = "Delete Note",
-                Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)),
-                FontWeight = FontWeights.SemiBold
-            };
-            miDel.Click += (s, e) => RemoveCard(item);
+            MenuItem miCopy = CreateIconMenuItem(
+                "Copy Note Text",
+                "M8 7v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H10a2 2 0 0 0-2 2z M4 17V5a2 2 0 0 1 2-2h12",
+                () =>
+                {
+                    try
+                    {
+                        Clipboard.SetText(item.NoteText);
+                        ShowToast("Copied note text to clipboard", ToastType.Success);
+                    }
+                    catch (Exception ex)
+                    {
+                        ShowToast("Copy failed: " + ex.Message, ToastType.Error);
+                    }
+                });
+
+            MenuItem miDup = CreateIconMenuItem(
+                "Duplicate Note",
+                "M15 2H6a2 2 0 0 0-2 2v12 M9 6h11a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z",
+                () => DuplicateNoteCard(item));
+
+            MenuItem miZoom = CreateIconMenuItem(
+                "Zoom to Note",
+                "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.35-4.35",
+                () => ZoomToCard(item));
+
+            MenuItem miDel = CreateIconMenuItem(
+                "Delete Note",
+                "M3 6h18 M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M10 11v6 M14 11v6",
+                () => RemoveCard(item),
+                textColor: Color.FromRgb(239, 68, 68),
+                iconColor: Color.FromRgb(239, 68, 68));
+            miDel.FontWeight = FontWeights.SemiBold;
 
             cm.Items.Add(miCopy);
             cm.Items.Add(miDup);
@@ -9168,6 +9551,7 @@ namespace DropBoard.Native
                 textColor: item.NoteTextColor,
                 bgColor: item.NoteBgColor,
                 alignment: item.NoteAlignment,
+                hasShadow: item.NoteHasShadow,
                 autoSelect: true);
             ScheduleAutoSave();
             ShowToast("Duplicated note", ToastType.Success);
@@ -11170,7 +11554,7 @@ namespace DropBoard.Native
 
         private void PerformAutoSave(bool isClosing = false)
         {
-            if (_isRestoringSession) return;
+            if (_isRestoringSession || _isImportingBatch) return;
 
             try
             {
@@ -11185,7 +11569,9 @@ namespace DropBoard.Native
                     width = c.Width,
                     height = c.Height,
                     localPath = c.LocalPath,
-                    imageData = c.IsNote ? "" : (string.IsNullOrEmpty(c.Base64Data) ? BitmapToBase64(c.OriginalBitmap ?? c.Bitmap) : c.Base64Data),
+                    imageData = c.IsNote || (!string.IsNullOrEmpty(c.LocalPath) && File.Exists(c.LocalPath))
+                        ? ""
+                        : (string.IsNullOrEmpty(c.Base64Data) ? (c.Base64Data = BitmapToBase64(c.OriginalBitmap ?? c.Bitmap)) : c.Base64Data),
                     isYouTube = c.IsYouTube,
                     youtubeId = c.YouTubeId,
                     youtubeUrl = c.YouTubeUrl,
@@ -11196,6 +11582,7 @@ namespace DropBoard.Native
                     noteTextColor = c.NoteTextColor,
                     noteBgColor = c.NoteBgColor,
                     noteAlignment = c.NoteAlignment.ToString(),
+                    noteHasShadow = c.NoteHasShadow,
                     isPaletteCard = c.IsPaletteCard,
                     paletteMood = c.PaletteMood.ToString(),
                     paletteColorCount = c.PaletteColorCount,
@@ -11386,6 +11773,7 @@ namespace DropBoard.Native
                             double noteFontSize = card.TryGetProperty("noteFontSize", out JsonElement nfsEl) ? nfsEl.GetDouble() : 16.0;
                             string noteTextColor = card.TryGetProperty("noteTextColor", out JsonElement ntcEl) ? (ntcEl.GetString() ?? "#FFFFFF") : "#FFFFFF";
                             string noteBgColor = card.TryGetProperty("noteBgColor", out JsonElement nbcEl) ? (nbcEl.GetString() ?? "Transparent") : "Transparent";
+                            bool noteHasShadow = card.TryGetProperty("noteHasShadow", out JsonElement nhsEl) && nhsEl.GetBoolean();
                             TextAlignment noteAlign = TextAlignment.Left;
                             if (card.TryGetProperty("noteAlignment", out JsonElement naEl))
                             {
@@ -11407,6 +11795,7 @@ namespace DropBoard.Native
                                 textColor: noteTextColor,
                                 bgColor: noteBgColor,
                                 alignment: noteAlign,
+                                hasShadow: noteHasShadow,
                                 autoSelect: false);
                             if (card.TryGetProperty("id", out JsonElement noteIdEl) && !string.IsNullOrEmpty(noteIdEl.GetString()))
                                 addedNote.Id = noteIdEl.GetString()!;
@@ -11470,13 +11859,7 @@ namespace DropBoard.Native
                         {
                             try
                             {
-                                BitmapImage bi = new BitmapImage();
-                                bi.BeginInit();
-                                bi.UriSource = new Uri(localPath, UriKind.Absolute);
-                                bi.CacheOption = BitmapCacheOption.OnLoad;
-                                bi.EndInit();
-                                bi.Freeze();
-                                bmp = bi;
+                                bmp = LoadOptimizedBitmap(localPath, maxDecodeWidth: 900);
                             }
                             catch { bmp = null; }
                         }
@@ -11490,13 +11873,7 @@ namespace DropBoard.Native
                                 string rawB64 = commaIndex >= 0 ? b64.Substring(commaIndex + 1) : b64;
                                 byte[] bytes = Convert.FromBase64String(rawB64);
                                 using MemoryStream ms = new MemoryStream(bytes);
-                                BitmapImage bi = new BitmapImage();
-                                bi.BeginInit();
-                                bi.StreamSource = ms;
-                                bi.CacheOption = BitmapCacheOption.OnLoad;
-                                bi.EndInit();
-                                bi.Freeze();
-                                bmp = bi;
+                                bmp = LoadOptimizedBitmapFromStream(ms, maxDecodeWidth: 900);
                             }
                             catch { bmp = null; }
                         }
@@ -11530,7 +11907,7 @@ namespace DropBoard.Native
                                 customWidth: w,
                                 customHeight: h,
                                 localPath: localPath,
-                                base64Data: b64,
+                                base64Data: (!string.IsNullOrEmpty(localPath) && File.Exists(localPath)) ? "" : b64,
                                 autoSelect: false,
                                 cropLeft: cropL,
                                 cropTop: cropT,
@@ -11538,7 +11915,8 @@ namespace DropBoard.Native
                                 cropBottom: cropB,
                                 isYouTube: isYt,
                                 youTubeId: ytId,
-                                youTubeUrl: ytUrl);
+                                youTubeUrl: ytUrl,
+                                recordUndo: false);
                             if (card.TryGetProperty("id", out JsonElement imgIdEl) && !string.IsNullOrEmpty(imgIdEl.GetString()))
                                 addedImg.Id = imgIdEl.GetString()!;
                             if (card.TryGetProperty("groupId", out JsonElement imgGidEl) && !string.IsNullOrEmpty(imgGidEl.GetString()))
@@ -11672,7 +12050,9 @@ namespace DropBoard.Native
                 }
 
                 UpdateStatusCounts();
+                UpdateViewportCulling();
                 EmptyStateOverlay.Visibility = _cards.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
+                GC.Collect(2, GCCollectionMode.Forced, false);
                 if (_cards.Count > 0)
                 {
                     ShowToast($"Restored: {_projectName}", ToastType.Success);
@@ -11907,7 +12287,7 @@ namespace DropBoard.Native
                                     {
                                         try
                                         {
-                                            BitmapImage bmp = new BitmapImage(new Uri(filePath));
+                                            BitmapImage bmp = LoadOptimizedBitmap(filePath, maxDecodeWidth: 1400);
                                             AddImageCard(bmp, localPath: filePath);
                                         }
                                         catch { }
