@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Threading.Channels;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -679,9 +680,9 @@ namespace DropBoard.Native
             });
             _httpServer.Start();
 
-            Loaded += (s, e) =>
+            Loaded += async (s, e) =>
             {
-                InitializeSession(initialFilePath);
+                await InitializeSessionAsync(initialFilePath);
                 UpdateResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width, ActualHeight > 0 ? ActualHeight : Height);
                 UpdateStorageStats();
                 SetupBrushModeSwatches();
@@ -12595,9 +12596,14 @@ namespace DropBoard.Native
 
         private void InitializeSession(string? initialFilePath)
         {
+            _ = InitializeSessionAsync(initialFilePath);
+        }
+
+        private async Task InitializeSessionAsync(string? initialFilePath)
+        {
             if (!string.IsNullOrEmpty(initialFilePath) && File.Exists(initialFilePath))
             {
-                LoadDropboardFile(initialFilePath, isSessionRestore: false);
+                await LoadDropboardFileAsync(initialFilePath, isSessionRestore: false);
                 return;
             }
 
@@ -12619,21 +12625,46 @@ namespace DropBoard.Native
 
             if (!string.IsNullOrEmpty(recentProj) && File.Exists(recentProj))
             {
-                LoadDropboardFile(recentProj, isSessionRestore: false);
+                await LoadDropboardFileAsync(recentProj, isSessionRestore: false);
             }
             else if (File.Exists(SessionFilePath))
             {
-                LoadDropboardFile(SessionFilePath, isSessionRestore: true);
+                await LoadDropboardFileAsync(SessionFilePath, isSessionRestore: true);
             }
         }
 
+        private class ImageCardDescriptor
+        {
+            public string Id { get; set; } = "";
+            public string GroupId { get; set; } = "";
+            public string LocalPath { get; set; } = "";
+            public string Base64Data { get; set; } = "";
+            public BitmapSource? Bitmap { get; set; }
+            public double X { get; set; }
+            public double Y { get; set; }
+            public double? Width { get; set; }
+            public double? Height { get; set; }
+            public double? CropL { get; set; }
+            public double? CropT { get; set; }
+            public double? CropR { get; set; }
+            public double? CropB { get; set; }
+            public bool IsYouTube { get; set; }
+            public string YouTubeId { get; set; } = "";
+            public string YouTubeUrl { get; set; } = "";
+        }
+
         private void LoadDropboardFile(string filePath, bool isSessionRestore = false)
+        {
+            _ = LoadDropboardFileAsync(filePath, isSessionRestore);
+        }
+
+        private async Task LoadDropboardFileAsync(string filePath, bool isSessionRestore = false)
         {
             if (!File.Exists(filePath)) return;
 
             try
             {
-                string json = File.ReadAllText(filePath);
+                string json = await File.ReadAllTextAsync(filePath);
                 using JsonDocument doc = JsonDocument.Parse(json);
                 JsonElement root = doc.RootElement;
 
@@ -12642,7 +12673,7 @@ namespace DropBoard.Native
                 // Clear current canvas items
                 ClearCanvasItems();
 
-                // Restore camera zoom & pan
+                // Restore camera zoom & pan immediately for instant response
                 bool hasSavedCamera = false;
                 if (root.TryGetProperty("zoom", out JsonElement zEl) &&
                     root.TryGetProperty("panX", out JsonElement pxEl) &&
@@ -12666,6 +12697,8 @@ namespace DropBoard.Native
                     _currentGap = gapEl.GetDouble();
                     TxtGap.Text = FormatGapText(_currentGap);
                 }
+
+                List<ImageCardDescriptor> imageCardsToLoad = new List<ImageCardDescriptor>();
 
                 if (root.TryGetProperty("cards", out JsonElement cards) && cards.ValueKind == JsonValueKind.Array)
                 {
@@ -12785,79 +12818,52 @@ namespace DropBoard.Native
                         else if (card.TryGetProperty("src", out JsonElement srcEl))
                             b64 = srcEl.GetString() ?? "";
 
-                        BitmapSource? bmp = null;
+                        double imgX = card.TryGetProperty("x", out JsonElement ixEl) ? ixEl.GetDouble() : 0;
+                        double imgY = card.TryGetProperty("y", out JsonElement iyEl) ? iyEl.GetDouble() : 0;
+                        double? imgW = card.TryGetProperty("width", out JsonElement iwEl) ? iwEl.GetDouble() : null;
+                        double? imgH = card.TryGetProperty("height", out JsonElement ihEl) ? ihEl.GetDouble() : null;
 
-                        // 1. Try loading directly from localPath
-                        if (!string.IsNullOrEmpty(localPath) && File.Exists(localPath))
+                        double? cropL = null, cropT = null, cropR = null, cropB = null;
+                        if (card.TryGetProperty("crop", out JsonElement cropEl))
                         {
-                            try
-                            {
-                                bmp = LoadOptimizedBitmap(localPath, maxDecodeWidth: 900);
-                            }
-                            catch { bmp = null; }
+                            if (cropEl.TryGetProperty("left", out JsonElement cl)) cropL = cl.GetDouble();
+                            if (cropEl.TryGetProperty("top", out JsonElement ct)) cropT = ct.GetDouble();
+                            if (cropEl.TryGetProperty("right", out JsonElement cr)) cropR = cr.GetDouble();
+                            if (cropEl.TryGetProperty("bottom", out JsonElement cb)) cropB = cb.GetDouble();
                         }
 
-                        // 2. Fallback to base64
-                        if (bmp == null && !string.IsNullOrEmpty(b64))
+                        bool isYt = false;
+                        string ytId = "";
+                        string ytUrl = "";
+                        if (card.TryGetProperty("isYouTube", out JsonElement ytEl)) isYt = ytEl.GetBoolean();
+                        if (card.TryGetProperty("youtubeId", out JsonElement ytidEl)) ytId = ytidEl.GetString() ?? "";
+                        if (card.TryGetProperty("youtubeUrl", out JsonElement yturlEl)) ytUrl = yturlEl.GetString() ?? "";
+
+                        string cardId = card.TryGetProperty("id", out JsonElement imgIdEl) ? (imgIdEl.GetString() ?? "") : "";
+                        string groupId = card.TryGetProperty("groupId", out JsonElement imgGidEl) ? (imgGidEl.GetString() ?? "") : "";
+
+                        imageCardsToLoad.Add(new ImageCardDescriptor
                         {
-                            try
-                            {
-                                int commaIndex = b64.IndexOf(",");
-                                string rawB64 = commaIndex >= 0 ? b64.Substring(commaIndex + 1) : b64;
-                                byte[] bytes = Convert.FromBase64String(rawB64);
-                                using MemoryStream ms = new MemoryStream(bytes);
-                                bmp = LoadOptimizedBitmapFromStream(ms, maxDecodeWidth: 900);
-                            }
-                            catch { bmp = null; }
-                        }
-
-                        if (bmp != null)
-                        {
-                            double x = card.TryGetProperty("x", out JsonElement xEl) ? xEl.GetDouble() : 0;
-                            double y = card.TryGetProperty("y", out JsonElement yEl) ? yEl.GetDouble() : 0;
-                            double? w = card.TryGetProperty("width", out JsonElement wEl) ? wEl.GetDouble() : null;
-                            double? h = card.TryGetProperty("height", out JsonElement hEl) ? hEl.GetDouble() : null;
-
-                            double? cropL = null, cropT = null, cropR = null, cropB = null;
-                            if (card.TryGetProperty("crop", out JsonElement cropEl))
-                            {
-                                if (cropEl.TryGetProperty("left", out JsonElement cl)) cropL = cl.GetDouble();
-                                if (cropEl.TryGetProperty("top", out JsonElement ct)) cropT = ct.GetDouble();
-                                if (cropEl.TryGetProperty("right", out JsonElement cr)) cropR = cr.GetDouble();
-                                if (cropEl.TryGetProperty("bottom", out JsonElement cb)) cropB = cb.GetDouble();
-                            }
-
-                            bool isYt = false;
-                            string ytId = "";
-                            string ytUrl = "";
-                            if (card.TryGetProperty("isYouTube", out JsonElement ytEl)) isYt = ytEl.GetBoolean();
-                            if (card.TryGetProperty("youtubeId", out JsonElement ytidEl)) ytId = ytidEl.GetString() ?? "";
-                            if (card.TryGetProperty("youtubeUrl", out JsonElement yturlEl)) ytUrl = yturlEl.GetString() ?? "";
-
-                            var addedImg = AddImageCard(
-                                bmp,
-                                new Point(x, y),
-                                customWidth: w,
-                                customHeight: h,
-                                localPath: localPath,
-                                base64Data: (!string.IsNullOrEmpty(localPath) && File.Exists(localPath)) ? "" : b64,
-                                autoSelect: false,
-                                cropLeft: cropL,
-                                cropTop: cropT,
-                                cropRight: cropR,
-                                cropBottom: cropB,
-                                isYouTube: isYt,
-                                youTubeId: ytId,
-                                youTubeUrl: ytUrl,
-                                recordUndo: false);
-                            if (card.TryGetProperty("id", out JsonElement imgIdEl) && !string.IsNullOrEmpty(imgIdEl.GetString()))
-                                addedImg.Id = imgIdEl.GetString()!;
-                            if (card.TryGetProperty("groupId", out JsonElement imgGidEl) && !string.IsNullOrEmpty(imgGidEl.GetString()))
-                                addedImg.GroupId = imgGidEl.GetString()!;
-                        }
+                            Id = cardId,
+                            GroupId = groupId,
+                            LocalPath = localPath,
+                            Base64Data = b64,
+                            X = imgX,
+                            Y = imgY,
+                            Width = imgW,
+                            Height = imgH,
+                            CropL = cropL,
+                            CropT = cropT,
+                            CropR = cropR,
+                            CropB = cropB,
+                            IsYouTube = isYt,
+                            YouTubeId = ytId,
+                            YouTubeUrl = ytUrl
+                        });
                     }
                 }
 
+                // Scene groups can be restored immediately
                 if (root.TryGetProperty("groups", out JsonElement groupsEl) && groupsEl.ValueKind == JsonValueKind.Array)
                 {
                     foreach (JsonElement gEl in groupsEl.EnumerateArray())
@@ -12883,6 +12889,120 @@ namespace DropBoard.Native
                             recordUndo: false);
                     }
                     UpdateGroupCounts();
+                }
+
+                // Multi-threaded background decode + True live pipelined streaming to Canvas
+                if (imageCardsToLoad.Count > 0)
+                {
+                    StartupLoadingOverlay.Opacity = 1.0;
+                    StartupLoadingOverlay.Visibility = Visibility.Visible;
+                    StartupProgressBar.Value = 0;
+                    int totalImages = imageCardsToLoad.Count;
+                    TxtStartupLoading.Text = $"Loading references: 0 / {totalImages} (0%)";
+                    await Task.Yield();
+
+                    var channel = Channel.CreateUnbounded<ImageCardDescriptor>(new UnboundedChannelOptions
+                    {
+                        SingleWriter = false,
+                        SingleReader = true
+                    });
+
+                    // Producer: Decode images across all CPU cores in parallel and stream immediately
+                    var producerTask = Task.Run(() =>
+                    {
+                        try
+                        {
+                            Parallel.ForEach(imageCardsToLoad, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(2, Environment.ProcessorCount) }, desc =>
+                            {
+                                BitmapSource? bmp = null;
+                                if (!string.IsNullOrEmpty(desc.LocalPath) && File.Exists(desc.LocalPath))
+                                {
+                                    try { bmp = LoadOptimizedBitmap(desc.LocalPath, maxDecodeWidth: 900); }
+                                    catch { bmp = null; }
+                                }
+
+                                if (bmp == null && !string.IsNullOrEmpty(desc.Base64Data))
+                                {
+                                    try
+                                    {
+                                        int commaIndex = desc.Base64Data.IndexOf(",");
+                                        string rawB64 = commaIndex >= 0 ? desc.Base64Data.Substring(commaIndex + 1) : desc.Base64Data;
+                                        byte[] bytes = Convert.FromBase64String(rawB64);
+                                        using MemoryStream ms = new MemoryStream(bytes);
+                                        bmp = LoadOptimizedBitmapFromStream(ms, maxDecodeWidth: 900);
+                                    }
+                                    catch { bmp = null; }
+                                }
+
+                                desc.Bitmap = bmp;
+                                channel.Writer.TryWrite(desc);
+                            });
+                        }
+                        finally
+                        {
+                            channel.Writer.Complete();
+                        }
+                    });
+
+                    // Consumer: As each image finishes decoding, immediately add to Canvas and update live progress!
+                    int loadedImages = 0;
+                    while (await channel.Reader.WaitToReadAsync())
+                    {
+                        while (channel.Reader.TryRead(out var desc))
+                        {
+                            if (desc.Bitmap != null)
+                            {
+                                var addedImg = AddImageCard(
+                                    desc.Bitmap,
+                                    new Point(desc.X, desc.Y),
+                                    customWidth: desc.Width,
+                                    customHeight: desc.Height,
+                                    localPath: desc.LocalPath,
+                                    base64Data: (!string.IsNullOrEmpty(desc.LocalPath) && File.Exists(desc.LocalPath)) ? "" : desc.Base64Data,
+                                    autoSelect: false,
+                                    cropLeft: desc.CropL,
+                                    cropTop: desc.CropT,
+                                    cropRight: desc.CropR,
+                                    cropBottom: desc.CropB,
+                                    isYouTube: desc.IsYouTube,
+                                    youTubeId: desc.YouTubeId,
+                                    youTubeUrl: desc.YouTubeUrl,
+                                    recordUndo: false);
+
+                                if (!string.IsNullOrEmpty(desc.Id))
+                                    addedImg.Id = desc.Id;
+                                if (!string.IsNullOrEmpty(desc.GroupId))
+                                    addedImg.GroupId = desc.GroupId;
+                            }
+
+                            loadedImages++;
+                            double pct = (double)loadedImages / totalImages * 100.0;
+                            StartupProgressBar.Value = pct;
+                            TxtStartupLoading.Text = $"Loading references: {loadedImages} / {totalImages} ({(int)pct}%)";
+
+                            // Yield every 2 images or on final item so WPF dispatcher updates the progress bar and canvas smoothly
+                            if (loadedImages % 2 == 0 || loadedImages == totalImages)
+                            {
+                                await Task.Yield();
+                            }
+                        }
+                    }
+
+                    await producerTask;
+
+                    // Brief visual finish state (180ms) so user can see it reached 100%
+                    StartupProgressBar.Value = 100;
+                    TxtStartupLoading.Text = $"Loaded {totalImages} references (100%)";
+                    await Task.Delay(180);
+
+                    // Smoothly fade out the startup loading pill
+                    DoubleAnimation fadeOut = new DoubleAnimation(1.0, 0.0, TimeSpan.FromMilliseconds(250));
+                    fadeOut.Completed += (s, e) =>
+                    {
+                        StartupLoadingOverlay.Visibility = Visibility.Collapsed;
+                        StartupLoadingOverlay.Opacity = 1.0;
+                    };
+                    StartupLoadingOverlay.BeginAnimation(UIElement.OpacityProperty, fadeOut);
                 }
 
                 // Re-link palette cards to their source image cards after loading
@@ -12944,7 +13064,7 @@ namespace DropBoard.Native
                 // If no camera was stored (like legacy .dropboard files) or camera points to empty space, Auto-Fit all cards!
                 if (_cards.Count > 0 && (!hasSavedCamera || !cardsInView))
                 {
-                    Dispatcher.BeginInvoke(new Action(() =>
+                    _ = Dispatcher.BeginInvoke(new Action(() =>
                     {
                         ZoomToFitAllCards(animated: false);
                     }), System.Windows.Threading.DispatcherPriority.Loaded);
@@ -13001,6 +13121,10 @@ namespace DropBoard.Native
             finally
             {
                 _isRestoringSession = false;
+                if (StartupLoadingOverlay.Visibility != Visibility.Collapsed)
+                {
+                    StartupLoadingOverlay.Visibility = Visibility.Collapsed;
+                }
             }
         }
 

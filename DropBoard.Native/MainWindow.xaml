@@ -774,25 +774,57 @@
             </StackPanel>
         </Border>
 
+        <!-- Smooth Asynchronous Startup Loading Pill -->
+        <Border x:Name="StartupLoadingOverlay"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,54"
+                Height="32" CornerRadius="16" Padding="14,0"
+                Panel.ZIndex="120"
+                SnapsToDevicePixels="True" UseLayoutRounding="True"
+                Background="#F011141C" BorderBrush="#38BDF8" BorderThickness="1"
+                Visibility="Collapsed" IsHitTestVisible="False">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.5" Color="#000000"/>
+            </Border.Effect>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Border Width="6" Height="6" CornerRadius="3" Background="#38BDF8" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                <TextBlock x:Name="TxtStartupLoading" Text="Loading references: 0 / 0..." FontSize="11" FontWeight="SemiBold" Foreground="#FFFFFF" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                <ProgressBar x:Name="StartupProgressBar" Width="76" Height="4" Minimum="0" Maximum="100" Value="0"
+                             Background="#2BFFFFFF" Foreground="#38BDF8" BorderThickness="0" VerticalAlignment="Center">
+                    <ProgressBar.Template>
+                        <ControlTemplate TargetType="ProgressBar">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="2" ClipToBounds="True">
+                                <Grid x:Name="PART_Track">
+                                    <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left" CornerRadius="2"/>
+                                </Grid>
+                            </Border>
+                        </ControlTemplate>
+                    </ProgressBar.Template>
+                </ProgressBar>
+            </StackPanel>
+        </Border>
+
         <!-- Bottom Canvas Status Pill -->
         <Border HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,16"
-                Background="#D912151D" BorderBrush="#1FFFFFFF" BorderThickness="1"
-                CornerRadius="20" Padding="14,5">
+                Height="32" CornerRadius="16" Padding="14,0"
+                Panel.ZIndex="110"
+                SnapsToDevicePixels="True" UseLayoutRounding="True"
+                Background="#D912151D" BorderBrush="#1FFFFFFF" BorderThickness="1">
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <StackPanel Orientation="Horizontal" Cursor="Hand" ToolTip="Click to Fit All in View (or press F / Home)" MouseLeftButtonDown="BtnFitAll_Click">
-                    <TextBlock x:Name="TxtZoom" Text="Zoom: 100%" FontSize="11" FontWeight="SemiBold" Foreground="#FFFFFF" Margin="0,0,12,0"/>
-                    <TextBlock x:Name="TxtRefCount" Text="0 References" FontSize="11" Foreground="#9CA3AF" Margin="0,0,12,0"/>
-                    <TextBlock x:Name="TxtSelectionCount" Text="0 Selected" Foreground="#38BDF8"/>
+                <StackPanel Orientation="Horizontal" Cursor="Hand" ToolTip="Click to Fit All in View (or press F / Home)" MouseLeftButtonDown="BtnFitAll_Click" VerticalAlignment="Center">
+                    <TextBlock x:Name="TxtZoom" Text="Zoom: 100%" FontSize="11" FontWeight="SemiBold" Foreground="#FFFFFF" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TxtRefCount" Text="0 References" FontSize="11" Foreground="#9CA3AF" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TxtSelectionCount" Text="0 Selected" FontSize="11" Foreground="#38BDF8" VerticalAlignment="Center"/>
                 </StackPanel>
 
                 <!-- Divider -->
-                <Border Width="1" Height="12" Background="#30FFFFFF" Margin="12,0,10,0"/>
+                <Border Width="1" Height="12" Background="#30FFFFFF" Margin="12,0,10,0" VerticalAlignment="Center"/>
 
                 <!-- Live Cache Size Indicator & Clean Button with Vector SVG Trash Icon -->
                 <Border Cursor="Hand" ToolTip="Click to clean image cache storage" MouseLeftButtonDown="BtnCanvasQuickCleanCache_Click"
-                        Background="#1A38BDF8" BorderBrush="#3538BDF8" BorderThickness="1" CornerRadius="10" Padding="7,2">
+                        Height="22" CornerRadius="11" Padding="8,0" VerticalAlignment="Center"
+                        Background="#1A38BDF8" BorderBrush="#3538BDF8" BorderThickness="1">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Viewbox Width="10.5" Height="10.5" Margin="0,0,4,0">
+                        <Viewbox Width="10.5" Height="10.5" Margin="0,0,5,0" VerticalAlignment="Center">
                             <Canvas Width="24" Height="24">
                                 <Polyline Points="3,6 5,6 21,6" Stroke="#38BDF8" StrokeThickness="2" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="Transparent"/>
                                 <Path Data="M 19,6 L 19,20 A 2,2 0 0 1 17,22 L 7,22 A 2,2 0 0 1 5,20 L 5,6 M 8,6 L 8,4 A 2,2 0 0 1 10,2 L 14,2 A 2,2 0 0 1 16,4 L 16,6"
