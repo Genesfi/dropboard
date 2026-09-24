@@ -115,6 +115,7 @@ namespace DropBoard.Native
         public bool IsYouTube { get; set; } = false;
         public string YouTubeId { get; set; } = "";
         public string YouTubeUrl { get; set; } = "";
+        public double LastPlaybackSeconds { get; set; } = 0;
         public bool IsNote { get; set; } = false;
         public string NoteText { get; set; } = "";
         public string NoteFontFamily { get; set; } = "Segoe UI";
@@ -165,6 +166,7 @@ namespace DropBoard.Native
         public bool IsYouTube { get; set; } = false;
         public string YouTubeId { get; set; } = "";
         public string YouTubeUrl { get; set; } = "";
+        public double LastPlaybackSeconds { get; set; } = 0;
         public bool IsPlayingYouTube { get; set; } = false;
         public MediaElement? NativePlayer { get; set; } = null;
         public Microsoft.Web.WebView2.Wpf.WebView2? PlayerControl { get; set; } = null;
@@ -401,6 +403,7 @@ namespace DropBoard.Native
         private bool _isDockRevealed = true;
         private string _dockPosition = "top";
         private EventHandler? _activeZoomAnimation = null;
+        private DispatcherTimer? _dockTrackingTimer = null;
         private int _gridArrangeCount = 0;
         private int _pipelineArrangeCount = 0;
         private readonly Dictionary<string, TaskCompletionSource<string>> _pendingCleanFrameRequests = new();
@@ -418,10 +421,27 @@ namespace DropBoard.Native
 
         private void SyncActiveHwndPositions(bool updateSize = false)
         {
+            // Fast exit if no WebView2 video player is currently active
+            bool hasActivePlayer = false;
+            for (int i = 0; i < _cards.Count; i++)
+            {
+                var pc = _cards[i].PlayerControl;
+                if (pc != null && pc.IsVisible)
+                {
+                    hasActivePlayer = true;
+                    break;
+                }
+            }
+            if (!hasActivePlayer) return;
+
             PresentationSource? source = PresentationSource.FromVisual(this);
             if (source?.CompositionTarget == null) return;
 
             Matrix dpiMatrix = source.CompositionTarget.TransformToDevice;
+            Matrix canvasMatrix = CanvasMatrixTransform.Matrix;
+
+            // Direct analytical computation: 0 visual-tree delay, 0-frame lag!
+            Point containerOrigin = CanvasContainer.TranslatePoint(new Point(0, 0), this);
 
             for (int i = 0; i < _cards.Count; i++)
             {
@@ -433,14 +453,19 @@ namespace DropBoard.Native
                         IntPtr handle = card.PlayerControl.Handle;
                         if (handle != IntPtr.Zero)
                         {
-                            GeneralTransform transform = card.Container.TransformToAncestor(this);
-                            Point topLeftDip = transform.Transform(new Point(0, 0));
-                            Point bottomRightDip = transform.Transform(new Point(card.Width, card.Height));
+                            // Transform world card bounds directly through canvas matrix in zero time
+                            Point topLeftCanvas = canvasMatrix.Transform(new Point(card.X, card.Y));
+                            Point bottomRightCanvas = canvasMatrix.Transform(new Point(card.X + card.Width, card.Y + card.Height));
 
-                            int pixelX = (int)Math.Round(topLeftDip.X * dpiMatrix.M11);
-                            int pixelY = (int)Math.Round(topLeftDip.Y * dpiMatrix.M22);
-                            int pixelW = Math.Max(1, (int)Math.Round((bottomRightDip.X - topLeftDip.X) * dpiMatrix.M11));
-                            int pixelH = Math.Max(1, (int)Math.Round((bottomRightDip.Y - topLeftDip.Y) * dpiMatrix.M22));
+                            double topLeftDipX = topLeftCanvas.X + containerOrigin.X;
+                            double topLeftDipY = topLeftCanvas.Y + containerOrigin.Y;
+                            double bottomRightDipX = bottomRightCanvas.X + containerOrigin.X;
+                            double bottomRightDipY = bottomRightCanvas.Y + containerOrigin.Y;
+
+                            int pixelX = (int)Math.Round(topLeftDipX * dpiMatrix.M11);
+                            int pixelY = (int)Math.Round(topLeftDipY * dpiMatrix.M22);
+                            int pixelW = Math.Max(1, (int)Math.Round((bottomRightDipX - topLeftDipX) * dpiMatrix.M11));
+                            int pixelH = Math.Max(1, (int)Math.Round((bottomRightDipY - topLeftDipY) * dpiMatrix.M22));
 
                             bool posChanged = (pixelX != card.LastPixelX || pixelY != card.LastPixelY);
                             bool sizeChanged = updateSize || (pixelW != card.LastPixelW || pixelH != card.LastPixelH);
@@ -506,6 +531,17 @@ namespace DropBoard.Native
                 {
                     BtnAddNote_Click(sender, e);
                     e.Handled = true;
+                }
+            }
+            else if ((e.Key == Key.Delete || e.Key == Key.Back) && Keyboard.Modifiers == ModifierKeys.None && !_isPanning && !_isDraggingCards && !_isResizingCard && !_isCropping)
+            {
+                if (!(FocusManager.GetFocusedElement(this) is TextBox))
+                {
+                    if (_selectedCards.Count > 0 || _selectedGroups.Count > 0)
+                    {
+                        DeleteSelectedCards();
+                        e.Handled = true;
+                    }
                 }
             }
         }
@@ -647,6 +683,13 @@ namespace DropBoard.Native
             ApplyDockLayout();
             UpdateDockAutoHideUI();
             ApplyTransparentTitlebar(_settings.TransparentTitlebar);
+
+            _dockTrackingTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(45)
+            };
+            _dockTrackingTimer.Tick += DockTrackingTimer_Tick;
+            _dockTrackingTimer.Start();
 
             if (_settings.WindowWidth >= 400 && _settings.WindowHeight >= 300)
             {
@@ -2707,6 +2750,7 @@ namespace DropBoard.Native
             {
                 DeselectCard(card);
             }
+            DeselectAllGroups();
         }
 
         private void UpdateStatusCounts()
@@ -3124,27 +3168,53 @@ namespace DropBoard.Native
 
         private void DeleteSelectedCards()
         {
-            if (_selectedCards.Count == 0) return;
+            if (_selectedCards.Count == 0 && _selectedGroups.Count == 0) return;
 
-            RecordUndo("Delete Cards");
+            RecordUndo("Delete Selected");
 
-            int count = _selectedCards.Count;
-            foreach (CardItem card in _selectedCards.ToList())
+            int cardCount = _selectedCards.Count;
+            if (cardCount > 0)
             {
-                CleanupCard(card);
-                WorldCanvas.Children.Remove(card.Container);
-                _cards.Remove(card);
+                foreach (CardItem card in _selectedCards.ToList())
+                {
+                    CleanupCard(card);
+                    WorldCanvas.Children.Remove(card.Container);
+                    _cards.Remove(card);
+                }
+                _selectedCards.Clear();
             }
-            _selectedCards.Clear();
+
+            int groupCount = _selectedGroups.Count;
+            if (groupCount > 0)
+            {
+                foreach (GroupItem group in _selectedGroups.ToList())
+                {
+                    // Dissolve group affiliation for member cards without deleting the cards themselves
+                    foreach (var card in _cards.Where(c => c.GroupId == group.Id))
+                    {
+                        card.GroupId = null;
+                    }
+                    WorldCanvas.Children.Remove(group.Container);
+                    _groups.Remove(group);
+                }
+                _selectedGroups.Clear();
+                UpdateGroupCounts();
+            }
 
             UpdateStatusCounts();
+            UpdateStorageStats();
             if (_cards.Count == 0)
             {
                 EmptyStateOverlay.Visibility = Visibility.Visible;
             }
 
             ScheduleAutoSave();
-            ShowToast($"Deleted {count} reference(s)", ToastType.Info);
+            if (groupCount > 0 && cardCount > 0)
+                ShowToast($"Deleted {cardCount} reference(s) and {groupCount} group(s)", ToastType.Info);
+            else if (groupCount > 0)
+                ShowToast($"Deleted {groupCount} group(s)", ToastType.Info);
+            else
+                ShowToast($"Deleted {cardCount} reference(s)", ToastType.Info);
         }
 
         private void BringSelectedToFront()
@@ -3255,8 +3325,11 @@ namespace DropBoard.Native
             // Delete / Backspace
             else if (e.Key == Key.Delete || e.Key == Key.Back)
             {
-                DeleteSelectedCards();
-                e.Handled = true;
+                if (!(FocusManager.GetFocusedElement(this) is TextBox))
+                {
+                    DeleteSelectedCards();
+                    e.Handled = true;
+                }
             }
             // Fit All in View (Home / F key)
             else if (e.Key == Key.Home || (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.None))
@@ -3989,6 +4062,56 @@ namespace DropBoard.Native
             }
         }
 
+        private void DockTrackingTimer_Tick(object? sender, EventArgs e)
+        {
+            if (!_isDockAutoHide) return;
+            if (!IsVisible || WindowState == WindowState.Minimized) return;
+            if (_isPanning || _isMarqueeSelecting || _isDraggingCards || _isResizingCard || _isCropping) return;
+
+            if (!GetCursorPos(out POINT screenPt)) return;
+
+            try
+            {
+                Point clientPt = PointFromScreen(new Point(screenPt.X, screenPt.Y));
+
+                // Check if cursor has exited the window bounds
+                if (clientPt.X < -15 || clientPt.X > ActualWidth + 15 || clientPt.Y < -15 || clientPt.Y > ActualHeight + 15)
+                {
+                    if (_isDockRevealed && !FloatingDock.IsMouseOver)
+                    {
+                        HideDock();
+                    }
+                    return;
+                }
+
+                if (_dockPosition == "left")
+                {
+                    double dockW = FloatingDock.ActualWidth > 0 ? FloatingDock.ActualWidth : 44;
+                    if ((clientPt.X <= (dockW + 15) && clientPt.Y > 40) || FloatingDock.IsMouseOver)
+                    {
+                        RevealDock();
+                    }
+                    else if ((clientPt.X > (dockW + 70) || clientPt.Y <= 40) && !FloatingDock.IsMouseOver)
+                    {
+                        HideDock();
+                    }
+                }
+                else // top
+                {
+                    // Hover zone is anywhere in top area (clientPt.Y <= 105) or over the dock itself
+                    if (FloatingDock.IsMouseOver || clientPt.Y <= 105)
+                    {
+                        RevealDock();
+                    }
+                    else if (clientPt.Y > 125 && !FloatingDock.IsMouseOver)
+                    {
+                        HideDock();
+                    }
+                }
+            }
+            catch { }
+        }
+
         private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
         {
             UpdateResponsiveLayout(e.NewSize.Width, e.NewSize.Height);
@@ -4433,7 +4556,8 @@ namespace DropBoard.Native
             {
                 Width = width,
                 Height = height,
-                Cursor = Cursors.SizeAll
+                Cursor = Cursors.SizeAll,
+                ClipToBounds = false
             };
             Canvas.SetLeft(container, x);
             Canvas.SetTop(container, y);
@@ -4486,10 +4610,31 @@ namespace DropBoard.Native
             AttachGroupResizeHandleEvents(item, handleBL, ResizeCorner.BottomLeft);
             AttachGroupResizeHandleEvents(item, handleBR, ResizeCorner.BottomRight);
 
-            // 4. Floating Hover Toolbar on top of group (like Note Card hover toolbar!)
+            // 4. Floating Hover Toolbar on top of group (zero-size Canvas host avoids clipping when group is narrow/resized)
             Border hoverToolbar = CreateGroupHoverToolbar(item);
-            container.Children.Add(hoverToolbar);
             item.HoverToolbar = hoverToolbar;
+
+            Canvas toolbarHost = new Canvas
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                Width = 0,
+                Height = 0,
+                ClipToBounds = false
+            };
+            Panel.SetZIndex(toolbarHost, 10001);
+            Canvas.SetTop(hoverToolbar, -36.0);
+            toolbarHost.Children.Add(hoverToolbar);
+            container.Children.Add(toolbarHost);
+
+            hoverToolbar.SizeChanged += (s, e) =>
+            {
+                if (e.NewSize.Width > 0)
+                {
+                    Canvas.SetLeft(hoverToolbar, -e.NewSize.Width / 2.0);
+                    Canvas.SetTop(hoverToolbar, -36.0);
+                }
+            };
 
             // Hover effects for revealing corner handles and floating toolbar
             container.MouseEnter += (s, e) =>
@@ -4569,6 +4714,9 @@ namespace DropBoard.Native
             {
                 if (e.ClickCount == 1 && e.LeftButton == MouseButtonState.Pressed)
                 {
+                    bool isShift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+                    SelectGroup(item, addToSelection: isShift);
+
                     RecordUndo("Move Group");
                     _isDraggingGroup = true;
                     _draggingGroup = item;
@@ -4599,6 +4747,82 @@ namespace DropBoard.Native
             return item;
         }
 
+        private void SelectGroup(GroupItem group, bool addToSelection = false)
+        {
+            if (!addToSelection)
+            {
+                DeselectAllCards();
+                DeselectAllGroups();
+            }
+
+            group.IsSelected = true;
+            _selectedGroups.Add(group);
+
+            group.HandleTL.Visibility = Visibility.Visible;
+            group.HandleTR.Visibility = Visibility.Visible;
+            group.HandleBL.Visibility = Visibility.Visible;
+            group.HandleBR.Visibility = Visibility.Visible;
+
+            if (group.HoverToolbar != null)
+            {
+                group.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
+                group.HoverToolbar.Opacity = 1.0;
+                group.HoverToolbar.IsHitTestVisible = true;
+            }
+
+            // Visual highlight for selected group frame
+            group.FrameBorder.BorderThickness = new Thickness(2.5);
+            try
+            {
+                Color c = (Color)ColorConverter.ConvertFromString(group.Color);
+                group.FrameBorder.Background = new SolidColorBrush(Color.FromArgb(22, c.R, c.G, c.B));
+            }
+            catch { }
+        }
+
+        private void DeselectGroup(GroupItem group)
+        {
+            group.IsSelected = false;
+            _selectedGroups.Remove(group);
+
+            group.FrameBorder.BorderThickness = new Thickness(1.5);
+            try
+            {
+                Color c = (Color)ColorConverter.ConvertFromString(group.Color);
+                group.FrameBorder.Background = new SolidColorBrush(Color.FromArgb(8, c.R, c.G, c.B));
+            }
+            catch { }
+
+            if (!group.Container.IsMouseOver)
+            {
+                group.HandleTL.Visibility = Visibility.Collapsed;
+                group.HandleTR.Visibility = Visibility.Collapsed;
+                group.HandleBL.Visibility = Visibility.Collapsed;
+                group.HandleBR.Visibility = Visibility.Collapsed;
+
+                if (group.HoverToolbar != null)
+                {
+                    DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
+                    anim.Completed += (s, e) =>
+                    {
+                        if (!group.Container.IsMouseOver && !group.IsSelected)
+                        {
+                            group.HoverToolbar.IsHitTestVisible = false;
+                        }
+                    };
+                    group.HoverToolbar.BeginAnimation(UIElement.OpacityProperty, anim);
+                }
+            }
+        }
+
+        private void DeselectAllGroups()
+        {
+            foreach (var g in _selectedGroups.ToList())
+            {
+                DeselectGroup(g);
+            }
+        }
+
         private Border CreateGroupHoverToolbar(GroupItem item)
         {
             Color grpCol;
@@ -4607,9 +4831,6 @@ namespace DropBoard.Native
 
             Border pill = new Border
             {
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, -36, 0, 0),
                 Background = new SolidColorBrush(Color.FromArgb(235, 20, 24, 34)),
                 BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255)),
                 BorderThickness = new Thickness(1),
@@ -4633,6 +4854,11 @@ namespace DropBoard.Native
                 pill.BeginAnimation(UIElement.OpacityProperty, null);
                 pill.Opacity = 1.0;
                 pill.IsHitTestVisible = true;
+            };
+            pill.MouseLeftButtonDown += (s, e) =>
+            {
+                bool isShift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+                SelectGroup(item, addToSelection: isShift);
             };
 
             StackPanel sp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
@@ -4668,6 +4894,9 @@ namespace DropBoard.Native
             };
             btnMove.MouseLeftButtonDown += (s, e) =>
             {
+                bool isShift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+                SelectGroup(item, addToSelection: isShift);
+
                 RecordUndo("Move Group");
                 _isDraggingGroup = true;
                 _draggingGroup = item;
@@ -11531,10 +11760,15 @@ namespace DropBoard.Native
   <script>
     const params = new URLSearchParams(window.location.search);
     const ytId = params.get('id');
+    const startTime = parseInt(params.get('t') || '0', 10);
     if (ytId) {
       const iframe = document.createElement('iframe');
       iframe.className = 'card-yt-iframe';
-      iframe.src = 'https://www.youtube-nocookie.com/embed/' + ytId + '?autoplay=1&playsinline=1&enablejsapi=1&rel=0';
+      let src = 'https://www.youtube-nocookie.com/embed/' + ytId + '?autoplay=1&playsinline=1&enablejsapi=1&rel=0';
+      if (startTime > 0) {
+        src += '&start=' + startTime;
+      }
+      iframe.src = src;
       iframe.title = 'YouTube Video Player';
       iframe.setAttribute('allow', 'accelerometer; autoplay *; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share');
       iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
@@ -11558,6 +11792,25 @@ namespace DropBoard.Native
             dataUrl: ev.data.dataUrl
           }));
         }
+      } else if (ev.data.type === 'DROPBOARD_YT_TIME_UPDATE') {
+        if (window.chrome && window.chrome.webview) {
+          window.chrome.webview.postMessage(JSON.stringify({
+            type: 'YT_TIME_UPDATE',
+            currentTime: ev.data.currentTime
+          }));
+        }
+      } else if (typeof ev.data === 'string') {
+        try {
+          const d = JSON.parse(ev.data);
+          if (d.event === 'infoDelivery' && d.info && typeof d.info.currentTime === 'number') {
+            if (window.chrome && window.chrome.webview) {
+              window.chrome.webview.postMessage(JSON.stringify({
+                type: 'YT_TIME_UPDATE',
+                currentTime: d.info.currentTime
+              }));
+            }
+          }
+        } catch(e) {}
       } else if (ev.data.type === 'DROPBOARD_IFRAME_CLICK') {
         if (window.chrome && window.chrome.webview) {
           window.chrome.webview.postMessage(JSON.stringify({ type: 'CARD_CLICK' }));
@@ -11728,6 +11981,22 @@ namespace DropBoard.Native
                                     }
                                     catch { }
                                 }
+                                else if (rawMsg.Contains("YT_TIME_UPDATE"))
+                                {
+                                    try
+                                    {
+                                        using var doc = System.Text.Json.JsonDocument.Parse(rawMsg);
+                                        if (doc.RootElement.TryGetProperty("currentTime", out var ctEl))
+                                        {
+                                            double sec = ctEl.GetDouble();
+                                            if (sec > 0.5)
+                                            {
+                                                item.LastPlaybackSeconds = sec;
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                }
                                 else if (rawMsg.Contains("YT_CLEAN_FRAME"))
                                 {
                                     try
@@ -11749,7 +12018,7 @@ namespace DropBoard.Native
                         catch { }
                     };
 
-                    // Inject clean YouTube frame capture hook, auto-play, pan forwarding, & UI cleanup into all frames
+                    // Inject clean YouTube frame capture hook, auto-play, pan forwarding, time tracking & UI cleanup into all frames
                     await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(@"
 (function() {
   if (window.self === window.top) return;
@@ -11786,6 +12055,33 @@ namespace DropBoard.Native
   setTimeout(tryAutoPlay, 300);
   setTimeout(tryAutoPlay, 700);
   setTimeout(tryAutoPlay, 1500);
+
+  // Hook HTML5 <video> playback timestamp to remember last played position
+  function hookTimeTracking() {
+    try {
+      var v = document.querySelector('video');
+      if (v && !v._hasDropboardTracking) {
+        v._hasDropboardTracking = true;
+        v.addEventListener('timeupdate', function() {
+          if (!v.paused && v.currentTime > 0) {
+            window.parent.postMessage({
+              type: 'DROPBOARD_YT_TIME_UPDATE',
+              currentTime: v.currentTime
+            }, '*');
+          }
+        });
+        v.addEventListener('pause', function() {
+          if (v.currentTime > 0) {
+            window.parent.postMessage({
+              type: 'DROPBOARD_YT_TIME_UPDATE',
+              currentTime: v.currentTime
+            }, '*');
+          }
+        });
+      }
+    } catch(e) {}
+  }
+  setInterval(hookTimeTracking, 1000);
 
   // Forward click inside video to WPF so card is selected; forward right click to open context menu; middle click to pan
   window.addEventListener('mousedown', function(e) {
@@ -11857,6 +12153,10 @@ namespace DropBoard.Native
                 if (item.CenterPlayBtn != null) item.CenterPlayBtn.Visibility = Visibility.Collapsed;
 
                 string playerUrl = $"https://dropboard.local/yt.html?id={item.YouTubeId}";
+                if (item.LastPlaybackSeconds > 1.0)
+                {
+                    playerUrl += $"&t={(int)Math.Floor(item.LastPlaybackSeconds)}";
+                }
                 item.PlayerControl.CoreWebView2.Navigate(playerUrl);
 
                 if (item.HoverToolbar != null)
@@ -11866,7 +12166,16 @@ namespace DropBoard.Native
                     item.HoverToolbar.IsHitTestVisible = true;
                 }
 
-                ShowToast("▶ Streaming YouTube", ToastType.Info, 1800);
+                if (item.LastPlaybackSeconds > 1.0)
+                {
+                    TimeSpan ts = TimeSpan.FromSeconds(item.LastPlaybackSeconds);
+                    string timeStr = ts.Hours > 0 ? ts.ToString(@"h\:mm\:ss") : ts.ToString(@"m\:ss");
+                    ShowToast($"▶ Resuming YouTube from {timeStr}", ToastType.Info, 2000);
+                }
+                else
+                {
+                    ShowToast("▶ Streaming YouTube", ToastType.Info, 1800);
+                }
             }
             catch (Exception ex)
             {
@@ -12478,6 +12787,7 @@ namespace DropBoard.Native
                     isYouTube = c.IsYouTube,
                     youtubeId = c.YouTubeId,
                     youtubeUrl = c.YouTubeUrl,
+                    lastPlaybackSeconds = c.LastPlaybackSeconds,
                     isNote = c.IsNote,
                     noteText = c.NoteText,
                     noteFontFamily = c.NoteFontFamily,
@@ -12651,6 +12961,7 @@ namespace DropBoard.Native
             public bool IsYouTube { get; set; }
             public string YouTubeId { get; set; } = "";
             public string YouTubeUrl { get; set; } = "";
+            public double LastPlaybackSeconds { get; set; } = 0;
         }
 
         private void LoadDropboardFile(string filePath, bool isSessionRestore = false)
@@ -12835,9 +13146,11 @@ namespace DropBoard.Native
                         bool isYt = false;
                         string ytId = "";
                         string ytUrl = "";
+                        double lastSec = 0;
                         if (card.TryGetProperty("isYouTube", out JsonElement ytEl)) isYt = ytEl.GetBoolean();
                         if (card.TryGetProperty("youtubeId", out JsonElement ytidEl)) ytId = ytidEl.GetString() ?? "";
                         if (card.TryGetProperty("youtubeUrl", out JsonElement yturlEl)) ytUrl = yturlEl.GetString() ?? "";
+                        if (card.TryGetProperty("lastPlaybackSeconds", out JsonElement lpsEl)) lastSec = lpsEl.GetDouble();
 
                         string cardId = card.TryGetProperty("id", out JsonElement imgIdEl) ? (imgIdEl.GetString() ?? "") : "";
                         string groupId = card.TryGetProperty("groupId", out JsonElement imgGidEl) ? (imgGidEl.GetString() ?? "") : "";
@@ -12858,7 +13171,8 @@ namespace DropBoard.Native
                             CropB = cropB,
                             IsYouTube = isYt,
                             YouTubeId = ytId,
-                            YouTubeUrl = ytUrl
+                            YouTubeUrl = ytUrl,
+                            LastPlaybackSeconds = lastSec
                         });
                     }
                 }
@@ -12973,6 +13287,8 @@ namespace DropBoard.Native
                                     addedImg.Id = desc.Id;
                                 if (!string.IsNullOrEmpty(desc.GroupId))
                                     addedImg.GroupId = desc.GroupId;
+                                if (desc.LastPlaybackSeconds > 0)
+                                    addedImg.LastPlaybackSeconds = desc.LastPlaybackSeconds;
                             }
 
                             loadedImages++;
