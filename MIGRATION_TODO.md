@@ -167,7 +167,18 @@ Komponen ini di C# saat ini masih berupa placeholder `MessageBox.Show`:
 ### 15. ⚡ Quick Palette / Command Search
 - Quick search bar (<kbd>Ctrl</kbd>+<kbd>K</kbd> / Spacebar palette) untuk mencari referensi atau membuat node baru secara instan.
 
+### 16. 🎥 Native Local Video Playback (.mp4, .mkv, .3gp, .webm, .mov, .avi, .wmv)
+- **Status**: ✅ **SELESAI DIIMPLEMENTASIKAN (100% Native C# WPF & DirectX)**
+- **0% Chromium**: Menggunakan native `MediaElement` & Windows Media Foundation, hemat RAM, bebas glitch visual *airspace*.
+- **Multi-Format**: Drag-and-drop & open file dialog mendukung `.mp4`, `.mkv`, `.3gp`, `.webm`, `.mov`, `.avi`, `.wmv`, `.m4v`.
+- **Ekstraksi Poster Windows Shell**: Otomatis mengambil thumbnail resolusi tinggi langsung dari shell explorer tanpa decoding lag, dengan fallback vector poster.
+- **Kontrol Playback**: Tombol Play/Pause (tengah & toolbar), toggle Looping otomatis (`🔁 Loop`), toggle Mute (`🔇 Mute` / `🔊 Sound`, default Muted), dan **Glassmorphism Scrubber Slider** modern (cyan glowing thumb, instant click-to-point seek, smooth mouse capture scrubbing) dengan indikator waktu.
+- **Auto-Fit Video Resolution & Aspect Ratio**: Deteksi otomatis resolusi asli video (`NaturalVideoWidth` & `NaturalVideoHeight`) saat media terbuka, menghilangkan bilah hitam (letterbox/pillarbox) baik untuk video landscape maupun portrait/vertical (9:16). Tersedia tombol **`⛶ Fit Reso`** pada hover toolbar serta opsi **"Fit to Video Resolution"** & **"Original 1:1 Video Size"** di Context Menu.
+- **Snapshot Frame**: Snapshot instan frame aktif ke kanvas DropBoard (`📋 Board`) atau diexport langsung ke Adobe After Effects active comp (`📸 AE`).
+- **Project Portability**: Status video, path file, looping, dan mute tersimpan ke project file `.dropboard`.
+
 ---
+
 
 ## ✅ RIWAYAT FIX TERBARU (Native C# WPF)
 - **Fix UI Freeze & Top Bar Click**: Menghapus `DockRevealZoneTop` & `DockRevealZoneLeft` invisible overlay yang sebelumnya memblokir hit testing mouse di area atas dan titlebar. Digantikan dengan `Window_PreviewMouseMove` non-blocking cursor tracking.

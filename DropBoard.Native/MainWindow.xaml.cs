@@ -116,6 +116,11 @@ namespace DropBoard.Native
         public string YouTubeId { get; set; } = "";
         public string YouTubeUrl { get; set; } = "";
         public double LastPlaybackSeconds { get; set; } = 0;
+        public bool IsLocalVideo { get; set; } = false;
+        public string VideoFilePath { get; set; } = "";
+        public bool IsVideoLooping { get; set; } = true;
+        public bool IsVideoMuted { get; set; } = true;
+        public double VideoDurationSeconds { get; set; } = 0;
         public bool IsNote { get; set; } = false;
         public string NoteText { get; set; } = "";
         public string NoteFontFamily { get; set; } = "Segoe UI";
@@ -174,6 +179,26 @@ namespace DropBoard.Native
         public Border? BtnPlayOverlay { get; set; } = null;
         public Border? CenterPlayBtn { get; set; } = null;
 
+        // Local Video Integration (100% Native WPF MediaElement & DirectX)
+        public bool IsLocalVideo { get; set; } = false;
+        public string VideoFilePath { get; set; } = "";
+        public bool IsVideoPlaying { get; set; } = false;
+        public bool IsVideoLooping { get; set; } = true;
+        public bool IsVideoMuted { get; set; } = true;
+        public double VideoDurationSeconds { get; set; } = 0;
+        public double VideoCurrentSeconds { get; set; } = 0;
+        public bool IsUserScrubbingTimeline { get; set; } = false;
+        public DateTime LastUserSeekTime { get; set; } = DateTime.MinValue;
+        public Border? VideoTagBadge { get; set; } = null;
+        public Border? BtnVideoPlayOverlay { get; set; } = null;
+        public Border? BtnVideoLoopOverlay { get; set; } = null;
+        public Border? BtnVideoMuteOverlay { get; set; } = null;
+        public Border? CenterVideoPlayBtn { get; set; } = null;
+        public Border? VideoScrubberContainer { get; set; } = null;
+        public Slider? VideoTimelineSlider { get; set; } = null;
+        public TextBlock? VideoTimeText { get; set; } = null;
+        public DispatcherTimer? VideoPlaybackTimer { get; set; } = null;
+
         // Note / Text Card Integration
         public bool IsNote { get; set; } = false;
         public string NoteText { get; set; } = "";
@@ -208,6 +233,7 @@ namespace DropBoard.Native
         public List<PalettePin> ActivePalettePins { get; set; } = new();
         public int PaletteColorCount { get; set; } = 5;
         public ColorMood PaletteMood { get; set; } = ColorMood.Colorful;
+        public Dictionary<ColorMood, List<PalettePin>> PaletteMoodCache { get; set; } = new();
 
         // Standalone Live Color Palette Card
         public bool IsPaletteCard { get; set; } = false;
@@ -364,6 +390,7 @@ namespace DropBoard.Native
         private static string SessionFilePath => System.IO.Path.Combine(AppDataDir, "session.dropboard");
         private static string RecentConfigPath => System.IO.Path.Combine(AppDataDir, "recent.json");
         private static string CacheDir => System.IO.Path.Combine(AppDataDir, "Cache");
+        public static string PalettesDir => System.IO.Path.Combine(AppDataDir, "Palettes");
 
         private readonly DispatcherTimer _autoSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(1000) };
         private bool _isRestoringSession = false;
@@ -371,6 +398,7 @@ namespace DropBoard.Native
 
         // Canvas Pan & Zoom
         private Point _lastPanPoint;
+        private Point _panStartMousePoint;
         private bool _isPanning = false;
         private double _panDistanceAccumulator = 0;
 
@@ -382,6 +410,14 @@ namespace DropBoard.Native
         private bool _isDraggingCards = false;
         private Point _cardDragStartMousePoint;
         private readonly Dictionary<CardItem, Point> _cardsInitialPositions = new();
+
+        // Palette Swatch Click & Copy Tracking
+        private (CardItem card, Action copyAction)? _pendingSwatchClick = null;
+        private Point _pendingSwatchStartPoint;
+
+        // Video Card Click Tracking for Pause/Play on Tap
+        private CardItem? _pendingVideoCardClick = null;
+        private Point _pendingVideoCardStartPoint;
 
         // Card Resizing
         private bool _isResizingCard = false;
@@ -843,6 +879,7 @@ namespace DropBoard.Native
             {
                 _isPanning = true;
                 _lastPanPoint = e.GetPosition(CanvasContainer);
+                _panStartMousePoint = _lastPanPoint;
                 SetWebViewHitTesting(false);
                 CanvasContainer.CaptureMouse();
                 Cursor = Cursors.Hand;
@@ -1034,6 +1071,17 @@ namespace DropBoard.Native
                 UpdateViewportCulling();
                 e.Handled = true;
                 stateChanged = true;
+
+                if (e.ChangedButton == MouseButton.Right)
+                {
+                    Point curPos = e.GetPosition(CanvasContainer);
+                    Vector diff = curPos - _panStartMousePoint;
+                    if (diff.Length < 6.0)
+                    {
+                        Point worldPos = ScreenToWorld(curPos);
+                        ShowCanvasContextMenu(curPos, worldPos);
+                    }
+                }
             }
 
             if (_isMarqueeSelecting)
@@ -1057,6 +1105,38 @@ namespace DropBoard.Native
                 SyncActiveHwndPositions(updateSize: true);
                 e.Handled = true;
                 stateChanged = true;
+            }
+
+            if (_pendingSwatchClick.HasValue)
+            {
+                Point upPt = e.GetPosition(CanvasContainer);
+                double moveDist = (upPt - _pendingSwatchStartPoint).Length;
+                var pending = _pendingSwatchClick.Value;
+                _pendingSwatchClick = null;
+
+                if (moveDist < 5.0)
+                {
+                    pending.copyAction();
+                }
+            }
+
+            if (_pendingVideoCardClick != null)
+            {
+                Point upPt = e.GetPosition(CanvasContainer);
+                double moveDist = (upPt - _pendingVideoCardStartPoint).Length;
+                var vidCard = _pendingVideoCardClick;
+                _pendingVideoCardClick = null;
+
+                if (moveDist < 8.0)
+                {
+                    // Restore original positions in case of micro-jitter during click
+                    foreach (var kvp in _cardsInitialPositions)
+                    {
+                        kvp.Key.X = kvp.Value.X;
+                        kvp.Key.Y = kvp.Value.Y;
+                    }
+                    ToggleLocalVideoPlayback(vidCard);
+                }
             }
 
             if (_isDraggingCards)
@@ -1208,6 +1288,10 @@ namespace DropBoard.Native
             bool isYouTube = false,
             string youTubeId = "",
             string youTubeUrl = "",
+            bool isLocalVideo = false,
+            string videoFilePath = "",
+            bool isVideoLooping = true,
+            bool isVideoMuted = true,
             bool recordUndo = true)
         {
             EmptyStateOverlay.Visibility = Visibility.Collapsed;
@@ -1279,9 +1363,38 @@ namespace DropBoard.Native
                 Source = displayBitmap,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
-                Stretch = isYouTube ? Stretch.UniformToFill : Stretch.Uniform
+                Stretch = (isYouTube || isLocalVideo) ? Stretch.UniformToFill : Stretch.Uniform
             };
             RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.Linear);
+
+            FrameworkElement cardContentElement = image;
+            MediaElement? nativePlayer = null;
+
+            if (isLocalVideo)
+            {
+                Grid mediaGrid = new Grid
+                {
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    VerticalAlignment = VerticalAlignment.Stretch
+                };
+                mediaGrid.Children.Add(image);
+
+                Uri? videoUri = (!string.IsNullOrEmpty(videoFilePath) && File.Exists(videoFilePath)) ? new Uri(videoFilePath, UriKind.Absolute) : null;
+                nativePlayer = new MediaElement
+                {
+                    Source = videoUri,
+                    LoadedBehavior = MediaState.Manual,
+                    UnloadedBehavior = MediaState.Close,
+                    Stretch = Stretch.Uniform,
+                    ScrubbingEnabled = true,
+                    IsMuted = isVideoMuted,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    VerticalAlignment = VerticalAlignment.Stretch,
+                    Visibility = Visibility.Visible
+                };
+                mediaGrid.Children.Add(nativePlayer);
+                cardContentElement = mediaGrid;
+            }
 
             // Card solid background border with shadow (sharp rectangular)
             Border contentBorder = new Border
@@ -1294,7 +1407,7 @@ namespace DropBoard.Native
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
                 Effect = _cards.Count > 30 ? null : CardActiveShadow,
-                Child = image
+                Child = cardContentElement
             };
 
             // Container Grid hosting content + 4 resize handles
@@ -1323,6 +1436,7 @@ namespace DropBoard.Native
                 Container = container,
                 ContentBorder = contentBorder,
                 ImageControl = image,
+                NativePlayer = nativePlayer,
                 Bitmap = displayBitmap,
                 OriginalBitmap = origSource!,
                 BaseWidth = baseWidth ?? (isCropped ? Math.Round(w / Math.Max(0.05, (100.0 - cL - cR) / 100.0)) : w),
@@ -1340,10 +1454,14 @@ namespace DropBoard.Native
                 HandleBR = handleBR,
                 IsYouTube = isYouTube,
                 YouTubeId = youTubeId,
-                YouTubeUrl = youTubeUrl
+                YouTubeUrl = youTubeUrl,
+                IsLocalVideo = isLocalVideo,
+                VideoFilePath = videoFilePath,
+                IsVideoLooping = isVideoLooping,
+                IsVideoMuted = isVideoMuted
             };
 
-            // Attach Hover Quick-Action Toolbar (:: Move | [YT buttons] | Ae Import | ✂ Crop | Copy | ✕)
+            // Attach Hover Quick-Action Toolbar (:: Move | [YT/Video buttons] | Ae Import | ✂ Crop | Copy | ✕)
             Border hoverToolbar = CreateCardHoverToolbar(item);
             item.HoverToolbar = hoverToolbar;
             Canvas toolbarHost = new Canvas
@@ -1439,6 +1557,314 @@ namespace DropBoard.Native
                 container.Children.Add(centerPlayBtn);
             }
 
+            // Local Video Badges, Center Play Button, Scrubber Bar, and Events
+            if (item.IsLocalVideo && item.NativePlayer != null)
+            {
+                MediaElement player = item.NativePlayer;
+
+                // Wire up media lifecycle events
+                player.MediaOpened += (s, e) =>
+                {
+                    if (player.NaturalDuration.HasTimeSpan)
+                    {
+                        item.VideoDurationSeconds = player.NaturalDuration.TimeSpan.TotalSeconds;
+                        if (item.VideoTimelineSlider != null)
+                        {
+                            item.VideoTimelineSlider.Maximum = item.VideoDurationSeconds;
+                        }
+                        if (item.VideoTimeText != null)
+                        {
+                            item.VideoTimeText.Text = FormatVideoDuration(item.VideoCurrentSeconds, item.VideoDurationSeconds);
+                        }
+                    }
+
+                    if (player.NaturalVideoWidth > 0 && player.NaturalVideoHeight > 0)
+                    {
+                        double natW = player.NaturalVideoWidth;
+                        double natH = player.NaturalVideoHeight;
+                        double realAspect = natW / natH;
+                        item.AspectRatio = realAspect;
+
+                        double curAspect = item.Width / Math.Max(1.0, item.Height);
+                        if (Math.Abs(curAspect - realAspect) > 0.05)
+                        {
+                            FitVideoCardToResolution(item, notify: false);
+                        }
+                    }
+
+                    // Render first frame as video thumbnail immediately upon import
+                    if (!item.IsVideoPlaying)
+                    {
+                        try
+                        {
+                            player.Play();
+                            player.Pause();
+                            player.Position = TimeSpan.FromMilliseconds(150);
+                            item.ImageControl.Visibility = Visibility.Collapsed;
+                        }
+                        catch { }
+                    }
+                };
+
+                player.MediaEnded += (s, e) =>
+                {
+                    if (item.IsVideoLooping)
+                    {
+                        player.Position = TimeSpan.Zero;
+                        player.Play();
+                    }
+                    else
+                    {
+                        StopLocalVideo(item);
+                    }
+                };
+
+                player.MediaFailed += (s, e) =>
+                {
+                    player.Visibility = Visibility.Collapsed;
+                    item.ImageControl.Visibility = Visibility.Visible;
+                    ShowToast($"Video playback error: {e.ErrorException?.Message ?? "Codec not supported"}", ToastType.Error);
+                    StopLocalVideo(item);
+                };
+
+                bool isUpdatingSlider = false;
+
+                // Playback progression timer (100ms interval)
+                DispatcherTimer vidTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+                vidTimer.Tick += (s, e) =>
+                {
+                    if (item.IsVideoPlaying && item.NativePlayer != null)
+                    {
+                        // Skip timer update if user is actively dragging slider or recently clicked/sought within 800ms
+                        if (item.IsUserScrubbingTimeline || (DateTime.UtcNow - item.LastUserSeekTime).TotalMilliseconds < 800)
+                        {
+                            return;
+                        }
+
+                        double pos = item.NativePlayer.Position.TotalSeconds;
+                        item.VideoCurrentSeconds = pos;
+                        if (item.VideoTimelineSlider != null)
+                        {
+                            isUpdatingSlider = true;
+                            try { item.VideoTimelineSlider.Value = pos; }
+                            finally { isUpdatingSlider = false; }
+                        }
+                        if (item.VideoTimeText != null)
+                        {
+                            item.VideoTimeText.Text = FormatVideoDuration(pos, item.VideoDurationSeconds);
+                        }
+                    }
+                };
+                item.VideoPlaybackTimer = vidTimer;
+
+                // Extension format badge (Cyan / Sky Blue accent)
+                string extName = System.IO.Path.GetExtension(videoFilePath).TrimStart('.').ToUpperInvariant();
+                if (string.IsNullOrEmpty(extName)) extName = "VIDEO";
+                Border vidBadge = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(220, 2, 132, 199)),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(6, 2, 6, 2),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Margin = new Thickness(8, 0, 0, 8),
+                    Cursor = Cursors.Hand,
+                    ToolTip = $"Click to Play/Pause {extName} Video",
+                    Child = new TextBlock
+                    {
+                        Text = $"▶ {extName}",
+                        FontSize = 9.5,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = Brushes.White
+                    }
+                };
+                vidBadge.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    ToggleLocalVideoPlayback(item);
+                };
+                item.VideoTagBadge = vidBadge;
+                container.Children.Add(vidBadge);
+
+                // Center Play Button (Sky Blue accent)
+                Border centerPlayBtn = new Border
+                {
+                    Width = 56,
+                    Height = 42,
+                    Background = new SolidColorBrush(Color.FromArgb(220, 14, 165, 233)),
+                    CornerRadius = new CornerRadius(10),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Play Video",
+                    Effect = new DropShadowEffect { BlurRadius = 14, ShadowDepth = 3, Opacity = 0.65, Color = Colors.Black },
+                    Child = new TextBlock
+                    {
+                        Text = "▶",
+                        FontSize = 18,
+                        FontWeight = FontWeights.Bold,
+                        Foreground = Brushes.White,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(3, 0, 0, 0)
+                    }
+                };
+                centerPlayBtn.MouseEnter += (s, e) => centerPlayBtn.Background = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                centerPlayBtn.MouseLeave += (s, e) => centerPlayBtn.Background = new SolidColorBrush(Color.FromArgb(220, 14, 165, 233));
+                centerPlayBtn.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    ToggleLocalVideoPlayback(item);
+                };
+                item.CenterVideoPlayBtn = centerPlayBtn;
+                container.Children.Add(centerPlayBtn);
+
+                // Glassmorphism Timeline Scrubber Bar
+                Grid scrubberGrid = new Grid();
+                scrubberGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                scrubberGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                Slider slider = new Slider
+                {
+                    Minimum = 0,
+                    Maximum = 100,
+                    Value = 0,
+                    Margin = new Thickness(8, 0, 6, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Cursor = Cursors.Hand,
+                    IsMoveToPointEnabled = true
+                };
+                if (TryFindResource("VideoTimelineSliderStyle") is Style vStyle)
+                {
+                    slider.Style = vStyle;
+                }
+
+                Action<double> applySeek = (targetSec) =>
+                {
+                    if (isUpdatingSlider) return;
+                    isUpdatingSlider = true;
+                    try
+                    {
+                        double maxDuration = item.VideoDurationSeconds > 0 ? item.VideoDurationSeconds : slider.Maximum;
+                        if (maxDuration > 0)
+                        {
+                            targetSec = Math.Clamp(targetSec, 0, maxDuration);
+                        }
+                        else
+                        {
+                            targetSec = Math.Max(0, targetSec);
+                        }
+
+                        slider.Value = targetSec;
+                        item.VideoCurrentSeconds = targetSec;
+                        item.LastUserSeekTime = DateTime.UtcNow;
+
+                        if (item.NativePlayer != null)
+                        {
+                            try
+                            {
+                                item.NativePlayer.Position = TimeSpan.FromSeconds(targetSec);
+                            }
+                            catch { }
+                        }
+
+                        if (item.VideoTimeText != null)
+                        {
+                            item.VideoTimeText.Text = FormatVideoDuration(targetSec, item.VideoDurationSeconds);
+                        }
+                    }
+                    finally
+                    {
+                        isUpdatingSlider = false;
+                    }
+                };
+
+                Action<Point> seekSliderToMouse = (pt) =>
+                {
+                    double maxDuration = item.VideoDurationSeconds > 0 ? item.VideoDurationSeconds : slider.Maximum;
+                    if (slider.ActualWidth > 0 && maxDuration > 0)
+                    {
+                        double ratio = Math.Clamp(pt.X / slider.ActualWidth, 0.0, 1.0);
+                        double targetVal = ratio * maxDuration;
+                        applySeek(targetVal);
+                    }
+                };
+
+                slider.PreviewMouseLeftButtonDown += (s, e) =>
+                {
+                    item.IsUserScrubbingTimeline = true;
+                    item.LastUserSeekTime = DateTime.UtcNow;
+                    slider.CaptureMouse();
+                    seekSliderToMouse(e.GetPosition(slider));
+                    e.Handled = true;
+                };
+
+                slider.PreviewMouseMove += (s, e) =>
+                {
+                    if (item.IsUserScrubbingTimeline && e.LeftButton == MouseButtonState.Pressed)
+                    {
+                        seekSliderToMouse(e.GetPosition(slider));
+                        e.Handled = true;
+                    }
+                };
+
+                slider.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    if (item.IsUserScrubbingTimeline)
+                    {
+                        item.IsUserScrubbingTimeline = false;
+                        item.LastUserSeekTime = DateTime.UtcNow;
+                        if (slider.IsMouseCaptured)
+                        {
+                            slider.ReleaseMouseCapture();
+                        }
+                        seekSliderToMouse(e.GetPosition(slider));
+                        e.Handled = true;
+                    }
+                };
+
+                slider.ValueChanged += (s, e) =>
+                {
+                    if (!isUpdatingSlider)
+                    {
+                        applySeek(e.NewValue);
+                    }
+                };
+
+                item.VideoTimelineSlider = slider;
+                Grid.SetColumn(slider, 0);
+                scrubberGrid.Children.Add(slider);
+
+                TextBlock timeText = new TextBlock
+                {
+                    Text = "0:00 / 0:00",
+                    FontSize = 9.0,
+                    Foreground = new SolidColorBrush(Color.FromArgb(200, 255, 255, 255)),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 8, 0)
+                };
+                item.VideoTimeText = timeText;
+                Grid.SetColumn(timeText, 1);
+                scrubberGrid.Children.Add(timeText);
+
+                Border scrubberContainer = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(215, 15, 23, 42)),
+                    Height = 22,
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Margin = new Thickness(0, 0, 0, 0),
+                    Visibility = Visibility.Collapsed,
+                    Child = scrubberGrid
+                };
+                // Use bubbling MouseLeftButtonDown (not Preview) so it doesn't block child slider events while preventing card drag
+                scrubberContainer.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                };
+                item.VideoScrubberContainer = scrubberContainer;
+                container.Children.Add(scrubberContainer);
+            }
+
             container.MouseEnter += (s, e) =>
             {
                 if (_isCropping) return;
@@ -1450,13 +1876,17 @@ namespace DropBoard.Native
                 {
                     contentBorder.Effect = CardActiveShadow;
                 }
+                if (item.IsLocalVideo && item.VideoScrubberContainer != null)
+                {
+                    item.VideoScrubberContainer.Visibility = Visibility.Visible;
+                }
                 hoverToolbar.BeginAnimation(UIElement.OpacityProperty, null);
                 hoverToolbar.Opacity = 1.0;
                 hoverToolbar.IsHitTestVisible = true;
             };
             container.MouseLeave += (s, e) =>
             {
-                if (!item.IsSelected && !item.IsPlayingYouTube && !item.IsPaletteMode)
+                if (!item.IsSelected && !item.IsPlayingYouTube && !item.IsPaletteMode && !item.IsVideoPlaying)
                 {
                     if (Panel.GetZIndex(container) == 500)
                     {
@@ -1467,11 +1897,15 @@ namespace DropBoard.Native
                         contentBorder.Effect = null;
                     }
                 }
-                if (item.IsPlayingYouTube || item.IsSelected || _isCardSubMenuOpen || item.IsPaletteMode) return;
+                if (item.IsLocalVideo && item.VideoScrubberContainer != null && !item.IsVideoPlaying && !item.IsSelected)
+                {
+                    item.VideoScrubberContainer.Visibility = Visibility.Collapsed;
+                }
+                if (item.IsPlayingYouTube || item.IsVideoPlaying || item.IsSelected || _isCardSubMenuOpen || item.IsPaletteMode) return;
                 DoubleAnimation anim = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(180));
                 anim.Completed += (s2, e2) =>
                 {
-                    if (!container.IsMouseOver && !hoverToolbar.IsMouseOver && !item.IsPlayingYouTube && !item.IsSelected && !_isCardSubMenuOpen && !item.IsPaletteMode)
+                    if (!container.IsMouseOver && !hoverToolbar.IsMouseOver && !item.IsPlayingYouTube && !item.IsVideoPlaying && !item.IsSelected && !_isCardSubMenuOpen && !item.IsPaletteMode)
                     {
                         hoverToolbar.IsHitTestVisible = false;
                     }
@@ -1492,6 +1926,7 @@ namespace DropBoard.Native
             };
             container.MouseRightButtonUp += (s, e) =>
             {
+                container.ContextMenu = CreateCardContextMenu(item);
                 if (container.ContextMenu != null)
                 {
                     container.ContextMenu.PlacementTarget = container;
@@ -1510,6 +1945,12 @@ namespace DropBoard.Native
                     if (item.IsYouTube)
                     {
                         ToggleYouTubePlayback(item);
+                        e.Handled = true;
+                        return;
+                    }
+                    if (item.IsLocalVideo)
+                    {
+                        ToggleLocalVideoPlayback(item);
                         e.Handled = true;
                         return;
                     }
@@ -1548,6 +1989,12 @@ namespace DropBoard.Native
                 }
                 SetWebViewHitTesting(false);
 
+                if (item.IsLocalVideo)
+                {
+                    _pendingVideoCardClick = item;
+                    _pendingVideoCardStartPoint = e.GetPosition(CanvasContainer);
+                }
+
                 CanvasContainer.CaptureMouse();
                 e.Handled = true;
             };
@@ -1584,6 +2031,16 @@ namespace DropBoard.Native
 
             _cards.Add(item);
             WorldCanvas.Children.Add(container);
+
+            if (isLocalVideo && item.NativePlayer != null && item.NativePlayer.Source != null)
+            {
+                try
+                {
+                    item.NativePlayer.Play();
+                    item.NativePlayer.Pause();
+                }
+                catch { }
+            }
 
             EnsureLocalCache(item);
             if (!_isRestoringSession && !_isApplyingSnapshot)
@@ -2002,6 +2459,7 @@ namespace DropBoard.Native
             };
             container.MouseRightButtonUp += (s, e) =>
             {
+                container.ContextMenu = CreateCardContextMenu(item);
                 if (container.ContextMenu != null)
                 {
                     container.ContextMenu.PlacementTarget = container;
@@ -2361,6 +2819,7 @@ namespace DropBoard.Native
             };
             container.MouseRightButtonUp += (s, e) =>
             {
+                container.ContextMenu = CreateCardContextMenu(item);
                 if (container.ContextMenu != null)
                 {
                     container.ContextMenu.PlacementTarget = container;
@@ -3381,7 +3840,16 @@ namespace DropBoard.Native
                 {
                     var fileList = files.Cast<string>().ToList();
                     Point pastePos = ScreenToWorld(new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2));
-                    ImportImageFilesBatch(fileList, pastePos);
+                    var imageFiles = new List<string>();
+                    var videoFiles = new List<string>();
+                    foreach (string file in fileList)
+                    {
+                        string ext = System.IO.Path.GetExtension(file);
+                        if (IsSupportedVideoExtension(ext)) videoFiles.Add(file);
+                        else imageFiles.Add(file);
+                    }
+                    if (videoFiles.Count > 0) ImportVideoFilesBatch(videoFiles, pastePos);
+                    if (imageFiles.Count > 0) ImportImageFilesBatch(imageFiles, pastePos);
                     return;
                 }
             }
@@ -3543,19 +4011,28 @@ namespace DropBoard.Native
             {
                 string[] files = (string[])e.Data.GetData(DataFormats.FileDrop);
                 var imageFiles = new List<string>();
+                var videoFiles = new List<string>();
                 foreach (string file in files)
                 {
-                    string ext = System.IO.Path.GetExtension(file).ToLower();
-                    if (ext == ".dropboard")
+                    string ext = System.IO.Path.GetExtension(file);
+                    if (ext.Equals(".dropboard", StringComparison.OrdinalIgnoreCase))
                     {
                         LoadDropboardFile(file);
                     }
-                    else if (ext is ".jpg" or ".jpeg" or ".png" or ".webp" or ".bmp" or ".gif")
+                    else if (IsSupportedVideoExtension(ext))
+                    {
+                        videoFiles.Add(file);
+                    }
+                    else if (ext.ToLowerInvariant() is ".jpg" or ".jpeg" or ".png" or ".webp" or ".bmp" or ".gif")
                     {
                         imageFiles.Add(file);
                     }
                 }
 
+                if (videoFiles.Count > 0)
+                {
+                    ImportVideoFilesBatch(videoFiles, worldPos);
+                }
                 if (imageFiles.Count > 0)
                 {
                     ImportImageFilesBatch(imageFiles, worldPos);
@@ -3581,14 +4058,23 @@ namespace DropBoard.Native
         {
             OpenFileDialog dlg = new OpenFileDialog
             {
-                Filter = "Images (*.png;*.jpg;*.jpeg;*.webp)|*.png;*.jpg;*.jpeg;*.webp|All Files (*.*)|*.*",
+                Filter = "All Media (*.png;*.jpg;*.mp4;*.mkv;*.3gp)|*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif;*.mp4;*.mkv;*.webm;*.mov;*.avi;*.wmv;*.3gp;*.m4v|Images (*.png;*.jpg;*.jpeg;*.webp)|*.png;*.jpg;*.jpeg;*.webp|Videos (*.mp4;*.mkv;*.webm;*.mov;*.3gp)|*.mp4;*.mkv;*.webm;*.mov;*.avi;*.wmv;*.3gp;*.m4v|All Files (*.*)|*.*",
                 Multiselect = true
             };
 
             if (dlg.ShowDialog() == true && dlg.FileNames.Length > 0)
             {
                 Point startPos = ScreenToWorld(new Point(CanvasContainer.ActualWidth / 2, CanvasContainer.ActualHeight / 2));
-                ImportImageFilesBatch(dlg.FileNames, startPos);
+                var imageFiles = new List<string>();
+                var videoFiles = new List<string>();
+                foreach (string file in dlg.FileNames)
+                {
+                    string ext = System.IO.Path.GetExtension(file);
+                    if (IsSupportedVideoExtension(ext)) videoFiles.Add(file);
+                    else imageFiles.Add(file);
+                }
+                if (videoFiles.Count > 0) ImportVideoFilesBatch(videoFiles, startPos);
+                if (imageFiles.Count > 0) ImportImageFilesBatch(imageFiles, startPos);
             }
         }
 
@@ -5846,6 +6332,40 @@ namespace DropBoard.Native
                 ChkTransparentTitlebar.IsChecked = isTransparent;
         }
 
+        public void OpenPalettesFolder()
+        {
+            try
+            {
+                Directory.CreateDirectory(PalettesDir);
+
+                // Auto-migrate any existing palettes from Windows Temp so user never loses their files
+                string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "DropBoard_Palettes");
+                if (Directory.Exists(tempDir))
+                {
+                    foreach (var file in Directory.GetFiles(tempDir, "*.png"))
+                    {
+                        string dest = System.IO.Path.Combine(PalettesDir, System.IO.Path.GetFileName(file));
+                        if (!File.Exists(dest))
+                        {
+                            try { File.Copy(file, dest); } catch { }
+                        }
+                    }
+                }
+
+                Process.Start(new ProcessStartInfo("explorer.exe", PalettesDir) { UseShellExecute = true });
+                ShowToast("Opened Palettes folder in Explorer", ToastType.Info);
+            }
+            catch (Exception ex)
+            {
+                ShowToast("Could not open folder: " + ex.Message, ToastType.Error);
+            }
+        }
+
+        private void BtnOpenPalettesFolder_Click(object sender, RoutedEventArgs e)
+        {
+            OpenPalettesFolder();
+        }
+
         private void BtnOpenCacheFolder_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -6153,6 +6673,11 @@ namespace DropBoard.Native
                     IsYouTube = c.IsYouTube,
                     YouTubeId = c.YouTubeId,
                     YouTubeUrl = c.YouTubeUrl,
+                    IsLocalVideo = c.IsLocalVideo,
+                    VideoFilePath = c.VideoFilePath,
+                    IsVideoLooping = c.IsVideoLooping,
+                    IsVideoMuted = c.IsVideoMuted,
+                    VideoDurationSeconds = c.VideoDurationSeconds,
                     IsNote = c.IsNote,
                     NoteText = c.NoteText,
                     NoteFontFamily = c.NoteFontFamily,
@@ -6401,7 +6926,11 @@ namespace DropBoard.Native
                                 cropBottom: cs.CropBottom,
                                 isYouTube: cs.IsYouTube,
                                 youTubeId: cs.YouTubeId,
-                                youTubeUrl: cs.YouTubeUrl);
+                                youTubeUrl: cs.YouTubeUrl,
+                                isLocalVideo: cs.IsLocalVideo,
+                                videoFilePath: cs.VideoFilePath,
+                                isVideoLooping: cs.IsVideoLooping,
+                                isVideoMuted: cs.IsVideoMuted);
                             newCard.Id = cs.Id;
                             newCard.GroupId = cs.GroupId;
                         }
@@ -6951,21 +7480,51 @@ namespace DropBoard.Native
                 return cm;
             }
 
-            // Category Header: "REFERENCE"
+            bool isMulti = _selectedCards.Contains(item) && _selectedCards.Count > 1;
+            int selCount = isMulti ? _selectedCards.Count : 1;
+
+            // Category Header: "REFERENCE" or "SELECTION (X REFERENCES SELECTED)"
             MenuItem miHeader = new MenuItem
             {
                 Header = new TextBlock
                 {
-                    Text = "REFERENCE",
+                    Text = isMulti ? $"SELECTION ({selCount} REFERENCES SELECTED)" : "REFERENCE",
                     FontSize = 9.0,
                     FontWeight = FontWeights.Bold,
-                    Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                    Foreground = new SolidColorBrush(isMulti ? Color.FromRgb(56, 189, 248) : Color.FromRgb(100, 116, 139)),
                     Margin = new Thickness(8, 4, 8, 4)
                 },
                 IsEnabled = false,
                 Focusable = false
             };
             cm.Items.Add(miHeader);
+
+            if (isMulti)
+            {
+                // Multi-select Arrange & Group Tools
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 3,3 h 7 v 7 H 3 Z M 14,3 h 7 v 7 H 14 Z M 14,14 h 7 v 7 H 14 Z M 3,14 h 7 v 7 H 3 Z", "#38BDF8"),
+                    "Grid Arrange Selection",
+                    $"Pack {selCount} selected references into a clean masonry grid",
+                    (s, e) => BtnGridArrange_Click(s, e)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 3,6 h 5 M 3,12 h 5 M 3,18 h 5 M 12,4 h 9 v 4 H 12 Z M 12,10 h 9 v 4 H 12 Z M 12,16 h 9 v 4 H 12 Z", "#818CF8"),
+                    "Pipeline Arrange Selection",
+                    $"Sequence {selCount} selected items into storyboard flow",
+                    (s, e) => BtnPipelineArrange_Click(s, e)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 3,3 h 18 v 18 H 3 Z M 8,8 h 8 v 3 H 8 Z", "#3B82F6"),
+                    "Group into Scene Group",
+                    $"Wrap {selCount} selected references into a Scene container (Ctrl+G)",
+                    (s, e) => BtnAddGroup_Click(s, e)
+                ));
+
+                cm.Items.Add(new Separator());
+            }
 
             // YouTube specific actions
             if (item.IsYouTube)
@@ -6998,11 +7557,52 @@ namespace DropBoard.Native
                 cm.Items.Add(new Separator());
             }
 
+            // Local Video specific actions
+            if (item.IsLocalVideo)
+            {
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateBadgeIcon("VID", "#38BDF8", "#0C2A4A", "#1E40AF"),
+                    item.IsVideoPlaying ? "Pause Video" : "Play Video",
+                    "Toggle local video playback",
+                    (s, e) => ToggleLocalVideoPlayback(item)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateBadgeIcon("Ae", "#9999FF", "#2E284A", "#4A3F75"),
+                    "Snap Frame to After Effects",
+                    "Capture video frame directly to AE comp",
+                    (s, e) => SnapLocalVideoFrameToAE(item)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateBadgeIcon("📋", "#34D399", "#064E3B", "#059669"),
+                    "Snap Frame to Canvas",
+                    "Capture video frame as reference card",
+                    (s, e) => SnapLocalVideoFrameToBoard(item)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 15,3 h 6 v 6 M 9,21 H 3 v -6 M 21,3 l -7,7 M 3,21 l 7,-7"),
+                    "Fit to Video Resolution",
+                    "Fit card aspect ratio to original video dimensions",
+                    (s, e) => FitVideoCardToResolution(item)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 4,4 h 16 v 16 H 4 Z"),
+                    "Original 1:1 Video Size",
+                    "Set card to exact 1:1 pixel resolution of video",
+                    (s, e) => ResetVideoToOriginal1to1(item)
+                ));
+
+                cm.Items.Add(new Separator());
+            }
+
             // 1. Send to After Effects
             cm.Items.Add(CreateRichMenuItem(
                 CreateBadgeIcon("Ae", "#9999FF", "#2E284A", "#4A3F75"),
-                "Send to After Effects",
-                "Auto-import footage to comp",
+                isMulti ? $"Send to After Effects ({selCount} Items)" : "Send to After Effects",
+                isMulti ? $"Auto-import {selCount} references to AE comp as Guide Layers (#)" : "Auto-import footage to comp as Guide Layer (#)",
                 (s, e) =>
                 {
                     if (_selectedCards.Contains(item) && _selectedCards.Count > 1)
@@ -7080,23 +7680,31 @@ namespace DropBoard.Native
             // 6. Bring to Front
             cm.Items.Add(CreateRichMenuItem(
                 CreateMenuIcon("M 12,2 L 2,7 L 12,12 L 22,7 Z M 2,17 L 12,22 L 22,17 M 2,12 L 12,17 L 22,12"),
-                "Bring to Front",
+                isMulti ? $"Bring Selection to Front ({selCount})" : "Bring to Front",
                 "Stack above other items (Ctrl + ])",
                 (s, e) =>
                 {
-                    Panel.SetZIndex(item.Container, ++_highestZ);
+                    var targets = isMulti ? _selectedCards.ToList() : new List<CardItem> { item };
+                    foreach (var c in targets)
+                    {
+                        Panel.SetZIndex(c.Container, ++_highestZ);
+                    }
                     ScheduleAutoSave();
                 }
             ));
 
             // 6b. Send to Back
             cm.Items.Add(CreateRichMenuItem(
-                CreateMenuIcon("M 12,22 L 2,17 L 12,12 L 22,17 Z M 2,7 L 12,2 L 22,7 M 2,12 L 12,7 L 22,12"),
-                "Send to Back",
+                CreateMenuIcon("M 12,22 L 2,17 L 12,12 L 22,17 Z M 2,7 L 12,2 L 2,7 M 2,12 L 12,7 L 22,12"),
+                isMulti ? $"Send Selection to Back ({selCount})" : "Send to Back",
                 "Stack below other items (Ctrl + [)",
                 (s, e) =>
                 {
-                    Panel.SetZIndex(item.Container, --_lowestZ);
+                    var targets = isMulti ? _selectedCards.ToList() : new List<CardItem> { item };
+                    foreach (var c in targets)
+                    {
+                        Panel.SetZIndex(c.Container, --_lowestZ);
+                    }
                     ScheduleAutoSave();
                 }
             ));
@@ -7104,15 +7712,22 @@ namespace DropBoard.Native
             // 7. Reset 1:1 Scale
             cm.Items.Add(CreateRichMenuItem(
                 CreateMenuIcon("M 15,3 L 21,3 L 21,9 M 9,21 L 3,21 L 3,15 M 21,3 L 14,10 M 3,21 L 10,14", "#38BDF8"),
-                "Reset 1:1 Scale",
-                "",
+                isMulti ? $"Reset 1:1 Scale ({selCount} Selected)" : "Reset 1:1 Scale",
+                isMulti ? $"Reset all {selCount} items to natural pixel dimensions" : "",
                 (s, e) =>
                 {
                     RecordUndo("Reset 1:1 Scale");
-                    item.Width = item.Bitmap.PixelWidth;
-                    item.Height = item.Bitmap.PixelHeight;
+                    var targets = isMulti ? _selectedCards.ToList() : new List<CardItem> { item };
+                    foreach (var c in targets)
+                    {
+                        if (c.Bitmap != null)
+                        {
+                            c.Width = c.Bitmap.PixelWidth;
+                            c.Height = c.Bitmap.PixelHeight;
+                        }
+                    }
                     ScheduleAutoSave();
-                    ShowToast("Reset 1:1 Scale", ToastType.Info);
+                    ShowToast(isMulti ? $"Reset 1:1 Scale for {targets.Count} items" : "Reset 1:1 Scale", ToastType.Info);
                 }
             ));
 
@@ -7121,25 +7736,147 @@ namespace DropBoard.Native
             // 8. Zoom to Reference
             cm.Items.Add(CreateRichMenuItem(
                 CreateMenuIcon("M 11,19 A 8,8 0 1 0 11,3 A 8,8 0 0 0 11,19 Z M 21,21 L 16.65,16.65"),
-                "Zoom to Reference",
-                "Focus canvas view on this image",
-                (s, e) => ZoomToCard(item)
+                isMulti ? $"Zoom to Selection ({selCount})" : "Zoom to Reference",
+                isMulti ? "Focus canvas view on selected items" : "Focus canvas view on this image",
+                (s, e) =>
+                {
+                    if (isMulti)
+                        ZoomToSelectedCards();
+                    else
+                        ZoomToCard(item);
+                }
             ));
 
             // 9. Delete Reference
             cm.Items.Add(CreateRichMenuItem(
                 CreateMenuIcon("M 3,6 L 5,6 L 21,6 M 19,6 L 19,20 A 2,2 0 0 1 17,22 L 7,22 A 2,2 0 0 1 5,20 L 5,6 M 8,6 L 8,4 A 2,2 0 0 1 10,2 L 14,2 A 2,2 0 0 1 16,4 L 16,6", "#EF4444"),
-                "Delete Reference",
-                "",
+                isMulti ? $"Delete {selCount} Selected References" : "Delete Reference",
+                isMulti ? "Remove selected references from canvas (Del)" : "",
                 (s, e) =>
                 {
                     DeleteSelectedCards();
-                    ShowToast("Deleted reference", ToastType.Info);
+                    ShowToast(isMulti ? $"Deleted {selCount} references" : "Deleted reference", ToastType.Info);
                 },
                 titleColor: "#EF4444"
             ));
 
             return cm;
+        }
+
+        private void ShowCanvasContextMenu(Point screenPoint, Point worldPoint)
+        {
+            ContextMenu cm = new ContextMenu
+            {
+                PlacementTarget = CanvasContainer,
+                Placement = PlacementMode.MousePoint
+            };
+
+            // Category Header: "CANVAS TOOLS"
+            MenuItem miHeader = new MenuItem
+            {
+                Header = new TextBlock
+                {
+                    Text = "CANVAS TOOLS",
+                    FontSize = 9.0,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                    Margin = new Thickness(8, 4, 8, 4)
+                },
+                IsEnabled = false,
+                Focusable = false
+            };
+            cm.Items.Add(miHeader);
+
+            // 1. Add Scene Group Frame
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 3,3 h 18 v 18 H 3 Z M 8,8 h 8 v 3 H 8 Z", "#3B82F6"),
+                "Add Scene Group",
+                "Storyboard container frame with notes & info",
+                (s, e) =>
+                {
+                    AddSceneGroup(
+                        title: $"Scene {(_groups.Count + 1):D2}",
+                        customX: worldPoint.X - 230,
+                        customY: worldPoint.Y - 190);
+                    ShowToast("Added Scene Group Frame", ToastType.Success);
+                }
+            ));
+
+            // 2. Add Sticky Note / Text Card
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 4,4 L 16,4 L 20,8 L 20,20 L 4,20 Z M 16,4 L 16,8 L 20,8 M 8,10 h 5 M 8,14 h 8", "#38BDF8"),
+                "Add Text / Sticky Note",
+                "Lyrics, checklist, direction, or notes (N)",
+                (s, e) =>
+                {
+                    AddNoteCard(worldPosition: worldPoint);
+                    ShowToast("Added Note Card", ToastType.Success);
+                }
+            ));
+
+            // 3. Freehand Canvas Brush Tool
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 17 3 a 2.85 2.83 0 1 1 4 4 L 7.5 20.5 L 2 22 L 3.5 16.5 Z M 15 5 L 19 9", "#A855F7"),
+                "Canvas Freehand Brush",
+                "Draw and annotate directly on canvas (B/P)",
+                (s, e) => BtnAddDraw_Click(s, e)
+            ));
+
+            cm.Items.Add(new Separator());
+
+            // 4. Auto-Arrange Grid
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 3,3 h 7 v 7 H 3 Z M 14,3 h 7 v 7 H 14 Z M 14,14 h 7 v 7 H 14 Z M 3,14 h 7 v 7 H 3 Z", "#38BDF8"),
+                "Auto-Arrange Grid",
+                "Pack all loose references into neat masonry grid",
+                (s, e) => BtnGridArrange_Click(s, e)
+            ));
+
+            // 5. Pipeline Storyboard Arrange
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 3,6 h 5 M 3,12 h 5 M 3,18 h 5 M 12,4 h 9 v 4 H 12 Z M 12,10 h 9 v 4 H 12 Z M 12,16 h 9 v 4 H 12 Z", "#818CF8"),
+                "Pipeline Storyboard",
+                "Arrange cards in storyboard sequence row",
+                (s, e) => BtnPipelineArrange_Click(s, e)
+            ));
+
+            cm.Items.Add(new Separator());
+
+            // 6. Add Image File...
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 14,2 L 6,2 A 2,2 0 0 0 4,4 L 4,20 A 2,2 0 0 0 6,22 L 18,22 A 2,2 0 0 0 20,20 L 20,8 Z M 14,2 L 14,8 L 20,8 M 12,18 L 12,12 M 9,15 L 15,15", "#10B981"),
+                "Import Image File...",
+                "Open file dialog to add image references",
+                (s, e) => BtnAddImage_Click(s, e)
+            ));
+
+            // 7. Add URL Reference...
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 12,2 A 10,10 0 1 0 22,12 A 10,10 0 0 0 12,2 Z M 2,12 h 20 M 12,2 A 15.3,15.3 0 0 1 16,12 A 15.3,15.3 0 0 1 12,22 A 15.3,15.3 0 0 1 8,12 A 15.3,15.3 0 0 1 12,2 Z", "#F59E0B"),
+                "Add Web Reference (URL)...",
+                "Paste YouTube, Pinterest, or web image URL",
+                (s, e) => BtnAddUrl_Click(s, e)
+            ));
+
+            // 8. Paste Image / URL
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 9,9 L 22,9 L 22,22 L 9,22 Z M 5,15 L 4,15 A 2,2 0 0 1 2,13 L 2,4 A 2,2 0 0 1 4,2 L 13,2 A 2,2 0 0 1 15,4 L 15,5", "#38BDF8"),
+                "Paste Image / URL",
+                "Paste from clipboard directly to canvas (Ctrl+V)",
+                (s, e) => PasteFromClipboard()
+            ));
+
+            cm.Items.Add(new Separator());
+
+            // 9. Fit Canvas in View
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 15,3 h 6 v 6 M 9,21 H 3 v -6 M 21,3 l -7,7 M 3,21 l 7,-7", "#94A3B8"),
+                "Fit Canvas in View",
+                "Frame all cards neatly into viewport (F / Home)",
+                (s, e) => ZoomToFitAllCards(animated: true)
+            ));
+
+            cm.IsOpen = true;
         }
 
         #region Card Hover Quick-Action Toolbar & Interactive Crop
@@ -7359,6 +8096,74 @@ namespace DropBoard.Native
                 sp.Children.Add(btnSnapAe);
                 sp.Children.Add(btnSnapBoard);
                 sp.Children.Add(btnBrowser);
+                sp.Children.Add(btnCopy);
+                sp.Children.Add(btnDel);
+            }
+            else if (item.IsLocalVideo)
+            {
+                Border btnPlay = CreatePillButton(item.IsVideoPlaying ? "⏸ Pause" : "▶ Play", Color.FromRgb(56, 189, 248), "Play / Pause Video", () =>
+                {
+                    ToggleLocalVideoPlayback(item);
+                }, isBold: true);
+                item.BtnVideoPlayOverlay = btnPlay;
+
+                Border btnLoop = CreatePillButton(item.IsVideoLooping ? "🔁 Loop ON" : "🔁 Loop OFF", item.IsVideoLooping ? Color.FromRgb(52, 211, 153) : Color.FromRgb(156, 163, 175), "Toggle Video Looping", () =>
+                {
+                    item.IsVideoLooping = !item.IsVideoLooping;
+                    if (item.BtnVideoLoopOverlay?.Child is TextBlock tb)
+                    {
+                        tb.Text = item.IsVideoLooping ? "🔁 Loop ON" : "🔁 Loop OFF";
+                        tb.Foreground = new SolidColorBrush(item.IsVideoLooping ? Color.FromRgb(52, 211, 153) : Color.FromRgb(156, 163, 175));
+                    }
+                    ShowToast(item.IsVideoLooping ? "🔁 Video Loop Enabled" : "Video Loop Disabled", ToastType.Info, 1500);
+                    ScheduleAutoSave();
+                });
+                item.BtnVideoLoopOverlay = btnLoop;
+
+                Border btnMute = CreatePillButton(item.IsVideoMuted ? "🔇 Muted" : "🔊 Sound", item.IsVideoMuted ? Color.FromRgb(251, 146, 60) : Color.FromRgb(96, 165, 250), "Toggle Audio Mute", () =>
+                {
+                    item.IsVideoMuted = !item.IsVideoMuted;
+                    if (item.NativePlayer != null) item.NativePlayer.IsMuted = item.IsVideoMuted;
+                    if (item.BtnVideoMuteOverlay?.Child is TextBlock tb)
+                    {
+                        tb.Text = item.IsVideoMuted ? "🔇 Muted" : "🔊 Sound";
+                        tb.Foreground = new SolidColorBrush(item.IsVideoMuted ? Color.FromRgb(251, 146, 60) : Color.FromRgb(96, 165, 250));
+                    }
+                    ShowToast(item.IsVideoMuted ? "🔇 Audio Muted" : "🔊 Audio Unmuted", ToastType.Info, 1500);
+                });
+                item.BtnVideoMuteOverlay = btnMute;
+
+                Border btnSnapAe = CreatePillButton("📸 AE", Color.FromRgb(165, 180, 252), "Snapshot clean video frame directly to Adobe After Effects", () =>
+                {
+                    SnapLocalVideoFrameToAE(item);
+                }, isBold: true);
+
+                Border btnSnapBoard = CreatePillButton("📋 Board", Color.FromRgb(52, 211, 153), "Snapshot clean video frame to DropBoard canvas", () =>
+                {
+                    SnapLocalVideoFrameToBoard(item);
+                }, isBold: true);
+
+                Border btnCopy = CreatePillButton("Copy", Color.FromRgb(209, 213, 219), "Copy Video File to Clipboard", () =>
+                {
+                    CopyCardToClipboard(item);
+                });
+
+                Border btnDel = CreatePillButton("✕", Color.FromRgb(239, 68, 68), "Delete Video (Del)", () =>
+                {
+                    RemoveCard(item);
+                }, isBold: true);
+
+                Border btnFit = CreatePillButton("⛶ Fit Reso", Color.FromRgb(56, 189, 248), "Fit card dimensions to exact video resolution & aspect ratio", () =>
+                {
+                    FitVideoCardToResolution(item);
+                }, isBold: true);
+
+                sp.Children.Add(btnPlay);
+                sp.Children.Add(btnFit);
+                sp.Children.Add(btnLoop);
+                sp.Children.Add(btnMute);
+                sp.Children.Add(btnSnapAe);
+                sp.Children.Add(btnSnapBoard);
                 sp.Children.Add(btnCopy);
                 sp.Children.Add(btnDel);
             }
@@ -9613,6 +10418,12 @@ namespace DropBoard.Native
             MenuItem miAe = new MenuItem { Header = "🎬 Export to After Effects" };
             miAe.Click += (s, e) => ExportCanvasPaletteToAe(item);
 
+            MenuItem miSave = new MenuItem { Header = "💾 Save Palette Image (PNG)" };
+            miSave.Click += (s, e) => SavePaletteCardImage(item);
+
+            MenuItem miFolder = new MenuItem { Header = "📁 Open Palettes Folder" };
+            miFolder.Click += (s, e) => OpenPalettesFolder();
+
             MenuItem miCopy = new MenuItem { Header = "📋 Copy Palette Image" };
             miCopy.Click += (s, e) => CopyCardToClipboard(item);
 
@@ -9629,6 +10440,8 @@ namespace DropBoard.Native
 
             cm.Items.Add(miPins);
             cm.Items.Add(miAe);
+            cm.Items.Add(miSave);
+            cm.Items.Add(miFolder);
             cm.Items.Add(miCopy);
             cm.Items.Add(miZoom);
             cm.Items.Add(new Separator());
@@ -9844,6 +10657,7 @@ namespace DropBoard.Native
             };
             container.MouseRightButtonUp += (s, e) =>
             {
+                container.ContextMenu = CreateCardContextMenu(item);
                 if (container.ContextMenu != null)
                 {
                     container.ContextMenu.PlacementTarget = container;
@@ -10060,15 +10874,23 @@ namespace DropBoard.Native
             cellGrid.MouseEnter += (s, e) => hoverOverlay.Opacity = 0.12;
             cellGrid.MouseLeave += (s, e) => hoverOverlay.Opacity = 0;
 
-            // Bottom bar: Hex text + copy icon (Seamless Coolors / Adobe style)
-            Grid bottomBar = new Grid
+            // Bottom bar: Hex text + copy icon button (Seamless Coolors / Adobe style)
+            Border copyPill = new Border
             {
                 VerticalAlignment = VerticalAlignment.Bottom,
-                Margin = new Thickness(isTwoRows ? 6 : 8, 0, isTwoRows ? 6 : 8, isTwoRows ? 6 : 10),
-                IsHitTestVisible = false
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Margin = new Thickness(isTwoRows ? 4 : 6, 0, isTwoRows ? 4 : 6, isTwoRows ? 5 : 8),
+                Padding = new Thickness(isTwoRows ? 3 : 5, 2, isTwoRows ? 3 : 5, 2),
+                CornerRadius = new CornerRadius(4),
+                Background = Brushes.Transparent,
+                Cursor = Cursors.Hand,
+                ToolTip = $"Click to copy {pin.Hex}",
+                IsHitTestVisible = true
             };
-            bottomBar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            bottomBar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            Grid pillGrid = new Grid();
+            pillGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            pillGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             TextBlock hexTb = new TextBlock
             {
@@ -10082,14 +10904,14 @@ namespace DropBoard.Native
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
             Grid.SetColumn(hexTb, 0);
-            bottomBar.Children.Add(hexTb);
+            pillGrid.Children.Add(hexTb);
 
             System.Windows.Shapes.Path copyIcon = new System.Windows.Shapes.Path
             {
                 Data = Geometry.Parse("M19,21H8V7h11m0-2H8a2,2 0 0,0-2,2v14a2,2 0 0,0 2,2h11a2,2 0 0,0 2-2V7a2,2 0 0,0-2-2m-3-4H4a2,2 0 0,0-2,2v14h2V3h12V1Z"),
                 Fill = subBrush,
-                Width = isTwoRows ? 10 : 12,
-                Height = isTwoRows ? 10 : 12,
+                Width = isTwoRows ? 11 : 13,
+                Height = isTwoRows ? 11 : 13,
                 Stretch = Stretch.Uniform,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -10097,10 +10919,55 @@ namespace DropBoard.Native
                 Opacity = 0.85
             };
             Grid.SetColumn(copyIcon, 1);
-            bottomBar.Children.Add(copyIcon);
+            pillGrid.Children.Add(copyIcon);
+            copyPill.Child = pillGrid;
+
+            Color pillHoverCol = isLight ? Color.FromArgb(40, 0, 0, 0) : Color.FromArgb(45, 255, 255, 255);
+            copyPill.MouseEnter += (s, e) =>
+            {
+                copyPill.Background = new SolidColorBrush(pillHoverCol);
+                copyIcon.Opacity = 1.0;
+            };
+            copyPill.MouseLeave += (s, e) =>
+            {
+                copyPill.Background = Brushes.Transparent;
+                copyIcon.Opacity = 0.85;
+            };
+
+            string curHex = pin.Hex;
+            Action performCopy = () =>
+            {
+                try
+                {
+                    Clipboard.SetText(curHex);
+                    ShowToast($"Copied {curHex} to clipboard!", ToastType.Success);
+
+                    // Morph icon into checkmark for 800ms
+                    copyIcon.Data = Geometry.Parse("M9,20.42L2.79,14.21L5.62,11.38L9,14.77L18.88,4.88L21.71,7.71L9,20.42Z");
+                    copyIcon.Fill = isLight ? new SolidColorBrush(Color.FromRgb(16, 185, 129)) : new SolidColorBrush(Color.FromRgb(52, 211, 153));
+                    DispatcherTimer dt = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(800) };
+                    dt.Tick += (s, e) =>
+                    {
+                        dt.Stop();
+                        copyIcon.Data = Geometry.Parse("M19,21H8V7h11m0-2H8a2,2 0 0,0-2,2v14a2,2 0 0,0 2,2h11a2,2 0 0,0 2-2V7a2,2 0 0,0-2-2m-3-4H4a2,2 0 0,0-2,2v14h2V3h12V1Z");
+                        copyIcon.Fill = subBrush;
+                    };
+                    dt.Start();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Clipboard] Copy error: {ex.Message}");
+                }
+            };
+
+            copyPill.PreviewMouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true; // Stop bubbling so card drag is NOT initiated on copy click!
+                performCopy();
+            };
 
             cellGrid.Children.Add(hoverOverlay);
-            cellGrid.Children.Add(bottomBar);
+            cellGrid.Children.Add(copyPill);
 
             // Right-click context menu: Pick custom color or copy hex
             ContextMenu swatchMenu = new ContextMenu();
@@ -10117,6 +10984,14 @@ namespace DropBoard.Native
                     {
                         Color c = (Color)ColorConverter.ConvertFromString(chosenHex);
                         pin.Color = c;
+                        paletteCard.PaletteMoodCache[paletteCard.PaletteMood] = paletteCard.ActivePalettePins.Select(p => new PalettePin
+                        {
+                            RelX = p.RelX,
+                            RelY = p.RelY,
+                            Color = p.Color,
+                            IsLocked = p.IsLocked
+                        }).ToList();
+
                         UpdatePaletteCardContent(paletteCard);
                         if (paletteCard.LinkedSourceImageCard != null && paletteCard.LinkedSourceImageCard.IsPaletteMode)
                         {
@@ -10129,12 +11004,7 @@ namespace DropBoard.Native
             };
 
             MenuItem miCopy = new MenuItem { Header = $"📋 Copy Hex ({pin.Hex})" };
-            string curHex = pin.Hex;
-            miCopy.Click += (s, e) =>
-            {
-                Clipboard.SetText(curHex);
-                ShowToast($"Copied {curHex} to clipboard!", ToastType.Success);
-            };
+            miCopy.Click += (s, e) => performCopy();
 
             swatchMenu.Items.Add(miPick);
             swatchMenu.Items.Add(miCopy);
@@ -10147,32 +11017,11 @@ namespace DropBoard.Native
                 e.Handled = true;
             };
 
-            // Support click to copy without blocking card dragging:
-            // MouseDown records position, lets event bubble so card drag works.
-            // MouseUp checks distance: if mouse moved < 6px and not dragging cards, copy hex!
-            Point? mouseDownPoint = null;
-            string currentHex = pin.Hex;
-
-            cellGrid.MouseLeftButtonDown += (s, e) =>
+            // Swatch body click: clicking anywhere on the color swatch (without dragging > 5px) also copies hex!
+            cellGrid.PreviewMouseLeftButtonDown += (s, e) =>
             {
-                mouseDownPoint = e.GetPosition(cellGrid);
-            };
-
-            cellGrid.MouseLeftButtonUp += (s, e) =>
-            {
-                if (mouseDownPoint.HasValue)
-                {
-                    Point upPoint = e.GetPosition(cellGrid);
-                    double dist = (upPoint - mouseDownPoint.Value).Length;
-                    mouseDownPoint = null;
-
-                    if (dist < 6.0 && !_isDraggingCards)
-                    {
-                        Clipboard.SetText(currentHex);
-                        ShowToast($"Copied {currentHex} to clipboard!", ToastType.Success);
-                        e.Handled = true;
-                    }
-                }
+                _pendingSwatchClick = (paletteCard, performCopy);
+                _pendingSwatchStartPoint = e.GetPosition(CanvasContainer);
             };
 
             return cellGrid;
@@ -10367,8 +11216,44 @@ namespace DropBoard.Native
             BitmapSource? bmp = source.Bitmap ?? source.OriginalBitmap;
             if (bmp == null) return;
 
-            int seed = isRandom ? new Random().Next(1, 999999) : 0;
-            var pins = ColorPaletteExtractor.ExtractPalette(bmp, paletteCard.PaletteColorCount, paletteCard.PaletteMood, seed);
+            List<PalettePin> pins;
+            if (isRandom)
+            {
+                int seed = new Random().Next(1, 999999);
+                pins = ColorPaletteExtractor.ExtractPalette(bmp, paletteCard.PaletteColorCount, paletteCard.PaletteMood, seed);
+                paletteCard.PaletteMoodCache[paletteCard.PaletteMood] = pins.Select(p => new PalettePin
+                {
+                    RelX = p.RelX,
+                    RelY = p.RelY,
+                    Color = p.Color,
+                    IsLocked = p.IsLocked
+                }).ToList();
+            }
+            else
+            {
+                if (paletteCard.PaletteMoodCache.TryGetValue(paletteCard.PaletteMood, out var cached) && cached.Count == paletteCard.PaletteColorCount)
+                {
+                    pins = cached.Select(p => new PalettePin
+                    {
+                        RelX = p.RelX,
+                        RelY = p.RelY,
+                        Color = p.Color,
+                        IsLocked = p.IsLocked
+                    }).ToList();
+                }
+                else
+                {
+                    pins = ColorPaletteExtractor.ExtractPalette(bmp, paletteCard.PaletteColorCount, paletteCard.PaletteMood, 0);
+                    paletteCard.PaletteMoodCache[paletteCard.PaletteMood] = pins.Select(p => new PalettePin
+                    {
+                        RelX = p.RelX,
+                        RelY = p.RelY,
+                        Color = p.Color,
+                        IsLocked = p.IsLocked
+                    }).ToList();
+                }
+            }
+
             paletteCard.ActivePalettePins = pins;
             source.ActivePalettePins = pins;
             source.PaletteColorCount = paletteCard.PaletteColorCount;
@@ -10546,6 +11431,17 @@ namespace DropBoard.Native
                 };
                 mi.Click += (s, e) =>
                 {
+                    if (item.ActivePalettePins != null && item.ActivePalettePins.Count > 0)
+                    {
+                        item.PaletteMoodCache[item.PaletteMood] = item.ActivePalettePins.Select(p => new PalettePin
+                        {
+                            RelX = p.RelX,
+                            RelY = p.RelY,
+                            Color = p.Color,
+                            IsLocked = p.IsLocked
+                        }).ToList();
+                    }
+
                     item.PaletteMood = targetMood;
                     RefreshPaletteCardFromSource(item, isRandom: false);
                     RebuildCardHoverToolbar(item);
@@ -10570,13 +11466,12 @@ namespace DropBoard.Native
             if (item.ActivePalettePins == null || item.ActivePalettePins.Count == 0) return;
             try
             {
-                string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "DropBoard_Palettes");
                 string title = item.LinkedSourceImageCard != null && !string.IsNullOrEmpty(item.LinkedSourceImageCard.LocalPath)
                     ? System.IO.Path.GetFileNameWithoutExtension(item.LinkedSourceImageCard.LocalPath)
                     : "Theme";
                 string savedFile = PaletteCardRenderer.SavePaletteImageToFile(
                     item.ActivePalettePins,
-                    tempDir,
+                    PalettesDir,
                     "Palette_" + title,
                     rows: item.PaletteRows,
                     targetWidth: item.Width,
@@ -10607,6 +11502,30 @@ namespace DropBoard.Native
             catch (Exception ex)
             {
                 ShowToast("AE Export failed: " + ex.Message, ToastType.Error);
+            }
+        }
+
+        private void SavePaletteCardImage(CardItem item)
+        {
+            if (item.ActivePalettePins == null || item.ActivePalettePins.Count == 0) return;
+            try
+            {
+                string title = item.LinkedSourceImageCard != null && !string.IsNullOrEmpty(item.LinkedSourceImageCard.LocalPath)
+                    ? System.IO.Path.GetFileNameWithoutExtension(item.LinkedSourceImageCard.LocalPath)
+                    : "Theme";
+                string savedFile = PaletteCardRenderer.SavePaletteImageToFile(
+                    item.ActivePalettePins,
+                    PalettesDir,
+                    "Palette_" + title,
+                    rows: item.PaletteRows,
+                    targetWidth: item.Width,
+                    targetHeight: item.Height);
+
+                ShowToast("Saved palette image to Palettes folder!", ToastType.Success);
+            }
+            catch (Exception ex)
+            {
+                ShowToast("Save failed: " + ex.Message, ToastType.Error);
             }
         }
 
@@ -10701,6 +11620,10 @@ namespace DropBoard.Native
                 try { card.PlayerControl.Dispose(); } catch { }
                 card.PlayerControl = null;
             }
+            if (card.IsLocalVideo)
+            {
+                CleanupLocalVideoCard(card);
+            }
         }
 
         private void RemoveCard(CardItem card)
@@ -10723,6 +11646,16 @@ namespace DropBoard.Native
         {
             try
             {
+                if (item.IsLocalVideo)
+                {
+                    if (!string.IsNullOrEmpty(item.VideoFilePath) && File.Exists(item.VideoFilePath))
+                    {
+                        var sc = new System.Collections.Specialized.StringCollection { item.VideoFilePath };
+                        Clipboard.SetFileDropList(sc);
+                        ShowToast("Copied video file to clipboard", ToastType.Success);
+                        return;
+                    }
+                }
                 if (item.IsDrawCard)
                 {
                     CopyDrawCardToClipboard(item);
@@ -11407,6 +12340,48 @@ namespace DropBoard.Native
 
             AnimateCanvasView(targetZoom, targetOffsetX, targetOffsetY);
             ShowToast($"Zoomed to reference ({(int)Math.Round(targetZoom * 100)}%)", ToastType.Info);
+        }
+
+        private void ZoomToSelectedCards()
+        {
+            if (_selectedCards.Count == 0) return;
+            if (_selectedCards.Count == 1) { ZoomToCard(_selectedCards.First()); return; }
+
+            double minX = _selectedCards.Min(c => c.X);
+            double minY = _selectedCards.Min(c => c.Y);
+            double maxX = _selectedCards.Max(c => c.X + c.Width);
+            double maxY = _selectedCards.Max(c => c.Y + c.Height);
+
+            double viewW = CanvasContainer.ActualWidth > 0 ? CanvasContainer.ActualWidth : ActualWidth;
+            double viewH = CanvasContainer.ActualHeight > 0 ? CanvasContainer.ActualHeight : ActualHeight;
+            if (viewW <= 0) viewW = 800;
+            if (viewH <= 0) viewH = 600;
+
+            const double marginX = 140.0;
+            const double marginY = 160.0;
+
+            double availW = Math.Max(50.0, viewW - marginX);
+            double availH = Math.Max(50.0, viewH - marginY);
+
+            double selW = Math.Max(10.0, maxX - minX);
+            double selH = Math.Max(10.0, maxY - minY);
+
+            double scaleX = availW / selW;
+            double scaleY = availH / selH;
+            double fitScale = Math.Min(scaleX, scaleY) * 0.90;
+            double targetZoom = Math.Clamp(fitScale, 0.15, 3.5);
+
+            double selCenterX = minX + (selW / 2.0);
+            double selCenterY = minY + (selH / 2.0);
+
+            double viewCenterX = viewW / 2.0;
+            double viewCenterY = (viewH + 40.0) / 2.0;
+
+            double targetOffsetX = viewCenterX - (selCenterX * targetZoom);
+            double targetOffsetY = viewCenterY - (selCenterY * targetZoom);
+
+            AnimateCanvasView(targetZoom, targetOffsetX, targetOffsetY);
+            ShowToast($"Zoomed to {_selectedCards.Count} references ({(int)Math.Round(targetZoom * 100)}%)", ToastType.Info);
         }
 
         private void AnimateCanvasView(double targetZoom, double targetOffsetX, double targetOffsetY)
@@ -12449,6 +13424,533 @@ namespace DropBoard.Native
 
         #endregion
 
+        #region Native Local Video Playback (.mp4, .mkv, .3gp, .webm, .mov, .avi, .wmv)
+
+        private static readonly HashSet<string> SupportedVideoExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".mp4", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".3gp", ".m4v"
+        };
+
+        private static bool IsSupportedVideoExtension(string? ext)
+        {
+            if (string.IsNullOrEmpty(ext)) return false;
+            return SupportedVideoExtensions.Contains(ext);
+        }
+
+        [ComImport]
+        [Guid("bcc18b79-ba16-442f-80c4-8a140df3cb83")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IShellItemImageFactory
+        {
+            [PreserveSig]
+            int GetImage(
+                [In, MarshalAs(UnmanagedType.Struct)] SH_SIZE size,
+                [In] SIIGBF flags,
+                [Out] out IntPtr phbm);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SH_SIZE
+        {
+            public int cx;
+            public int cy;
+            public SH_SIZE(int cx, int cy) { this.cx = cx; this.cy = cy; }
+        }
+
+        [Flags]
+        private enum SIIGBF
+        {
+            SIIGBF_RESIZETOFIT = 0x00,
+            SIIGBF_BIGGERSIZEOK = 0x01,
+            SIIGBF_MEMORYONLY = 0x02,
+            SIIGBF_ICONONLY = 0x04,
+            SIIGBF_THUMBNAILONLY = 0x08,
+            SIIGBF_INCACHEONLY = 0x10
+        }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern int SHCreateItemFromParsingName(
+            [MarshalAs(UnmanagedType.LPWStr)] string path,
+            IntPtr pbc,
+            ref Guid riid,
+            [MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory factory);
+
+        [DllImport("gdi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DeleteObject(IntPtr hObject);
+
+        private static BitmapSource GetVideoPosterBitmap(string filePath)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+                {
+                    Guid uuid = new Guid("bcc18b79-ba16-442f-80c4-8a140df3cb83");
+                    int hr = SHCreateItemFromParsingName(filePath, IntPtr.Zero, ref uuid, out IShellItemImageFactory factory);
+                    if (hr == 0 && factory != null)
+                    {
+                        hr = factory.GetImage(new SH_SIZE(640, 640), SIIGBF.SIIGBF_BIGGERSIZEOK | SIIGBF.SIIGBF_RESIZETOFIT, out IntPtr hBitmap);
+                        if (hr != 0 || hBitmap == IntPtr.Zero)
+                        {
+                            hr = factory.GetImage(new SH_SIZE(256, 256), SIIGBF.SIIGBF_RESIZETOFIT, out hBitmap);
+                        }
+                        if (hr == 0 && hBitmap != IntPtr.Zero)
+                        {
+                            try
+                            {
+                                var bmp = System.Windows.Interop.Imaging.CreateBitmapSourceFromHBitmap(
+                                    hBitmap,
+                                    IntPtr.Zero,
+                                    Int32Rect.Empty,
+                                    BitmapSizeOptions.FromEmptyOptions());
+                                bmp.Freeze();
+                                return bmp;
+                            }
+                            finally
+                            {
+                                DeleteObject(hBitmap);
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return CreateFallbackVideoPoster(filePath);
+        }
+
+        private static BitmapSource CreateFallbackVideoPoster(string filePath)
+        {
+            string fileName = string.IsNullOrEmpty(filePath) ? "Video File" : System.IO.Path.GetFileName(filePath);
+            string ext = string.IsNullOrEmpty(filePath) ? "VIDEO" : System.IO.Path.GetExtension(filePath).ToUpperInvariant().TrimStart('.');
+            int width = 640;
+            int height = 360;
+            var dv = new DrawingVisual();
+            using (var dc = dv.RenderOpen())
+            {
+                var bg = new LinearGradientBrush(
+                    Color.FromRgb(15, 23, 42),
+                    Color.FromRgb(30, 41, 59),
+                    new Point(0, 0),
+                    new Point(1, 1));
+                dc.DrawRectangle(bg, null, new Rect(0, 0, width, height));
+
+                dc.DrawRectangle(null, new Pen(new SolidColorBrush(Color.FromArgb(60, 56, 189, 248)), 2), new Rect(1, 1, width - 2, height - 2));
+
+                var playBrush = new SolidColorBrush(Color.FromArgb(200, 56, 189, 248));
+                var typeface = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.Bold, FontStretches.Normal);
+                var playText = new FormattedText("▶", System.Globalization.CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight, typeface, 56, playBrush, 96);
+                dc.DrawText(playText, new Point((width - playText.Width) / 2, height / 2 - 45));
+
+                var badgeText = new FormattedText($"[{ext}] {fileName}", System.Globalization.CultureInfo.InvariantCulture,
+                    FlowDirection.LeftToRight, typeface, 15, Brushes.White, 96);
+                dc.DrawText(badgeText, new Point((width - badgeText.Width) / 2, height / 2 + 25));
+            }
+            var rtb = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+            rtb.Render(dv);
+            rtb.Freeze();
+            return rtb;
+        }
+
+        private static string FormatVideoDuration(double currentSec, double totalSec)
+        {
+            TimeSpan cur = TimeSpan.FromSeconds(Math.Max(0, currentSec));
+            TimeSpan tot = TimeSpan.FromSeconds(Math.Max(0, totalSec));
+            string curStr = cur.Hours > 0 ? cur.ToString(@"h\:mm\:ss") : cur.ToString(@"m\:ss");
+            string totStr = tot.Hours > 0 ? tot.ToString(@"h\:mm\:ss") : tot.ToString(@"m\:ss");
+            return $"{curStr} / {totStr}";
+        }
+
+        private CardItem AddLocalVideoCard(
+            string filePath,
+            Point? worldPosition = null,
+            double? customWidth = null,
+            double? customHeight = null,
+            bool autoSelect = true,
+            bool isLooping = true,
+            bool isMuted = true,
+            bool recordUndo = true)
+        {
+            BitmapSource poster = GetVideoPosterBitmap(filePath);
+            return AddImageCard(
+                poster,
+                worldPosition: worldPosition,
+                customWidth: customWidth,
+                customHeight: customHeight,
+                localPath: filePath,
+                autoSelect: autoSelect,
+                recordUndo: recordUndo,
+                isLocalVideo: true,
+                videoFilePath: filePath,
+                isVideoLooping: isLooping,
+                isVideoMuted: isMuted);
+        }
+
+        private void ImportVideoFilesBatch(IEnumerable<string> filePaths, Point startWorldPos)
+        {
+            var list = filePaths.Where(f => !string.IsNullOrEmpty(f) && File.Exists(f)).ToList();
+            if (list.Count == 0) return;
+
+            Point curPos = startWorldPos;
+            foreach (string file in list)
+            {
+                AddLocalVideoCard(file, worldPosition: curPos, autoSelect: false, recordUndo: false);
+                curPos.X += 35;
+                curPos.Y += 35;
+            }
+            RecordUndo($"Import {list.Count} Video{(list.Count > 1 ? "s" : "")}");
+            UpdateViewportCulling();
+            ShowToast($"Imported {list.Count} local video{(list.Count > 1 ? "s" : "")}!", ToastType.Success);
+            ScheduleAutoSave();
+        }
+
+        private void ToggleLocalVideoPlayback(CardItem item)
+        {
+            if (!item.IsLocalVideo) return;
+            if (item.IsVideoPlaying)
+            {
+                PauseLocalVideo(item);
+            }
+            else
+            {
+                PlayLocalVideo(item);
+            }
+        }
+
+        private void PlayLocalVideo(CardItem item)
+        {
+            if (!item.IsLocalVideo || item.NativePlayer == null) return;
+
+            try
+            {
+                if (item.NativePlayer.Source == null && !string.IsNullOrEmpty(item.VideoFilePath) && File.Exists(item.VideoFilePath))
+                {
+                    item.NativePlayer.Source = new Uri(item.VideoFilePath, UriKind.Absolute);
+                }
+
+                item.NativePlayer.IsMuted = item.IsVideoMuted;
+                item.NativePlayer.Visibility = Visibility.Visible;
+                item.ImageControl.Visibility = Visibility.Collapsed;
+                item.NativePlayer.Play();
+                item.IsVideoPlaying = true;
+
+                if (item.VideoPlaybackTimer != null && !item.VideoPlaybackTimer.IsEnabled)
+                {
+                    item.VideoPlaybackTimer.Start();
+                }
+
+                UpdateVideoCardUI(item);
+                ShowToast($"▶ Playing video ({System.IO.Path.GetFileName(item.VideoFilePath)})", ToastType.Info, 1800);
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"PlayLocalVideo exception: {ex.Message}");
+                StopLocalVideo(item);
+                ShowToast($"Video playback error: {ex.Message}", ToastType.Error);
+            }
+        }
+
+        private void PauseLocalVideo(CardItem item)
+        {
+            if (!item.IsLocalVideo || item.NativePlayer == null) return;
+            try
+            {
+                item.NativePlayer.Pause();
+                item.IsVideoPlaying = false;
+                if (item.VideoPlaybackTimer != null && item.VideoPlaybackTimer.IsEnabled)
+                {
+                    item.VideoPlaybackTimer.Stop();
+                }
+                UpdateVideoCardUI(item);
+                ShowToast("⏸ Video Paused", ToastType.Info, 1200);
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"PauseLocalVideo error: {ex.Message}");
+            }
+        }
+
+        private void StopLocalVideo(CardItem item)
+        {
+            if (!item.IsLocalVideo || item.NativePlayer == null) return;
+            try
+            {
+                item.NativePlayer.Pause();
+                item.NativePlayer.Position = TimeSpan.FromMilliseconds(150);
+                item.IsVideoPlaying = false;
+                if (item.VideoPlaybackTimer != null && item.VideoPlaybackTimer.IsEnabled)
+                {
+                    item.VideoPlaybackTimer.Stop();
+                }
+                UpdateVideoCardUI(item);
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"StopLocalVideo error: {ex.Message}");
+            }
+        }
+
+        private void CleanupLocalVideoCard(CardItem item)
+        {
+            if (item.VideoPlaybackTimer != null)
+            {
+                try { item.VideoPlaybackTimer.Stop(); } catch { }
+                item.VideoPlaybackTimer = null;
+            }
+            if (item.NativePlayer != null)
+            {
+                try
+                {
+                    item.NativePlayer.Stop();
+                    item.NativePlayer.Source = null;
+                    item.NativePlayer.Close();
+                }
+                catch { }
+                item.NativePlayer = null;
+            }
+            item.IsVideoPlaying = false;
+        }
+
+        private void UpdateVideoCardUI(CardItem item)
+        {
+            if (item.BtnVideoPlayOverlay?.Child is TextBlock tb)
+            {
+                tb.Text = item.IsVideoPlaying ? "⏸ Pause" : "▶ Play";
+                tb.Foreground = new SolidColorBrush(item.IsVideoPlaying ? Color.FromRgb(251, 191, 36) : Color.FromRgb(56, 189, 248));
+            }
+            if (item.CenterVideoPlayBtn != null)
+            {
+                item.CenterVideoPlayBtn.Visibility = item.IsVideoPlaying ? Visibility.Collapsed : Visibility.Visible;
+            }
+            if (item.VideoScrubberContainer != null)
+            {
+                item.VideoScrubberContainer.Visibility = (item.IsVideoPlaying || item.IsSelected || item.Container.IsMouseOver)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+        }
+
+        private void FitVideoCardToResolution(CardItem item, bool notify = true)
+        {
+            if (!item.IsLocalVideo) return;
+
+            double naturalW = 0;
+            double naturalH = 0;
+
+            if (item.NativePlayer != null && item.NativePlayer.NaturalVideoWidth > 0 && item.NativePlayer.NaturalVideoHeight > 0)
+            {
+                naturalW = item.NativePlayer.NaturalVideoWidth;
+                naturalH = item.NativePlayer.NaturalVideoHeight;
+            }
+            else if (item.Bitmap != null && item.Bitmap.PixelWidth > 0 && item.Bitmap.PixelHeight > 0)
+            {
+                naturalW = item.Bitmap.PixelWidth;
+                naturalH = item.Bitmap.PixelHeight;
+            }
+
+            if (naturalW <= 0 || naturalH <= 0)
+            {
+                if (notify) ShowToast("Video dimensions not yet loaded. Play video first.", ToastType.Info);
+                return;
+            }
+
+            if (notify) RecordUndo("Fit Video Resolution");
+
+            double aspect = naturalW / naturalH;
+            item.AspectRatio = aspect;
+
+            double currentW = item.Width;
+            double currentH = item.Height;
+
+            double targetW;
+            double targetH;
+
+            if (naturalH >= naturalW)
+            {
+                // Portrait / Vertical Video (e.g. 9:16)
+                targetH = Math.Clamp(Math.Max(currentH, 360.0), 240.0, 620.0);
+                targetW = Math.Round(targetH * aspect);
+            }
+            else
+            {
+                // Landscape / Standard Video (e.g. 16:9)
+                targetW = Math.Clamp(Math.Max(currentW, 360.0), 280.0, 720.0);
+                targetH = Math.Round(targetW / aspect);
+            }
+
+            item.Width = targetW;
+            item.Height = targetH;
+            item.BaseWidth = targetW;
+            item.BaseHeight = targetH;
+
+            if (item.ImageControl != null) item.ImageControl.Stretch = Stretch.Uniform;
+            if (item.NativePlayer != null) item.NativePlayer.Stretch = Stretch.Uniform;
+
+            if (notify)
+            {
+                ShowToast($"⛶ Fitted to {(int)naturalW}x{(int)naturalH} ({aspect:F2}:1)", ToastType.Success, 2000);
+                ScheduleAutoSave();
+            }
+        }
+
+        private void ResetVideoToOriginal1to1(CardItem item)
+        {
+            if (!item.IsLocalVideo) return;
+            double naturalW = 0;
+            double naturalH = 0;
+            if (item.NativePlayer != null && item.NativePlayer.NaturalVideoWidth > 0 && item.NativePlayer.NaturalVideoHeight > 0)
+            {
+                naturalW = item.NativePlayer.NaturalVideoWidth;
+                naturalH = item.NativePlayer.NaturalVideoHeight;
+            }
+            if (naturalW > 0 && naturalH > 0)
+            {
+                RecordUndo("Reset Video to 1:1");
+                item.AspectRatio = naturalW / naturalH;
+                item.Width = naturalW;
+                item.Height = naturalH;
+                item.BaseWidth = naturalW;
+                item.BaseHeight = naturalH;
+                ShowToast($"Reset to 1:1 Original Res: {(int)naturalW}x{(int)naturalH}", ToastType.Success);
+                ScheduleAutoSave();
+            }
+        }
+
+        private async void SnapLocalVideoFrameToAE(CardItem item)
+        {
+            if (item == null) return;
+            ShowToast("📸 Capturing clean video frame to After Effects...", ToastType.Info, 2000);
+            try
+            {
+                byte[]? frameBytes = CaptureCleanLocalVideoFrame(item);
+                if (frameBytes == null || frameBytes.Length == 0)
+                {
+                    ShowToast("Could not capture video frame", ToastType.Error);
+                    return;
+                }
+
+                Directory.CreateDirectory(CacheDir);
+                using var md5 = System.Security.Cryptography.MD5.Create();
+                string hash = Convert.ToHexString(md5.ComputeHash(frameBytes))[..12].ToLowerInvariant();
+                string filename = $"snap_vid_{hash}.png";
+                string snapPath = System.IO.Path.Combine(CacheDir, filename);
+                if (!File.Exists(snapPath))
+                {
+                    await File.WriteAllBytesAsync(snapPath, frameBytes);
+                }
+
+                var payload = new AeExportCompPayload { Mode = "loose_photos" };
+                payload.Items.Add(new AeExportItem
+                {
+                    FilePath = snapPath,
+                    RelX = item.X,
+                    RelY = item.Y,
+                    Width = item.Width,
+                    Height = item.Height
+                });
+
+                bool aeOk = AfterEffectsIntegration.ExportToAfterEffects(payload, out string aeMsg);
+                if (aeOk)
+                {
+                    ShowToast("📸 Clean video frame exported to After Effects!", ToastType.Success, 3500);
+                }
+                else
+                {
+                    ShowToast($"Frame snapped, but AE: {aeMsg}", ToastType.Info, 3500);
+                }
+            }
+            catch (Exception ex)
+            {
+                ShowToast($"Export error: {ex.Message}", ToastType.Error);
+            }
+        }
+
+        private async void SnapLocalVideoFrameToBoard(CardItem item)
+        {
+            if (item == null) return;
+            ShowToast("📸 Capturing video snapshot to canvas...", ToastType.Info, 2000);
+            try
+            {
+                byte[]? frameBytes = CaptureCleanLocalVideoFrame(item);
+                if (frameBytes == null || frameBytes.Length == 0)
+                {
+                    ShowToast("Could not capture video frame", ToastType.Error);
+                    return;
+                }
+
+                Directory.CreateDirectory(CacheDir);
+                using var md5 = System.Security.Cryptography.MD5.Create();
+                string hash = Convert.ToHexString(md5.ComputeHash(frameBytes))[..12].ToLowerInvariant();
+                string filename = $"snap_vid_{hash}.png";
+                string snapPath = System.IO.Path.Combine(CacheDir, filename);
+                if (!File.Exists(snapPath))
+                {
+                    await File.WriteAllBytesAsync(snapPath, frameBytes);
+                }
+
+                using var ms = new MemoryStream(frameBytes);
+                var bi = new BitmapImage();
+                bi.BeginInit();
+                bi.StreamSource = ms;
+                bi.CacheOption = BitmapCacheOption.OnLoad;
+                bi.EndInit();
+                bi.Freeze();
+
+                Point newPos = new Point(item.X + item.Width + 24, item.Y);
+                string b64 = $"data:image/png;base64,{Convert.ToBase64String(frameBytes)}";
+
+                RecordUndo("Snap Video Frame to Board");
+                AddImageCard(
+                    bi,
+                    worldPosition: newPos,
+                    customWidth: item.Width,
+                    customHeight: item.Height,
+                    localPath: snapPath,
+                    base64Data: b64,
+                    autoSelect: true,
+                    recordUndo: false);
+
+                ShowToast("📋 Video snapshot card added to canvas", ToastType.Success, 2500);
+            }
+            catch (Exception ex)
+            {
+                ShowToast($"Snapshot error: {ex.Message}", ToastType.Error);
+            }
+        }
+
+        private byte[]? CaptureCleanLocalVideoFrame(CardItem item)
+        {
+            if (item == null) return null;
+            try
+            {
+                int w = Math.Max(10, (int)item.Width);
+                int h = Math.Max(10, (int)item.Height);
+                var rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+                if (item.NativePlayer != null && item.NativePlayer.Visibility == Visibility.Visible)
+                {
+                    rtb.Render(item.NativePlayer);
+                }
+                else if (item.ImageControl != null)
+                {
+                    rtb.Render(item.ImageControl);
+                }
+
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(rtb));
+                using var ms = new MemoryStream();
+                encoder.Save(ms);
+                return ms.ToArray();
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"CaptureCleanLocalVideoFrame error: {ex.Message}");
+                return null;
+            }
+        }
+
+        #endregion
+
         private const string YOUTUBE_API_KEY = "AIzaSyCKx_Tba2ezZ2WlVtZGtf1KvA_jLFji2wQ";
 
         private static async Task<(string? bestThumbnailUrl, string? title)> FetchYouTubeMetadataViaApiAsync(string ytId, HttpClient client)
@@ -12788,6 +14290,10 @@ namespace DropBoard.Native
                     youtubeId = c.YouTubeId,
                     youtubeUrl = c.YouTubeUrl,
                     lastPlaybackSeconds = c.LastPlaybackSeconds,
+                    isLocalVideo = c.IsLocalVideo,
+                    videoFilePath = c.VideoFilePath,
+                    isVideoLooping = c.IsVideoLooping,
+                    isVideoMuted = c.IsVideoMuted,
                     isNote = c.IsNote,
                     noteText = c.NoteText,
                     noteFontFamily = c.NoteFontFamily,
@@ -12962,6 +14468,10 @@ namespace DropBoard.Native
             public string YouTubeId { get; set; } = "";
             public string YouTubeUrl { get; set; } = "";
             public double LastPlaybackSeconds { get; set; } = 0;
+            public bool IsLocalVideo { get; set; } = false;
+            public string VideoFilePath { get; set; } = "";
+            public bool IsVideoLooping { get; set; } = true;
+            public bool IsVideoMuted { get; set; } = true;
         }
 
         private void LoadDropboardFile(string filePath, bool isSessionRestore = false)
@@ -13152,6 +14662,15 @@ namespace DropBoard.Native
                         if (card.TryGetProperty("youtubeUrl", out JsonElement yturlEl)) ytUrl = yturlEl.GetString() ?? "";
                         if (card.TryGetProperty("lastPlaybackSeconds", out JsonElement lpsEl)) lastSec = lpsEl.GetDouble();
 
+                        bool isLocalVid = false;
+                        string vidPath = "";
+                        bool isLooping = true;
+                        bool isMuted = true;
+                        if (card.TryGetProperty("isLocalVideo", out JsonElement lvEl)) isLocalVid = lvEl.GetBoolean();
+                        if (card.TryGetProperty("videoFilePath", out JsonElement vpEl)) vidPath = vpEl.GetString() ?? "";
+                        if (card.TryGetProperty("isVideoLooping", out JsonElement vlEl)) isLooping = vlEl.GetBoolean();
+                        if (card.TryGetProperty("isVideoMuted", out JsonElement vmEl)) isMuted = vmEl.GetBoolean();
+
                         string cardId = card.TryGetProperty("id", out JsonElement imgIdEl) ? (imgIdEl.GetString() ?? "") : "";
                         string groupId = card.TryGetProperty("groupId", out JsonElement imgGidEl) ? (imgGidEl.GetString() ?? "") : "";
 
@@ -13172,7 +14691,11 @@ namespace DropBoard.Native
                             IsYouTube = isYt,
                             YouTubeId = ytId,
                             YouTubeUrl = ytUrl,
-                            LastPlaybackSeconds = lastSec
+                            LastPlaybackSeconds = lastSec,
+                            IsLocalVideo = isLocalVid,
+                            VideoFilePath = vidPath,
+                            IsVideoLooping = isLooping,
+                            IsVideoMuted = isMuted
                         });
                     }
                 }
@@ -13229,7 +14752,12 @@ namespace DropBoard.Native
                             Parallel.ForEach(imageCardsToLoad, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(2, Environment.ProcessorCount) }, desc =>
                             {
                                 BitmapSource? bmp = null;
-                                if (!string.IsNullOrEmpty(desc.LocalPath) && File.Exists(desc.LocalPath))
+                                if (desc.IsLocalVideo)
+                                {
+                                    try { bmp = GetVideoPosterBitmap(desc.VideoFilePath); }
+                                    catch { bmp = null; }
+                                }
+                                else if (!string.IsNullOrEmpty(desc.LocalPath) && File.Exists(desc.LocalPath))
                                 {
                                     try { bmp = LoadOptimizedBitmap(desc.LocalPath, maxDecodeWidth: 900); }
                                     catch { bmp = null; }
@@ -13281,6 +14809,10 @@ namespace DropBoard.Native
                                     isYouTube: desc.IsYouTube,
                                     youTubeId: desc.YouTubeId,
                                     youTubeUrl: desc.YouTubeUrl,
+                                    isLocalVideo: desc.IsLocalVideo,
+                                    videoFilePath: desc.VideoFilePath,
+                                    isVideoLooping: desc.IsVideoLooping,
+                                    isVideoMuted: desc.IsVideoMuted,
                                     recordUndo: false);
 
                                 if (!string.IsNullOrEmpty(desc.Id))

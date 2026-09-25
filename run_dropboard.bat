@@ -1,2 +1,2 @@
 @echo off
-start "" "%~dp0build\Release\DropBoard.exe"
+start "" "%~dp0DropBoard.Native\bin\Release\net9.0-windows\DropBoard.Native.exe"

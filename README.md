@@ -88,7 +88,7 @@ DropBoard is a high-performance, GPU-accelerated reference board and creative pr
 ### Quick Run
 If you have compiled binaries, simply launch:
 ```bat
-run_native_wpf.bat
+run_dropboard.bat
 ```
 
 ### Build Instructions (.NET CLI)
@@ -104,6 +104,16 @@ dotnet build -c Release "DropBoard.Native/DropBoard.Native.csproj"
 start "" "DropBoard.Native/bin/Release/net9.0-windows/DropBoard.Native.exe"
 ```
 
+### 📦 Building the Windows Installer
+To compile the standalone setup installer (`dist/DropBoard-Setup-v1.0.0.exe`):
+1. Ensure **[Inno Setup 6](https://jrsoftware.org/isdl.php)** is installed.
+2. Run the 1-click installer compiler:
+```bat
+build_installer.bat
+```
+*(Or execute via PowerShell: `.\scripts\build_installer.ps1`)*.
+The compiled, self-contained installer will be generated in `dist/`.
+
 ---
 
 ## 📁 Project Structure
@@ -118,10 +128,14 @@ DropBoard/
 │   ├── Services/              # Native OS Services (LocalHttpServer, AppSettings, etc.)
 │   └── DropBoard.Native.csproj# .NET 9.0 WPF Project Definition
 ├── extension/                 # Browser Companion Extension (Manifest V3)
-├── run_native_wpf.bat         # 1-Click Launch Script for Native Studio
+├── installer/                 # Inno Setup 6 Script & Installer Configurations
+├── scripts/                   # Automation & Installer Build Scripts
+├── build_installer.bat        # 1-Click Windows Installer Compiler
+├── run_dropboard.bat          # 1-Click Launch Script for DropBoard Studio
 ├── .gitignore                 # Git ignore rules
 └── README.md                  # Project Documentation
 ```
+
 
 ---
 

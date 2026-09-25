@@ -458,6 +458,7 @@ namespace DropBoard.Native
                     sb.AppendLine("                    if (footage) {");
                     sb.AppendLine("                        footage.parentFolder = refFolder;");
                     sb.AppendLine("                        var layer = comp.layers.add(footage);");
+                    sb.AppendLine("                        layer.guideLayer = true;");
                     sb.AppendLine("                        layer.property(\"Position\").setValue([it.x, it.y]);");
                     sb.AppendLine("                        if (footage.width > 0) {");
                     sb.AppendLine("                            var sc = (it.targetW / footage.width) * 100;");
@@ -534,6 +535,7 @@ namespace DropBoard.Native
                 sb.AppendLine("                        footage.parentFolder = refFolder;");
                 sb.AppendLine("                        if (activeComp) {");
                 sb.AppendLine("                            var layer = activeComp.layers.add(footage);");
+                sb.AppendLine("                            layer.guideLayer = true;");
                 sb.AppendLine("                            layer.selected = true;");
                 sb.AppendLine("                            if (itemsData.length === 1) {");
                 sb.AppendLine("                                layer.property(\"Position\").setValue([activeComp.width / 2, activeComp.height / 2]);");

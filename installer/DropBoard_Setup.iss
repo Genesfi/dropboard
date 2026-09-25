@@ -7,7 +7,7 @@
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Genesfi"
 #define MyAppURL "https://github.com/Genesfi/dropboard"
-#define MyAppExeName "DropBoard.exe"
+#define MyAppExeName "DropBoard.Native.exe"
 #define MyAppFileExt ".dropboard"
 #define MyAppProgID "DropBoard.Project"
 
@@ -24,7 +24,7 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=..\dist
 OutputBaseFilename=DropBoard-Setup-v1.0.0
-SetupIconFile=..\src\app.ico
+SetupIconFile=..\DropBoard.Native\app_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -43,11 +43,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "fileassoc"; Description: "Associate .dropboard project files with DropBoard"; GroupDescription: "File Associations:"; Flags: checkedonce
 
 [Files]
-; Main Executable
-Source: "..\build\Release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-; Assets folder (HTML, CSS, JS, Logos, Icons)
-Source: "..\build\Release\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
-; Browser Companion Extension
+; DropBoard Native C# .NET 9 WPF Self-Contained Release
+Source: "..\DropBoard.Native\bin\Release\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Browser Companion Extension (Chrome, Edge, Brave)
 Source: "..\extension\*"; DestDir: "{app}\extension"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]

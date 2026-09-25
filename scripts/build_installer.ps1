@@ -4,15 +4,29 @@
 # =====================================================================
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$nativeProj = Join-Path $projectRoot "DropBoard.Native\DropBoard.Native.csproj"
+$publishDir = Join-Path $projectRoot "DropBoard.Native\bin\Release\publish"
 $issFile = Join-Path $projectRoot "installer\DropBoard_Setup.iss"
 $distDir = Join-Path $projectRoot "dist"
 
-# 1. Ensure dist directory exists
+# 1. Publish DropBoard.Native (Self-Contained x64 Release)
+Write-Host "========================================================" -ForegroundColor Cyan
+Write-Host "Publishing DropBoard.Native (.NET 9 Win-x64 Release)..." -ForegroundColor Cyan
+Write-Host "========================================================" -ForegroundColor Cyan
+
+dotnet publish $nativeProj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o $publishDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "dotnet publish failed with exit code $LASTEXITCODE"
+    exit $LASTEXITCODE
+}
+Write-Host "Publish complete at: $publishDir`n" -ForegroundColor Green
+
+# 2. Ensure dist directory exists
 if (-not (Test-Path $distDir)) {
     New-Item -ItemType Directory -Path $distDir -Force | Out-Null
 }
 
-# 2. Locate Inno Setup Compiler (ISCC.exe)
+# 3. Locate Inno Setup Compiler (ISCC.exe)
 $isccPaths = @(
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
     "C:\Program Files\Inno Setup 6\ISCC.exe"

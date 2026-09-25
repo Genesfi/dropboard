@@ -141,14 +141,22 @@ namespace DropBoard.Native.Services
 
                 if (samples.Count == 0) return GenerateFallbackPins(count, pins);
 
-                // Randomizer based on seed
-                Random rng = seed != 0 ? new Random(seed) : new Random();
-
-                // Diversity selection
-                var candidates = samples.OrderByDescending(s => s.Weight + (rng.NextDouble() * 0.4)).Take(Math.Min(400, samples.Count)).ToList();
+                List<SamplePoint> candidates;
                 var selected = new List<SamplePoint>();
 
-                selected.Add(candidates[rng.Next(0, Math.Min(5, candidates.Count))]);
+                if (seed != 0)
+                {
+                    // Randomizer based on seed (e.g. from 🎲 shuffle/randomize button)
+                    Random rng = new Random(seed);
+                    candidates = samples.OrderByDescending(s => s.Weight + (rng.NextDouble() * 0.4)).Take(Math.Min(400, samples.Count)).ToList();
+                    selected.Add(candidates[rng.Next(0, Math.Min(5, candidates.Count))]);
+                }
+                else
+                {
+                    // Deterministic mode: strictly by weight with zero random jitter, picking top representative sample
+                    candidates = samples.OrderByDescending(s => s.Weight).Take(Math.Min(400, samples.Count)).ToList();
+                    selected.Add(candidates[0]);
+                }
 
                 while (selected.Count < needed && candidates.Count > 0)
                 {
