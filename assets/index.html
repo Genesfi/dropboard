@@ -461,6 +461,45 @@
       <span class="cm-title" id="cm-ref-title">Reference Item</span>
     </div>
     <div class="cm-separator"></div>
+    <div id="cm-multi-section" style="display: none;">
+      <button class="cm-item" id="cm-multi-grid">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#38bdf8" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7"/>
+          <rect x="14" y="3" width="7" height="7"/>
+          <rect x="14" y="14" width="7" height="7"/>
+          <rect x="3" y="14" width="7" height="7"/>
+        </svg>
+        <div class="cm-text">
+          <strong>Grid Arrange Selection</strong>
+          <small>Pack selected references into neat grid</small>
+        </div>
+      </button>
+      <button class="cm-item" id="cm-multi-pipeline">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#818cf8" stroke-width="2">
+          <line x1="3" y1="6" x2="8" y2="6"/>
+          <line x1="3" y1="12" x2="8" y2="12"/>
+          <line x1="3" y1="18" x2="8" y2="18"/>
+          <rect x="12" y="4" width="9" height="4" rx="1"/>
+          <rect x="12" y="10" width="9" height="4" rx="1"/>
+          <rect x="12" y="16" width="9" height="4" rx="1"/>
+        </svg>
+        <div class="cm-text">
+          <strong>Pipeline Arrange</strong>
+          <small>Sequence selected items into storyboard row</small>
+        </div>
+      </button>
+      <button class="cm-item" id="cm-multi-group">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#3b82f6" stroke-width="2">
+          <rect x="3" y="3" width="18" height="18" rx="3" stroke-dasharray="3 2"/>
+          <path d="M8 8h8v3H8z"/>
+        </svg>
+        <div class="cm-text">
+          <strong>Group into Scene Frame</strong>
+          <small>Wrap selected references in Scene container</small>
+        </div>
+      </button>
+      <div class="cm-separator"></div>
+    </div>
     <button class="cm-item special-ae" id="cm-send-ae">
       <span class="cm-icon ae-icon">Ae</span>
       <div class="cm-text">
@@ -694,6 +733,56 @@
       </div>
     </button>
     <div class="cm-separator"></div>
+    <button class="cm-item" data-canvas-action="grid">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#38bdf8" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7"/>
+        <rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/>
+        <rect x="3" y="14" width="7" height="7"/>
+      </svg>
+      <div class="cm-text">
+        <strong>Auto-Arrange Grid</strong>
+        <small>Pack references into masonry grid</small>
+      </div>
+    </button>
+    <button class="cm-item" data-canvas-action="pipeline">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#818cf8" stroke-width="2">
+        <line x1="3" y1="6" x2="8" y2="6"/>
+        <line x1="3" y1="12" x2="8" y2="12"/>
+        <line x1="3" y1="18" x2="8" y2="18"/>
+        <rect x="12" y="4" width="9" height="4" rx="1"/>
+        <rect x="12" y="10" width="9" height="4" rx="1"/>
+        <rect x="12" y="16" width="9" height="4" rx="1"/>
+      </svg>
+      <div class="cm-text">
+        <strong>Pipeline Storyboard</strong>
+        <small>Storyboard sequence arrangement</small>
+      </div>
+    </button>
+    <div class="cm-separator"></div>
+    <button class="cm-item" data-canvas-action="file">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#10b981" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <polyline points="14 2 14 8 20 8"/>
+        <line x1="12" y1="18" x2="12" y2="12"/>
+        <line x1="9" y1="15" x2="15" y2="15"/>
+      </svg>
+      <div class="cm-text">
+        <strong>Import Image File...</strong>
+        <small>Add images from computer</small>
+      </div>
+    </button>
+    <button class="cm-item" data-canvas-action="url">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#f59e0b" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="2" y1="12" x2="22" y2="12"/>
+        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+      </svg>
+      <div class="cm-text">
+        <strong>Add Web Reference (URL)...</strong>
+        <small>Pinterest, YouTube, or web link</small>
+      </div>
+    </button>
     <button class="cm-item" data-canvas-action="paste">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
@@ -702,6 +791,19 @@
       <div class="cm-text">
         <strong>Paste Image</strong>
         <small>Ctrl+V</small>
+      </div>
+    </button>
+    <div class="cm-separator"></div>
+    <button class="cm-item" data-canvas-action="fit">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#94a3b8" stroke-width="2">
+        <polyline points="15 3 21 3 21 9"/>
+        <polyline points="9 21 3 21 3 15"/>
+        <line x1="21" y1="3" x2="14" y2="10"/>
+        <line x1="3" y1="21" x2="10" y2="14"/>
+      </svg>
+      <div class="cm-text">
+        <strong>Fit All in View</strong>
+        <small>Frame all references on screen (F)</small>
       </div>
     </button>
     <div class="cm-separator"></div>

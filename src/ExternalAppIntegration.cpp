@@ -438,6 +438,7 @@ bool ExternalAppIntegration::ExportToAfterEffectsAdvanced(const AeExportCompPayl
             jsx << L"                    if (footage) {\n";
             jsx << L"                        footage.parentFolder = refFolder;\n";
             jsx << L"                        var layer = comp.layers.add(footage);\n";
+            jsx << L"                        layer.guideLayer = true;\n";
             jsx << L"                        layer.property(\"Position\").setValue([it.x, it.y]);\n";
             jsx << L"                        if (footage.width > 0) {\n";
             jsx << L"                            var sc = (it.targetW / footage.width) * 100;\n";
@@ -516,6 +517,7 @@ bool ExternalAppIntegration::ExportToAfterEffectsAdvanced(const AeExportCompPayl
         jsx << L"                        footage.parentFolder = refFolder;\n";
         jsx << L"                        if (activeComp) {\n";
         jsx << L"                            var layer = activeComp.layers.add(footage);\n";
+        jsx << L"                            layer.guideLayer = true;\n";
         jsx << L"                            layer.selected = true;\n";
         jsx << L"                            if (itemsData.length === 1) {\n";
         jsx << L"                                layer.property(\"Position\").setValue([activeComp.width / 2, activeComp.height / 2]);\n";

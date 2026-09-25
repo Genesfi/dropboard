@@ -4456,27 +4456,87 @@ class DropBoardManager {
       }
     });
 
+    const btnMultiGrid = document.getElementById('cm-multi-grid');
+    if (btnMultiGrid) {
+      btnMultiGrid.addEventListener('click', () => {
+        cm.classList.remove('show');
+        this.autoArrangeGrid();
+      });
+    }
+
+    const btnMultiPipeline = document.getElementById('cm-multi-pipeline');
+    if (btnMultiPipeline) {
+      btnMultiPipeline.addEventListener('click', () => {
+        cm.classList.remove('show');
+        this.autoArrangePipeline();
+      });
+    }
+
+    const btnMultiGroup = document.getElementById('cm-multi-group');
+    if (btnMultiGroup) {
+      btnMultiGroup.addEventListener('click', () => {
+        cm.classList.remove('show');
+        const selCards = Array.from(this.selectedCards || []);
+        if (selCards.length > 0) {
+          this.recordPreState('Group Selection');
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          selCards.forEach(c => {
+            minX = Math.min(minX, c.x);
+            minY = Math.min(minY, c.y);
+            maxX = Math.max(maxX, c.x + c.width);
+            maxY = Math.max(maxY, c.y + c.height);
+          });
+          const next = this.getNextSceneInfo();
+          const pad = 24;
+          const grp = this.createGroup(next.title, minX - pad, minY - 36 - pad, Math.max(260, maxX - minX + pad * 2), Math.max(200, maxY - minY + 36 + pad * 2), next.color);
+          selCards.forEach(c => {
+            c.groupId = grp.id;
+            this.updateCardGroupBadge(c);
+          });
+          this.updateGroupCounts();
+          this.tidyGroup(grp, true);
+          this.commitHistory('Group Selection');
+          Toast.show(`Grouped ${selCards.length} references into ${grp.title}`, 'success');
+        }
+      });
+    }
+
     document.getElementById('cm-bring-front').addEventListener('click', () => {
-      if (this.activeContextMenuCard) {
+      const selCards = Array.from(this.selectedCards || []);
+      if (selCards.length > 1) {
+        selCards.forEach(c => {
+          c.zIndex = ++this.highestZ;
+          if (c.element) c.element.style.zIndex = c.zIndex;
+        });
+      } else if (this.activeContextMenuCard) {
         this.activeContextMenuCard.zIndex = ++this.highestZ;
         this.activeContextMenuCard.element.style.zIndex = this.activeContextMenuCard.zIndex;
       }
     });
 
     document.getElementById('cm-reset-scale').addEventListener('click', () => {
-      if (this.activeContextMenuCard) {
-        const img = this.activeContextMenuCard.element.querySelector('img');
+      const selCards = Array.from(this.selectedCards || []);
+      const targets = selCards.length > 1 ? selCards : (this.activeContextMenuCard ? [this.activeContextMenuCard] : []);
+      targets.forEach(c => {
+        const img = c.element ? c.element.querySelector('img') : null;
         if (img && img.naturalWidth) {
-          this.activeContextMenuCard.width = img.naturalWidth;
-          this.activeContextMenuCard.height = img.naturalHeight;
-          this.activeContextMenuCard.element.style.width = `${img.naturalWidth}px`;
-          this.activeContextMenuCard.element.style.height = `${img.naturalHeight}px`;
+          c.width = img.naturalWidth;
+          c.height = img.naturalHeight;
+          c.element.style.width = `${img.naturalWidth}px`;
+          c.element.style.height = `${img.naturalHeight}px`;
         }
-      }
+      });
+      if (targets.length > 0) Toast.show(`Reset 1:1 Scale for ${targets.length} reference(s)`, 'info');
     });
 
     document.getElementById('cm-delete').addEventListener('click', () => {
-      if (this.activeContextMenuCard) {
+      const selCards = Array.from(this.selectedCards || []);
+      if (selCards.length > 1) {
+        this.recordPreState('Delete References');
+        selCards.forEach(c => this.removeCard(c));
+        this.commitHistory('Delete References');
+        Toast.show(`Deleted ${selCards.length} references`, 'info');
+      } else if (this.activeContextMenuCard) {
         this.removeCard(this.activeContextMenuCard);
       }
     });
@@ -4490,7 +4550,24 @@ class DropBoardManager {
     if (grpCm) grpCm.classList.remove('show');
     if (canvasCm) canvasCm.classList.remove('show');
 
-    document.getElementById('cm-ref-title').textContent = card.sourceLabel || (card.isYouTube ? 'YouTube Ref' : 'Reference');
+    const selCards = Array.from(this.selectedCards || []);
+    const isMulti = selCards.length > 1 && selCards.includes(card);
+    const multiSec = document.getElementById('cm-multi-section');
+    if (multiSec) {
+      multiSec.style.display = isMulti ? 'block' : 'none';
+    }
+
+    const titleEl = document.getElementById('cm-ref-title');
+    if (titleEl) {
+      titleEl.textContent = isMulti 
+        ? `${selCards.length} References Selected` 
+        : (card.sourceLabel || (card.isYouTube ? 'YouTube Ref' : 'Reference'));
+    }
+
+    const aeBtnText = document.querySelector('#cm-send-ae strong');
+    if (aeBtnText) {
+      aeBtnText.textContent = isMulti ? `Send to After Effects (${selCards.length})` : 'Send to After Effects';
+    }
 
     const ytItems = cm.querySelectorAll('.cm-yt-item');
     ytItems.forEach(el => {
@@ -4646,6 +4723,20 @@ class DropBoardManager {
       }).catch(() => {
         Toast.show('Press Ctrl+V to paste', 'info');
       });
+    } else if (act === 'grid') {
+      this.autoArrangeGrid();
+    } else if (act === 'pipeline') {
+      this.autoArrangePipeline();
+    } else if (act === 'file') {
+      document.getElementById('file-input')?.click();
+    } else if (act === 'url') {
+      const urlModal = document.getElementById('url-modal');
+      if (urlModal) {
+        urlModal.classList.add('show');
+        setTimeout(() => document.getElementById('url-input')?.focus(), 50);
+      }
+    } else if (act === 'fit') {
+      this.fitAllToView();
     }
   }
 
