@@ -103,6 +103,7 @@ namespace DropBoard.Native
         public string Id { get; set; } = Guid.NewGuid().ToString("N");
         public string Text { get; set; } = "";
         public bool IsChecked { get; set; } = false;
+        public string? HighlightColor { get; set; } = null;
     }
 
     public class CardSnapshot
@@ -141,6 +142,7 @@ namespace DropBoard.Native
         public string NoteBgColor { get; set; } = "Transparent";
         public TextAlignment NoteAlignment { get; set; } = TextAlignment.Left;
         public bool NoteHasShadow { get; set; } = false;
+        public string? NoteHighlightColor { get; set; } = null;
         public bool HasDeadline { get; set; } = false;
         public string? DeadlineIso { get; set; } = null;
         public string DeadlineLabel { get; set; } = "Deadline";
@@ -229,7 +231,10 @@ namespace DropBoard.Native
         public TextAlignment NoteAlignment { get; set; } = TextAlignment.Left;
         public bool NoteHasShadow { get; set; } = false;
         public TextBox? NoteEditor { get; set; } = null;
+        public Border? NoteHighlightLayer { get; set; } = null;
+        public string? NoteHighlightColor { get; set; } = null;
         public Border? BtnNoteShadow { get; set; } = null;
+        public Border? BtnNoteStabilo { get; set; } = null;
         public TextBlock? NoteFontNameText { get; set; } = null;
         public TextBlock? NoteFontSizeText { get; set; } = null;
 
@@ -2712,7 +2717,8 @@ namespace DropBoard.Native
             string deadlineLabel = "Deadline",
             string noteDoodleInkBase64 = "",
             string? noteBgGifPath = null,
-            string? noteBgGifBase64 = null)
+            string? noteBgGifBase64 = null,
+            string? noteHighlightColor = null)
         {
             EmptyStateOverlay.Visibility = Visibility.Collapsed;
 
@@ -2890,6 +2896,15 @@ namespace DropBoard.Native
             };
             checklistScrollViewer.Content = checklistPanel;
 
+            Border noteHighlightLayer = new Border
+            {
+                CornerRadius = new CornerRadius(6),
+                Margin = new Thickness(10, 0, 10, 8),
+                Visibility = Visibility.Collapsed,
+                IsHitTestVisible = false
+            };
+
+            noteBodyContainer.Children.Add(noteHighlightLayer);
             noteBodyContainer.Children.Add(editor);
             noteBodyContainer.Children.Add(checklistScrollViewer);
 
@@ -3200,8 +3215,45 @@ namespace DropBoard.Native
                 NoteCornerPenIcon = cornerPenPath,
                 NoteBgGifPath = noteBgGifPath,
                 NoteBgGifBase64 = noteBgGifBase64,
+                NoteHighlightLayer = noteHighlightLayer,
+                NoteHighlightColor = noteHighlightColor,
                 NoteBgGifImage = bgGifImage,
                 NoteBgGifOverlay = bgGifOverlay
+            };
+
+            if (!string.IsNullOrEmpty(noteHighlightColor))
+            {
+                ApplyNoteHighlight(item, noteHighlightColor);
+            }
+
+            editor.PreviewMouseLeftButtonUp += (s, e) =>
+            {
+                if (editor.SelectionLength > 0 && !item.IsChecklist)
+                {
+                    ShowStabiloSelectionPopup(editor, null, item);
+                }
+                else
+                {
+                    HideStabiloSelectionPopup();
+                }
+            };
+            editor.KeyUp += (s, e) =>
+            {
+                if (editor.SelectionLength > 0 && !item.IsChecklist)
+                {
+                    ShowStabiloSelectionPopup(editor, null, item);
+                }
+                else
+                {
+                    HideStabiloSelectionPopup();
+                }
+            };
+            editor.SelectionChanged += (s, e) =>
+            {
+                if (editor.SelectionLength == 0 && _stabiloSelectionPopup != null && _stabiloSelectionPopup.IsOpen)
+                {
+                    HideStabiloSelectionPopup();
+                }
             };
 
             btnCornerPen.MouseEnter += (s, e) =>
@@ -3945,18 +3997,233 @@ namespace DropBoard.Native
                     }
                 };
 
+                Border highlightBorder = new Border
+                {
+                    CornerRadius = new CornerRadius(4),
+                    Margin = new Thickness(0, 1, 0, 1),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Stretch,
+                    IsHitTestVisible = false,
+                    Visibility = Visibility.Collapsed,
+                    Opacity = cItem.IsChecked ? 0.45 : 1.0
+                };
+
+                textHost.Children.Add(highlightBorder);
                 textHost.Children.Add(tbTask);
                 textHost.Children.Add(strikeLine);
+
+                Action updateHighlight = () =>
+                {
+                    if (string.IsNullOrEmpty(cItem.HighlightColor))
+                    {
+                        highlightBorder.Visibility = Visibility.Collapsed;
+                        return;
+                    }
+                    try
+                    {
+                        Color hlColor = (Color)ColorConverter.ConvertFromString(cItem.HighlightColor);
+                        highlightBorder.Background = new SolidColorBrush(Color.FromArgb(125, hlColor.R, hlColor.G, hlColor.B));
+                        highlightBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(90, hlColor.R, hlColor.G, hlColor.B));
+                        highlightBorder.BorderThickness = new Thickness(1);
+                        double tw = MeasureTextWidth(tbTask);
+                        double targetW = Math.Max(24, Math.Min(textHost.ActualWidth > 0 ? textHost.ActualWidth : 280, tw + 10));
+                        highlightBorder.Width = targetW;
+                        highlightBorder.Visibility = Visibility.Visible;
+                    }
+                    catch
+                    {
+                        highlightBorder.Visibility = Visibility.Collapsed;
+                    }
+                };
+                updateHighlight();
 
                 // Initial width calculation when loading checked items
                 tbTask.Loaded += (s, e) =>
                 {
+                    updateHighlight();
                     if (cItem.IsChecked)
                     {
                         double tw = MeasureTextWidth(tbTask);
                         strikeLine.Width = Math.Max(20, Math.Min(textHost.ActualWidth > 0 ? textHost.ActualWidth - 6 : 280, tw + 6));
                     }
                 };
+                textHost.SizeChanged += (s, e) => updateHighlight();
+
+                // Text Selection -> Show Floating Stabilo Toolbar
+                tbTask.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    if (tbTask.SelectionLength > 0)
+                    {
+                        ShowStabiloSelectionPopup(tbTask, cItem, item);
+                    }
+                    else
+                    {
+                        HideStabiloSelectionPopup();
+                    }
+                };
+                tbTask.KeyUp += (s, e) =>
+                {
+                    if (tbTask.SelectionLength > 0)
+                    {
+                        ShowStabiloSelectionPopup(tbTask, cItem, item);
+                    }
+                    else
+                    {
+                        HideStabiloSelectionPopup();
+                    }
+                };
+                tbTask.SelectionChanged += (s, e) =>
+                {
+                    if (tbTask.SelectionLength == 0 && _stabiloSelectionPopup != null && _stabiloSelectionPopup.IsOpen)
+                    {
+                        HideStabiloSelectionPopup();
+                    }
+                };
+
+                // Right-Click Context Menu for Task Item
+                ContextMenu taskMenu = new ContextMenu();
+                var taskHlColors = new (string Name, string Hex)[]
+                {
+                    ("Neon Yellow", "#FACC15"),
+                    ("Neon Green",  "#4ADE80"),
+                    ("Neon Cyan",   "#38BDF8"),
+                    ("Neon Pink",   "#F472B6"),
+                    ("Neon Orange", "#FB923C"),
+                    ("Neon Violet", "#C084FC")
+                };
+
+                MenuItem miHlThis = new MenuItem
+                {
+                    Header = "🖍️ Stabilo This Task",
+                    Icon = CreateMenuIcon("M 18,2 L 22,6 L 7,21 L 2,22 L 3,17 Z M 15,5 L 19,9", "#FACC15")
+                };
+                foreach (var (cName, cHex) in taskHlColors)
+                {
+                    MenuItem subColor = new MenuItem
+                    {
+                        Header = cName,
+                        Icon = new Border
+                        {
+                            Width = 12,
+                            Height = 12,
+                            CornerRadius = new CornerRadius(6),
+                            Background = (Brush)new BrushConverter().ConvertFromString(cHex)!
+                        }
+                    };
+                    string capHex = cHex;
+                    string capName = cName;
+                    subColor.Click += (s, e) =>
+                    {
+                        cItem.HighlightColor = capHex;
+                        RenderChecklistItems(item);
+                        RecordUndo("Set Task Highlight");
+                        ScheduleAutoSave();
+                        ShowToast($"Task highlighted ({capName})", ToastType.Success);
+                    };
+                    miHlThis.Items.Add(subColor);
+                }
+                MenuItem subClearThis = new MenuItem
+                {
+                    Header = "✕ Remove Highlight",
+                    Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113))
+                };
+                subClearThis.Click += (s, e) =>
+                {
+                    cItem.HighlightColor = null;
+                    RenderChecklistItems(item);
+                    RecordUndo("Clear Task Highlight");
+                    ScheduleAutoSave();
+                    ShowToast("Task highlight cleared", ToastType.Info);
+                };
+                miHlThis.Items.Add(new Separator());
+                miHlThis.Items.Add(subClearThis);
+                taskMenu.Items.Add(miHlThis);
+
+                MenuItem miHlAll = new MenuItem
+                {
+                    Header = "🖍️ Stabilo All Tasks",
+                    Icon = CreateMenuIcon("M 4,4 L 20,4 M 4,10 L 20,10 M 4,16 L 20,16", "#38BDF8")
+                };
+                foreach (var (cName, cHex) in taskHlColors)
+                {
+                    MenuItem subColor = new MenuItem
+                    {
+                        Header = cName,
+                        Icon = new Border
+                        {
+                            Width = 12,
+                            Height = 12,
+                            CornerRadius = new CornerRadius(6),
+                            Background = (Brush)new BrushConverter().ConvertFromString(cHex)!
+                        }
+                    };
+                    string capHex = cHex;
+                    string capName = cName;
+                    subColor.Click += (s, e) =>
+                    {
+                        if (item.ChecklistItems != null)
+                        {
+                            foreach (var ci in item.ChecklistItems)
+                            {
+                                ci.HighlightColor = capHex;
+                            }
+                        }
+                        RenderChecklistItems(item);
+                        RecordUndo("Highlight All Tasks");
+                        ScheduleAutoSave();
+                        ShowToast($"All tasks highlighted ({capName})", ToastType.Success);
+                    };
+                    miHlAll.Items.Add(subColor);
+                }
+                MenuItem subClearAll = new MenuItem
+                {
+                    Header = "✕ Clear All Highlights",
+                    Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113))
+                };
+                subClearAll.Click += (s, e) =>
+                {
+                    if (item.ChecklistItems != null)
+                    {
+                        foreach (var ci in item.ChecklistItems)
+                        {
+                            ci.HighlightColor = null;
+                        }
+                    }
+                    RenderChecklistItems(item);
+                    RecordUndo("Clear All Highlights");
+                    ScheduleAutoSave();
+                    ShowToast("All task highlights cleared", ToastType.Info);
+                };
+                miHlAll.Items.Add(new Separator());
+                miHlAll.Items.Add(subClearAll);
+                taskMenu.Items.Add(miHlAll);
+
+                taskMenu.Items.Add(new Separator());
+
+                MenuItem miCut = new MenuItem { Header = "Cut", Icon = CreateMenuIcon("M 6,6 L 18,18 M 6,18 L 18,6") };
+                miCut.Click += (s, e) => tbTask.Cut();
+                taskMenu.Items.Add(miCut);
+
+                MenuItem miCopy = new MenuItem { Header = "Copy", Icon = CreateMenuIcon("M 16,4 h 2 a 2,2 0 0 1 2,2 v 14 a 2,2 0 0 1 -2,2 H 6 a 2,2 0 0 1 -2,-2 V 6 a 2,2 0 0 1 2,-2 h 2 M 9,2 h 6 a 1,1 0 0 1 1,1 v 2 a 1,1 0 0 1 -1,1 H 9 a 1,1 0 0 1 -1,-1 V 3 a 1,1 0 0 1 1,-1 z") };
+                miCopy.Click += (s, e) => tbTask.Copy();
+                taskMenu.Items.Add(miCopy);
+
+                MenuItem miPaste = new MenuItem { Header = "Paste", Icon = CreateMenuIcon("M 4,4 L 16,4 L 16,16 L 4,16 Z") };
+                miPaste.Click += (s, e) => tbTask.Paste();
+                taskMenu.Items.Add(miPaste);
+
+                taskMenu.Items.Add(new Separator());
+
+                MenuItem miDel = new MenuItem { Header = "Delete Task", Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)) };
+                miDel.Click += (s, e) =>
+                {
+                    item.ChecklistItems?.Remove(cItem);
+                    RenderChecklistItems(item);
+                    ScheduleAutoSave();
+                };
+                taskMenu.Items.Add(miDel);
+
+                tbTask.ContextMenu = taskMenu;
 
                 // Checkbox Click: Smooth Strike-Through Animation!
                 chk.MouseLeftButtonDown += (s, e) =>
@@ -3986,6 +4253,14 @@ namespace DropBoard.Native
                             Duration = TimeSpan.FromMilliseconds(200)
                         };
                         tbTask.BeginAnimation(UIElement.OpacityProperty, animOp);
+
+                        DoubleAnimation animHlOp = new DoubleAnimation
+                        {
+                            From = highlightBorder.Opacity,
+                            To = 0.45,
+                            Duration = TimeSpan.FromMilliseconds(200)
+                        };
+                        highlightBorder.BeginAnimation(UIElement.OpacityProperty, animHlOp);
                     }
                     else
                     {
@@ -4005,6 +4280,14 @@ namespace DropBoard.Native
                             Duration = TimeSpan.FromMilliseconds(200)
                         };
                         tbTask.BeginAnimation(UIElement.OpacityProperty, animOp);
+
+                        DoubleAnimation animHlOp = new DoubleAnimation
+                        {
+                            From = highlightBorder.Opacity,
+                            To = 1.0,
+                            Duration = TimeSpan.FromMilliseconds(200)
+                        };
+                        highlightBorder.BeginAnimation(UIElement.OpacityProperty, animHlOp);
                     }
 
                     RecordUndo("Toggle Checklist Item");
@@ -4015,6 +4298,7 @@ namespace DropBoard.Native
                 tbTask.TextChanged += (s, e) =>
                 {
                     cItem.Text = tbTask.Text;
+                    updateHighlight();
                     if (cItem.IsChecked)
                     {
                         double tw = MeasureTextWidth(tbTask);
@@ -4326,6 +4610,398 @@ namespace DropBoard.Native
                 ? "Doodle mode ON: Draw & strike freely on this note!"
                 : "Doodle mode OFF: Normal editing resumed.", ToastType.Info);
         }
+
+        #region Note Stabilo / Highlight Engine
+        private Popup? _stabiloSelectionPopup = null;
+
+        private void HideStabiloSelectionPopup()
+        {
+            if (_stabiloSelectionPopup != null)
+            {
+                _stabiloSelectionPopup.IsOpen = false;
+            }
+        }
+
+        private void ApplyNoteHighlight(CardItem item, string? hexColor)
+        {
+            item.NoteHighlightColor = hexColor;
+            if (string.IsNullOrEmpty(hexColor))
+            {
+                if (item.NoteHighlightLayer != null) item.NoteHighlightLayer.Visibility = Visibility.Collapsed;
+                if (item.NoteEditor != null) item.NoteEditor.Background = Brushes.Transparent;
+            }
+            else
+            {
+                try
+                {
+                    Color hlColor = (Color)ColorConverter.ConvertFromString(hexColor);
+                    if (item.NoteHighlightLayer != null)
+                    {
+                        item.NoteHighlightLayer.Background = new SolidColorBrush(Color.FromArgb(85, hlColor.R, hlColor.G, hlColor.B));
+                        item.NoteHighlightLayer.BorderBrush = new SolidColorBrush(Color.FromArgb(60, hlColor.R, hlColor.G, hlColor.B));
+                        item.NoteHighlightLayer.BorderThickness = new Thickness(1);
+                        item.NoteHighlightLayer.Visibility = Visibility.Visible;
+                    }
+                    else if (item.NoteEditor != null)
+                    {
+                        item.NoteEditor.Background = new SolidColorBrush(Color.FromArgb(85, hlColor.R, hlColor.G, hlColor.B));
+                    }
+                }
+                catch
+                {
+                    if (item.NoteHighlightLayer != null) item.NoteHighlightLayer.Visibility = Visibility.Collapsed;
+                }
+            }
+            ScheduleAutoSave();
+        }
+
+        private void ShowStabiloSelectionPopup(FrameworkElement target, NoteChecklistItem? checkItem, CardItem card)
+        {
+            if (_stabiloSelectionPopup == null)
+            {
+                _stabiloSelectionPopup = new Popup
+                {
+                    Placement = PlacementMode.Top,
+                    StaysOpen = false,
+                    AllowsTransparency = true,
+                    PopupAnimation = PopupAnimation.Fade,
+                    VerticalOffset = -6
+                };
+            }
+
+            _stabiloSelectionPopup.IsOpen = false;
+            _stabiloSelectionPopup.PlacementTarget = target;
+
+            Border pill = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(248, 15, 23, 42)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(140, 56, 189, 248)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(7, 4, 7, 4),
+                SnapsToDevicePixels = true,
+                Effect = new DropShadowEffect
+                {
+                    Color = Colors.Black,
+                    BlurRadius = 14,
+                    ShadowDepth = 3,
+                    Opacity = 0.8
+                }
+            };
+
+            StackPanel sp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+            StackPanel lblSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+            lblSp.Children.Add(new TextBlock
+            {
+                Text = "🖍️",
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 3, 0)
+            });
+            lblSp.Children.Add(new TextBlock
+            {
+                Text = "Stabilo",
+                FontSize = 10,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            sp.Children.Add(lblSp);
+
+            var colors = new (string Name, string Hex)[]
+            {
+                ("Yellow", "#FACC15"),
+                ("Green",  "#4ADE80"),
+                ("Cyan",   "#38BDF8"),
+                ("Pink",   "#F472B6"),
+                ("Orange", "#FB923C"),
+                ("Purple", "#C084FC")
+            };
+
+            foreach (var (name, hex) in colors)
+            {
+                Color c = (Color)ColorConverter.ConvertFromString(hex);
+                Border swatch = new Border
+                {
+                    Width = 17,
+                    Height = 17,
+                    CornerRadius = new CornerRadius(8.5),
+                    Background = new SolidColorBrush(c),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    Margin = new Thickness(2, 0, 2, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = $"Highlight: {name}"
+                };
+
+                swatch.MouseEnter += (s, e) =>
+                {
+                    swatch.BorderBrush = Brushes.White;
+                    swatch.BorderThickness = new Thickness(1.8);
+                };
+                swatch.MouseLeave += (s, e) =>
+                {
+                    swatch.BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255));
+                    swatch.BorderThickness = new Thickness(1);
+                };
+                string capturedHex = hex;
+                string capturedName = name;
+                swatch.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    _stabiloSelectionPopup.IsOpen = false;
+
+                    if (checkItem != null)
+                    {
+                        checkItem.HighlightColor = capturedHex;
+                        RenderChecklistItems(card);
+                        RecordUndo("Set Task Highlight");
+                        ScheduleAutoSave();
+                        ShowToast($"Task highlighted ({capturedName})", ToastType.Success);
+                    }
+                    else
+                    {
+                        ApplyNoteHighlight(card, capturedHex);
+                        RecordUndo("Set Note Highlight");
+                        ScheduleAutoSave();
+                        ShowToast($"Note highlighted ({capturedName})", ToastType.Success);
+                    }
+                };
+
+                sp.Children.Add(swatch);
+            }
+
+            sp.Children.Add(new Border
+            {
+                Width = 1,
+                Height = 14,
+                Background = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                Margin = new Thickness(4, 0, 4, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+            Border btnClear = new Border
+            {
+                Width = 17,
+                Height = 17,
+                CornerRadius = new CornerRadius(8.5),
+                Background = new SolidColorBrush(Color.FromArgb(40, 239, 68, 68)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(120, 239, 68, 68)),
+                BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand,
+                ToolTip = "Clear Highlight"
+            };
+            btnClear.Child = new TextBlock
+            {
+                Text = "✕",
+                FontSize = 9,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113)),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            btnClear.MouseEnter += (s, e) => btnClear.Background = new SolidColorBrush(Color.FromArgb(80, 239, 68, 68));
+            btnClear.MouseLeave += (s, e) => btnClear.Background = new SolidColorBrush(Color.FromArgb(40, 239, 68, 68));
+            btnClear.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                _stabiloSelectionPopup.IsOpen = false;
+
+                if (checkItem != null)
+                {
+                    checkItem.HighlightColor = null;
+                    RenderChecklistItems(card);
+                    RecordUndo("Clear Task Highlight");
+                    ScheduleAutoSave();
+                    ShowToast("Task highlight cleared", ToastType.Info);
+                }
+                else
+                {
+                    ApplyNoteHighlight(card, null);
+                    RecordUndo("Clear Note Highlight");
+                    ScheduleAutoSave();
+                    ShowToast("Note highlight cleared", ToastType.Info);
+                }
+            };
+            sp.Children.Add(btnClear);
+
+            pill.Child = sp;
+            _stabiloSelectionPopup.Child = pill;
+            _stabiloSelectionPopup.IsOpen = true;
+        }
+
+        private void ShowStabiloToolbarPicker(FrameworkElement anchor, CardItem item)
+        {
+            _isCardSubMenuOpen = true;
+
+            Popup popup = new Popup
+            {
+                PlacementTarget = anchor,
+                Placement = PlacementMode.Bottom,
+                StaysOpen = false,
+                AllowsTransparency = true,
+                PopupAnimation = PopupAnimation.Fade,
+                VerticalOffset = 6
+            };
+
+            popup.Closed += (s, e) =>
+            {
+                _isCardSubMenuOpen = false;
+            };
+
+            Border container = new Border
+            {
+                Width = 220,
+                Background = new SolidColorBrush(Color.FromRgb(22, 25, 34)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 56, 189, 248)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(10),
+                SnapsToDevicePixels = true,
+                Effect = new DropShadowEffect
+                {
+                    Color = Colors.Black,
+                    BlurRadius = 20,
+                    ShadowDepth = 4,
+                    Opacity = 0.75
+                }
+            };
+
+            StackPanel sp = new StackPanel();
+
+            Grid hdrGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            TextBlock txtHdr = new TextBlock
+            {
+                Text = item.IsChecklist ? "🖍️ Stabilo / Highlight All" : "🖍️ Stabilo / Highlight Note",
+                FontSize = 11,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(241, 245, 249))
+            };
+            hdrGrid.Children.Add(txtHdr);
+            sp.Children.Add(hdrGrid);
+
+            var stabiloColors = new (string Name, string Hex)[]
+            {
+                ("Neon Yellow", "#FACC15"),
+                ("Neon Green",  "#4ADE80"),
+                ("Neon Cyan",   "#38BDF8"),
+                ("Neon Pink",   "#F472B6"),
+                ("Neon Orange", "#FB923C"),
+                ("Neon Violet", "#C084FC")
+            };
+
+            UniformGrid colorGrid = new UniformGrid { Columns = 6, Margin = new Thickness(0, 0, 0, 8) };
+            foreach (var (cName, cHex) in stabiloColors)
+            {
+                Color c = (Color)ColorConverter.ConvertFromString(cHex);
+                Border swatch = new Border
+                {
+                    Width = 24,
+                    Height = 24,
+                    CornerRadius = new CornerRadius(12),
+                    Background = new SolidColorBrush(c),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    Margin = new Thickness(2),
+                    Cursor = Cursors.Hand,
+                    ToolTip = cName
+                };
+
+                swatch.MouseEnter += (s, e) =>
+                {
+                    swatch.BorderBrush = Brushes.White;
+                    swatch.BorderThickness = new Thickness(2);
+                };
+                swatch.MouseLeave += (s, e) =>
+                {
+                    swatch.BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255));
+                    swatch.BorderThickness = new Thickness(1);
+                };
+                string capturedHex = cHex;
+                string capturedName = cName;
+                swatch.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    popup.IsOpen = false;
+                    if (item.IsChecklist)
+                    {
+                        if (item.ChecklistItems != null)
+                        {
+                            foreach (var ci in item.ChecklistItems)
+                            {
+                                ci.HighlightColor = capturedHex;
+                            }
+                        }
+                        RenderChecklistItems(item);
+                        RecordUndo("Highlight All Tasks");
+                        ScheduleAutoSave();
+                        ShowToast($"All tasks highlighted ({capturedName})", ToastType.Success);
+                    }
+                    else
+                    {
+                        ApplyNoteHighlight(item, capturedHex);
+                        RecordUndo("Highlight Note");
+                        ScheduleAutoSave();
+                        ShowToast($"Note highlighted ({capturedName})", ToastType.Success);
+                    }
+                };
+                colorGrid.Children.Add(swatch);
+            }
+            sp.Children.Add(colorGrid);
+
+            Border btnClearAll = new Border
+            {
+                Padding = new Thickness(6, 4, 6, 4),
+                CornerRadius = new CornerRadius(4),
+                Background = new SolidColorBrush(Color.FromArgb(25, 239, 68, 68)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(80, 239, 68, 68)),
+                BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            btnClearAll.Child = new TextBlock
+            {
+                Text = item.IsChecklist ? "✕ Clear All Highlights" : "✕ Clear Note Highlight",
+                FontSize = 10,
+                Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113)),
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            btnClearAll.MouseEnter += (s, e) => btnClearAll.Background = new SolidColorBrush(Color.FromArgb(50, 239, 68, 68));
+            btnClearAll.MouseLeave += (s, e) => btnClearAll.Background = new SolidColorBrush(Color.FromArgb(25, 239, 68, 68));
+            btnClearAll.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                popup.IsOpen = false;
+                if (item.IsChecklist)
+                {
+                    if (item.ChecklistItems != null)
+                    {
+                        foreach (var ci in item.ChecklistItems)
+                        {
+                            ci.HighlightColor = null;
+                        }
+                    }
+                    RenderChecklistItems(item);
+                    RecordUndo("Clear All Highlights");
+                    ScheduleAutoSave();
+                    ShowToast("All task highlights cleared", ToastType.Info);
+                }
+                else
+                {
+                    ApplyNoteHighlight(item, null);
+                    RecordUndo("Clear Note Highlight");
+                    ScheduleAutoSave();
+                    ShowToast("Note highlight cleared", ToastType.Info);
+                }
+            };
+            sp.Children.Add(btnClearAll);
+
+            container.Child = sp;
+            popup.Child = container;
+            popup.IsOpen = true;
+        }
+        #endregion
 
         private void ShowDeadlinePickerPopup(FrameworkElement anchor, CardItem item)
         {
@@ -8887,6 +9563,7 @@ namespace DropBoard.Native
                     NoteBgColor = c.NoteBgColor,
                     NoteAlignment = c.NoteAlignment,
                     NoteHasShadow = c.NoteHasShadow,
+                    NoteHighlightColor = c.NoteHighlightColor,
                     HasDeadline = c.HasDeadline,
                     DeadlineIso = c.DeadlineDateTime?.ToString("o"),
                     DeadlineLabel = c.DeadlineLabel,
@@ -9027,6 +9704,7 @@ namespace DropBoard.Native
                             ApplyNoteTextColor(existingCard, cs.NoteTextColor);
                             ApplyNoteBackground(existingCard, cs.NoteBgColor);
                             ApplyNoteShadow(existingCard);
+                            ApplyNoteHighlight(existingCard, cs.NoteHighlightColor);
 
                             // Restore Deadline
                             existingCard.HasDeadline = cs.HasDeadline;
@@ -9179,6 +9857,7 @@ namespace DropBoard.Native
                                 noteDoodleInkBase64: cs.NoteDoodleInkBase64,
                                 noteBgGifPath: cs.NoteBgGifPath,
                                 noteBgGifBase64: cs.NoteBgGifBase64,
+                                noteHighlightColor: cs.NoteHighlightColor,
                                 autoSelect: false);
                             newNote.Id = cs.Id;
                             newNote.GroupId = cs.GroupId;
@@ -9580,6 +10259,97 @@ namespace DropBoard.Native
                     miBg.Items.Add(sub);
                 }
                 cm.Items.Add(miBg);
+
+                MenuItem miStabilo = new MenuItem
+                {
+                    Header = item.IsChecklist ? "🖍️ Stabilo / Highlight All..." : "🖍️ Stabilo / Highlight Note...",
+                    Icon = CreateMenuIcon("M 18,2 L 22,6 L 7,21 L 2,22 L 3,17 Z M 15,5 L 19,9", "#FACC15")
+                };
+
+                var cmStabiloColors = new (string Name, string Hex)[]
+                {
+                    ("Neon Yellow", "#FACC15"),
+                    ("Neon Green",  "#4ADE80"),
+                    ("Neon Cyan",   "#38BDF8"),
+                    ("Neon Pink",   "#F472B6"),
+                    ("Neon Orange", "#FB923C"),
+                    ("Neon Violet", "#C084FC")
+                };
+
+                foreach (var (cName, cHex) in cmStabiloColors)
+                {
+                    MenuItem subColor = new MenuItem
+                    {
+                        Header = cName,
+                        Icon = new Border
+                        {
+                            Width = 12,
+                            Height = 12,
+                            CornerRadius = new CornerRadius(6),
+                            Background = (Brush)new BrushConverter().ConvertFromString(cHex)!
+                        }
+                    };
+                    string capHex = cHex;
+                    string capName = cName;
+                    subColor.Click += (s, e) =>
+                    {
+                        if (item.IsChecklist)
+                        {
+                            if (item.ChecklistItems != null)
+                            {
+                                foreach (var ci in item.ChecklistItems)
+                                {
+                                    ci.HighlightColor = capHex;
+                                }
+                            }
+                            RenderChecklistItems(item);
+                            RecordUndo("Highlight All Tasks");
+                            ScheduleAutoSave();
+                            ShowToast($"All tasks highlighted ({capName})", ToastType.Success);
+                        }
+                        else
+                        {
+                            ApplyNoteHighlight(item, capHex);
+                            RecordUndo("Highlight Note");
+                            ScheduleAutoSave();
+                            ShowToast($"Note highlighted ({capName})", ToastType.Success);
+                        }
+                    };
+                    miStabilo.Items.Add(subColor);
+                }
+
+                MenuItem subClearHl = new MenuItem
+                {
+                    Header = item.IsChecklist ? "✕ Clear All Highlights" : "✕ Clear Note Highlight",
+                    Foreground = new SolidColorBrush(Color.FromRgb(248, 113, 113))
+                };
+                subClearHl.Click += (s, e) =>
+                {
+                    if (item.IsChecklist)
+                    {
+                        if (item.ChecklistItems != null)
+                        {
+                            foreach (var ci in item.ChecklistItems)
+                            {
+                                ci.HighlightColor = null;
+                            }
+                        }
+                        RenderChecklistItems(item);
+                        RecordUndo("Clear All Highlights");
+                        ScheduleAutoSave();
+                        ShowToast("All task highlights cleared", ToastType.Info);
+                    }
+                    else
+                    {
+                        ApplyNoteHighlight(item, null);
+                        RecordUndo("Clear Note Highlight");
+                        ScheduleAutoSave();
+                        ShowToast("Note highlight cleared", ToastType.Info);
+                    }
+                };
+                miStabilo.Items.Add(new Separator());
+                miStabilo.Items.Add(subClearHl);
+                cm.Items.Add(miStabilo);
 
                 cm.Items.Add(CreateRichMenuItem(
                     CreateMenuIcon("M 4,4 L 20,4 L 20,20 L 4,20 Z M 8,12 L 12,16 L 16,12", "#F472B6"),
@@ -11143,6 +11913,46 @@ namespace DropBoard.Native
                 sp.Children.Add(btnDoodle);
                 sp.Children.Add(btnDeadline);
                 sp.Children.Add(btnChecklist);
+
+                // 5.9 Stabilo / Highlight Button
+                Border btnStabilo = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 2, 5, 2),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Stabilo / Highlight (Click to pick color or highlight all tasks)"
+                };
+                StackPanel stabiloSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                stabiloSp.Children.Add(new TextBlock
+                {
+                    Text = "🖍️",
+                    FontSize = 10,
+                    Margin = new Thickness(0, 0, 2, 0)
+                });
+                stabiloSp.Children.Add(new TextBlock
+                {
+                    Text = "Stabilo",
+                    FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.FromRgb(226, 232, 240))
+                });
+                btnStabilo.Child = stabiloSp;
+                item.BtnNoteStabilo = btnStabilo;
+
+                btnStabilo.MouseEnter += (s, e) => btnStabilo.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+                btnStabilo.MouseLeave += (s, e) => btnStabilo.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                btnStabilo.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnStabilo.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    ShowStabiloToolbarPicker(btnStabilo, item);
+                };
+                sp.Children.Add(btnStabilo);
+
                 sp.Children.Add(CreateDivider());
                 sp.Children.Add(btnMore);
             }
@@ -14127,7 +14937,7 @@ namespace DropBoard.Native
             List<NoteChecklistItem>? dupChecklist = null;
             if (item.IsChecklist && item.ChecklistItems != null)
             {
-                dupChecklist = item.ChecklistItems.Select(ci => new NoteChecklistItem { Id = Guid.NewGuid().ToString("N"), Text = ci.Text, IsChecked = ci.IsChecked }).ToList();
+                dupChecklist = item.ChecklistItems.Select(ci => new NoteChecklistItem { Id = Guid.NewGuid().ToString("N"), Text = ci.Text, IsChecked = ci.IsChecked, HighlightColor = ci.HighlightColor }).ToList();
             }
 
             AddNoteCard(
@@ -14149,6 +14959,7 @@ namespace DropBoard.Native
                 noteDoodleInkBase64: item.NoteDoodleInkBase64,
                 noteBgGifPath: item.NoteBgGifPath,
                 noteBgGifBase64: item.NoteBgGifBase64,
+                noteHighlightColor: item.NoteHighlightColor,
                 autoSelect: true);
             ScheduleAutoSave();
             ShowToast("Duplicated note", ToastType.Success);
@@ -16887,6 +17698,7 @@ namespace DropBoard.Native
                     noteBgColor = c.NoteBgColor,
                     noteAlignment = c.NoteAlignment.ToString(),
                     noteHasShadow = c.NoteHasShadow,
+                    noteHighlightColor = c.NoteHighlightColor,
                     hasDeadline = c.HasDeadline,
                     deadlineIso = c.DeadlineDateTime?.ToString("o"),
                     deadlineLabel = c.DeadlineLabel,
@@ -17152,6 +17964,7 @@ namespace DropBoard.Native
                             string noteDoodleInk = card.TryGetProperty("noteDoodleInk", out JsonElement ndiEl) ? (ndiEl.GetString() ?? "") : "";
                             string? noteBgGifPath = card.TryGetProperty("noteBgGifPath", out JsonElement nbgpEl) ? nbgpEl.GetString() : null;
                             string? noteBgGifBase64 = card.TryGetProperty("noteBgGifBase64", out JsonElement nbgdEl) ? nbgdEl.GetString() : null;
+                            string? noteHighlightColor = card.TryGetProperty("noteHighlightColor", out JsonElement nhcEl) ? nhcEl.GetString() : null;
 
                             double x = card.TryGetProperty("x", out JsonElement xEl) ? xEl.GetDouble() : 0;
                             double y = card.TryGetProperty("y", out JsonElement yEl) ? yEl.GetDouble() : 0;
@@ -17177,6 +17990,7 @@ namespace DropBoard.Native
                                 noteDoodleInkBase64: noteDoodleInk,
                                 noteBgGifPath: noteBgGifPath,
                                 noteBgGifBase64: noteBgGifBase64,
+                                noteHighlightColor: noteHighlightColor,
                                 autoSelect: false);
                             if (card.TryGetProperty("id", out JsonElement noteIdEl) && !string.IsNullOrEmpty(noteIdEl.GetString()))
                                 addedNote.Id = noteIdEl.GetString()!;
