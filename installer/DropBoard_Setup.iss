@@ -7,7 +7,7 @@
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Genesfi"
 #define MyAppURL "https://github.com/Genesfi/dropboard"
-#define MyAppExeName "DropBoard.Native.exe"
+#define MyAppExeName "DropBoard.exe"
 #define MyAppFileExt ".dropboard"
 #define MyAppProgID "DropBoard.Project"
 

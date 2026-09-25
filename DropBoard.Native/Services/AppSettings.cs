@@ -6,7 +6,7 @@ namespace DropBoard.Native.Services
 {
     public class AppSettings
     {
-        public int OpacityPercent { get; set; } = 0;
+        public int OpacityPercent { get; set; } = 100;
         public bool IsPinned { get; set; } = false;
         public double WindowLeft { get; set; } = 100;
         public double WindowTop { get; set; } = 100;

@@ -494,6 +494,45 @@ namespace DropBoard.Native
         private int _pipelineArrangeCount = 0;
         private readonly Dictionary<string, TaskCompletionSource<string>> _pendingCleanFrameRequests = new();
 
+        [DllImport("psapi.dll")]
+        private static extern int EmptyWorkingSet(IntPtr hwProc);
+
+        public static void TrimWorkingSet()
+        {
+            try
+            {
+                GC.Collect(2, GCCollectionMode.Forced, false, true);
+                GC.WaitForPendingFinalizers();
+                GC.Collect(2, GCCollectionMode.Forced, false, true);
+                EmptyWorkingSet(Process.GetCurrentProcess().Handle);
+            }
+            catch { }
+        }
+
+        private DispatcherTimer? _idleTrimTimer = null;
+        private void ScheduleWorkingSetTrim(int delayMs = 3500)
+        {
+            try
+            {
+                if (_idleTrimTimer == null)
+                {
+                    _idleTrimTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(delayMs) };
+                    _idleTrimTimer.Tick += (s, e) =>
+                    {
+                        _idleTrimTimer?.Stop();
+                        Task.Run(() => TrimWorkingSet());
+                    };
+                }
+                else
+                {
+                    _idleTrimTimer.Stop();
+                    _idleTrimTimer.Interval = TimeSpan.FromMilliseconds(delayMs);
+                }
+                _idleTrimTimer.Start();
+            }
+            catch { }
+        }
+
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
@@ -733,7 +772,7 @@ namespace DropBoard.Native
 
         private void UpdateViewportCulling()
         {
-            if (_cards.Count <= 30 || CanvasContainer.ActualWidth <= 0 || CanvasContainer.ActualHeight <= 0)
+            if (_cards.Count <= 10 || CanvasContainer.ActualWidth <= 0 || CanvasContainer.ActualHeight <= 0)
             {
                 for (int i = 0; i < _cards.Count; i++)
                 {
@@ -865,6 +904,15 @@ namespace DropBoard.Native
                 UpdateResponsiveLayout(ActualWidth > 0 ? ActualWidth : Width, ActualHeight > 0 ? ActualHeight : Height);
                 UpdateStorageStats();
                 SetupBrushModeSwatches();
+                ScheduleWorkingSetTrim(3000);
+            };
+
+            StateChanged += (s, e) =>
+            {
+                if (WindowState == WindowState.Minimized)
+                {
+                    Task.Run(() => TrimWorkingSet());
+                }
             };
         }
 
@@ -2577,6 +2625,50 @@ namespace DropBoard.Native
             }
         }
 
+        private void FitNoteToGifAspectRatio(CardItem card)
+        {
+            if (card.NoteBgGifImage == null) return;
+            double gifW = 0, gifH = 0;
+            if (!string.IsNullOrEmpty(card.NoteBgGifPath) && File.Exists(card.NoteBgGifPath))
+            {
+                try
+                {
+                    using var stream = File.OpenRead(card.NoteBgGifPath);
+                    var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
+                    if (decoder.Frames.Count > 0)
+                    {
+                        gifW = decoder.Frames[0].PixelWidth;
+                        gifH = decoder.Frames[0].PixelHeight;
+                    }
+                }
+                catch { }
+            }
+            else if (!string.IsNullOrEmpty(card.NoteBgGifBase64))
+            {
+                try
+                {
+                    string clean = card.NoteBgGifBase64.Contains(",") ? card.NoteBgGifBase64.Substring(card.NoteBgGifBase64.IndexOf(",") + 1) : card.NoteBgGifBase64;
+                    byte[] raw = Convert.FromBase64String(clean);
+                    using var ms = new MemoryStream(raw);
+                    var decoder = BitmapDecoder.Create(ms, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
+                    if (decoder.Frames.Count > 0)
+                    {
+                        gifW = decoder.Frames[0].PixelWidth;
+                        gifH = decoder.Frames[0].PixelHeight;
+                    }
+                }
+                catch { }
+            }
+
+            if (gifW > 0 && gifH > 0)
+            {
+                double targetAspect = gifW / gifH;
+                card.Height = Math.Round(card.Width / targetAspect);
+                card.AspectRatio = targetAspect;
+                ScheduleAutoSave();
+            }
+        }
+
         private void PromptSetNoteBgGif(CardItem item)
         {
             OpenFileDialog dlg = new OpenFileDialog
@@ -2588,8 +2680,9 @@ namespace DropBoard.Native
             if (dlg.ShowDialog() == true)
             {
                 ApplyNoteBgGif(item, dlg.FileName);
+                FitNoteToGifAspectRatio(item);
                 ScheduleAutoSave();
-                ShowToast("🎬 Applied animated GIF background to note!", ToastType.Success);
+                ShowToast("🎬 Applied animated GIF background & fitted proportions!", ToastType.Success);
             }
         }
 
@@ -2935,20 +3028,27 @@ namespace DropBoard.Native
                 Visibility = Visibility.Collapsed
             };
 
-            // Note Root Grid (design base coordinates with rounded corner clip)
+            // Note Root Grid (design base coordinates)
             Grid noteRootGrid = new Grid
             {
                 Width = baseW,
                 Height = baseH,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
-                VerticalAlignment = VerticalAlignment.Stretch,
-                Clip = new RectangleGeometry(new Rect(0, 0, baseW, baseH), 6, 6)
+                VerticalAlignment = VerticalAlignment.Stretch
             };
-            noteRootGrid.Children.Add(bgGifImage);
-            noteRootGrid.Children.Add(bgGifOverlay);
             noteRootGrid.Children.Add(noteContentLayer);
             noteRootGrid.Children.Add(doodleCanvas);
             noteRootGrid.Children.Add(doodleIndicator);
+
+            // Dynamic Content Scaling: Wrap noteRootGrid inside Viewbox with Stretch.Uniform so all text, checklist items,
+            // checkboxes, strike-through lines, countdown banner, and doodles scale cleanly WITHOUT becoming gepeng!
+            Viewbox noteViewbox = new Viewbox
+            {
+                Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = noteRootGrid
+            };
 
             // Bottom-left quick pen button for fast doodle / strike access right on note
             Border btnCornerPen = new Border
@@ -2983,17 +3083,28 @@ namespace DropBoard.Native
                 Height = 12,
                 Child = cornerPenPath
             };
-            noteRootGrid.Children.Add(btnCornerPen);
 
-            // Dynamic Content Scaling: Wrap noteRootGrid inside Viewbox with Stretch.Uniform so all text, checklist items,
-            // checkboxes, strike-through lines, countdown banner, and doodles scale cleanly WITHOUT becoming gepeng!
-            Viewbox noteViewbox = new Viewbox
+            // Note Host Grid: Hosts the background GIF/tint directly across the FULL actual card dimensions (w x h),
+            // so animated GIFs always fit and fill the entire card panel edge-to-edge without letterboxing gaps!
+            Grid noteHostGrid = new Grid
             {
-                Stretch = Stretch.Uniform,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Child = noteRootGrid
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                ClipToBounds = true
             };
+            noteHostGrid.Children.Add(bgGifImage);
+            noteHostGrid.Children.Add(bgGifOverlay);
+            noteHostGrid.Children.Add(noteViewbox);
+            noteHostGrid.Children.Add(btnCornerPen);
+
+            noteHostGrid.SizeChanged += (s, e) =>
+            {
+                if (e.NewSize.Width > 0 && e.NewSize.Height > 0)
+                {
+                    noteHostGrid.Clip = new RectangleGeometry(new Rect(0, 0, e.NewSize.Width, e.NewSize.Height), 6, 6);
+                }
+            };
+            noteHostGrid.Clip = new RectangleGeometry(new Rect(0, 0, Math.Max(1, w), Math.Max(1, h)), 6, 6);
 
             Border contentBorder = new Border
             {
@@ -3003,7 +3114,7 @@ namespace DropBoard.Native
                 Padding = new Thickness(0),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
-                Child = noteViewbox,
+                Child = noteHostGrid,
                 ClipToBounds = true
             };
 
@@ -3124,8 +3235,9 @@ namespace DropBoard.Native
                         {
                             e.Handled = true;
                             ApplyNoteBgGif(item, file);
+                            FitNoteToGifAspectRatio(item);
                             ScheduleAutoSave();
-                            ShowToast("🎬 Applied animated GIF background to note!", ToastType.Success);
+                            ShowToast("🎬 Applied animated GIF background & fitted proportions!", ToastType.Success);
                         }
                     }
                 }
@@ -4168,6 +4280,7 @@ namespace DropBoard.Native
             }
             if (item.BtnNoteCornerPen != null)
             {
+                item.BtnNoteCornerPen.Visibility = item.IsNoteDoodleActive ? Visibility.Collapsed : Visibility.Visible;
                 if (item.IsNoteDoodleActive)
                 {
                     item.BtnNoteCornerPen.Background = new SolidColorBrush(Color.FromRgb(244, 63, 94));
@@ -5981,6 +6094,7 @@ namespace DropBoard.Native
                 RecordUndo($"Import {total} Images");
                 UpdateViewportCulling();
                 GC.Collect(2, GCCollectionMode.Forced, false);
+                ScheduleWorkingSetTrim(2000);
 
                 if (showModal)
                 {
@@ -8727,7 +8841,7 @@ namespace DropBoard.Native
 
             var snap = CreateCurrentSnapshot(actionName);
             _undoStack.Push(snap);
-            if (_undoStack.Count > 50)
+            if (_undoStack.Count > 30)
             {
                 var list = _undoStack.ToList();
                 list.RemoveAt(list.Count - 1);
@@ -9400,6 +9514,27 @@ namespace DropBoard.Native
 
                 if (!string.IsNullOrEmpty(item.NoteBgGifPath) || !string.IsNullOrEmpty(item.NoteBgGifBase64))
                 {
+                    cm.Items.Add(CreateRichMenuItem(
+                        CreateMenuIcon("M 4,4 L 20,4 L 20,20 L 4,20 Z M 8,8 L 16,16 M 16,8 L 8,16", "#38BDF8"),
+                        "Fit Note to GIF Ratio",
+                        "Snap note proportions to match GIF aspect ratio exactly",
+                        (s, e) => FitNoteToGifAspectRatio(item)
+                    ));
+
+                    cm.Items.Add(CreateRichMenuItem(
+                        CreateMenuIcon("M 4,8 L 4,4 L 8,4 M 20,8 L 20,4 L 16,4 M 4,16 L 4,20 L 8,20 M 20,16 L 20,20 L 16,20", "#38BDF8"),
+                        item.NoteBgGifImage?.Stretch == Stretch.Uniform ? "Set GIF to Fill (Cover)" : "Set GIF to Fit (Contain)",
+                        "Toggle between edge-to-edge fill and uncropped contain",
+                        (s, e) =>
+                        {
+                            if (item.NoteBgGifImage != null)
+                            {
+                                item.NoteBgGifImage.Stretch = item.NoteBgGifImage.Stretch == Stretch.Uniform ? Stretch.UniformToFill : Stretch.Uniform;
+                                ShowToast(item.NoteBgGifImage.Stretch == Stretch.Uniform ? "GIF mode: Contain (Entire GIF visible)" : "GIF mode: Cover (Fills entire card)", ToastType.Info);
+                            }
+                        }
+                    ));
+
                     cm.Items.Add(CreateRichMenuItem(
                         CreateMenuIcon("M 3,6 h 18 M 19,6 v 14 a 2,2 0 0 1 -2,2 H 7 a 2,2 0 0 1 -2,-2 V 6", "#EF4444"),
                         "Remove GIF Background",
@@ -13986,6 +14121,18 @@ namespace DropBoard.Native
             {
                 CleanupLocalVideoCard(card);
             }
+
+            if (card.ImageControl != null)
+            {
+                card.ImageControl.Source = null;
+            }
+            card.Bitmap = null!;
+            card.OriginalBitmap = null!;
+            card.Base64Data = "";
+            card.NoteDoodleCanvas = null;
+            card.NoteDoodleIndicator = null;
+            card.NoteEditor = null;
+            ScheduleWorkingSetTrim(2000);
         }
 
         private void RemoveCard(CardItem card)
@@ -17352,6 +17499,7 @@ namespace DropBoard.Native
                 UpdateViewportCulling();
                 EmptyStateOverlay.Visibility = _cards.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
                 GC.Collect(2, GCCollectionMode.Forced, false);
+                ScheduleWorkingSetTrim(2500);
                 if (_cards.Count > 0)
                 {
                     ShowToast($"Restored: {_projectName}", ToastType.Success);

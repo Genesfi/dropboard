@@ -392,11 +392,11 @@
                                 </Viewbox>
                             </Border>
                             <!-- Slider with DoubleClick Quick Toggle -->
-                            <Slider x:Name="CanvasBgSlider" Style="{StaticResource CanvasOpacitySliderStyle}" Width="60" Minimum="0" Maximum="100" Value="0" 
+                            <Slider x:Name="CanvasBgSlider" Style="{StaticResource CanvasOpacitySliderStyle}" Width="60" Minimum="0" Maximum="100" Value="100" 
                                     ValueChanged="CanvasBgSlider_ValueChanged" MouseDoubleClick="CanvasBgSlider_MouseDoubleClick"
                                     VerticalAlignment="Center"/>
                             <!-- Fixed Width Text Badge (Zero Jitter/Shift) with 1-Click Quick Toggle -->
-                            <TextBlock x:Name="CanvasBgText" Text="0%" Width="36" TextAlignment="Right" 
+                            <TextBlock x:Name="CanvasBgText" Text="100%" Width="36" TextAlignment="Right" 
                                        FontSize="10.5" FontWeight="Bold" Foreground="#38BDF8" Margin="4,0,0,0" 
                                        VerticalAlignment="Center" Cursor="Hand" ToolTip="Click to toggle 0% (Clear Glass) ⇄ 100% (Solid Dark)"
                                        MouseLeftButtonDown="BtnOpacityToggle_Click"/>

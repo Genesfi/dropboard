@@ -1,25 +1,35 @@
 const DROPBOARD_PORT = 28888;
 const ADD_ENDPOINT = `http://127.0.0.1:${DROPBOARD_PORT}/add`;
 
-// Create Context Menus
+// Create Clean Context Menus (Purges any legacy/cached items)
+function setupContextMenus() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "send-to-dropboard-img",
+      title: "Add Image to DropBoard",
+      contexts: ["image"]
+    });
+
+    chrome.contextMenus.create({
+      id: "send-to-dropboard-link",
+      title: "Send Link to DropBoard",
+      contexts: ["link"]
+    });
+
+    chrome.contextMenus.create({
+      id: "send-to-dropboard-page",
+      title: "Send Page to DropBoard",
+      contexts: ["page"]
+    });
+  });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "send-to-dropboard-img",
-    title: "Add Image to DropBoard",
-    contexts: ["image"]
-  });
+  setupContextMenus();
+});
 
-  chrome.contextMenus.create({
-    id: "send-to-dropboard-link",
-    title: "Send Link to DropBoard",
-    contexts: ["link"]
-  });
-
-  chrome.contextMenus.create({
-    id: "send-to-dropboard-page",
-    title: "Send Current Page to DropBoard",
-    contexts: ["page"]
-  });
+chrome.runtime.onStartup.addListener(() => {
+  setupContextMenus();
 });
 
 async function sendToDropBoard(url, title = "") {

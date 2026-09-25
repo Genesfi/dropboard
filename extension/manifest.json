@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DropBoard Web Capture",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Send Pinterest pins, ArtStation art, and web images directly to your DropBoard desktop reference board.",
   "permissions": [
     "contextMenus",
