@@ -36,7 +36,11 @@ namespace DropBoard.Native
         TopLeft,
         TopRight,
         BottomLeft,
-        BottomRight
+        BottomRight,
+        Right,
+        Left,
+        Top,
+        Bottom
     }
 
     public enum ToastType
@@ -298,6 +302,10 @@ namespace DropBoard.Native
         public Border HandleTR { get; set; } = null!;
         public Border HandleBL { get; set; } = null!;
         public Border HandleBR { get; set; } = null!;
+        public Border? HandleR { get; set; } = null;
+        public Border? HandleL { get; set; } = null;
+        public Border? HandleT { get; set; } = null;
+        public Border? HandleB { get; set; } = null;
 
         private double _fallbackX = 0;
         private double _fallbackY = 0;
@@ -2680,9 +2688,8 @@ namespace DropBoard.Native
             if (dlg.ShowDialog() == true)
             {
                 ApplyNoteBgGif(item, dlg.FileName);
-                FitNoteToGifAspectRatio(item);
                 ScheduleAutoSave();
-                ShowToast("🎬 Applied animated GIF background & fitted proportions!", ToastType.Success);
+                ShowToast("🎬 Applied animated GIF background to note!", ToastType.Success);
             }
         }
 
@@ -3010,12 +3017,12 @@ namespace DropBoard.Native
             double baseW = isChecklist ? 320.0 : 280.0;
             double baseH = isChecklist ? 240.0 : 180.0;
 
-            // Note Background Animated GIF Layer (fits exact card size)
+            // Note Background Animated GIF Layer (auto-centered horizontally and vertically on resize)
             Image bgGifImage = new Image
             {
                 Stretch = Stretch.UniformToFill,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                VerticalAlignment = VerticalAlignment.Stretch,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
 
@@ -3042,11 +3049,12 @@ namespace DropBoard.Native
 
             // Dynamic Content Scaling: Wrap noteRootGrid inside Viewbox with Stretch.Uniform so all text, checklist items,
             // checkboxes, strike-through lines, countdown banner, and doodles scale cleanly WITHOUT becoming gepeng!
+            // Aligned to TOP so header, deadline banner, and checklist always stay pinned to the top of the card!
             Viewbox noteViewbox = new Viewbox
             {
                 Stretch = Stretch.Uniform,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
                 Child = noteRootGrid
             };
 
@@ -3128,16 +3136,24 @@ namespace DropBoard.Native
             container.Children.Add(dummyImg);
             container.Children.Add(contentBorder);
 
-            // 4 Corner Handles
+            // 4 Corner Handles + 4 Edge Pill Handles (Enables resizing just right panel/edge thin or wide!)
             Border handleTL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Top, Cursors.SizeNWSE);
             Border handleTR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Top, Cursors.SizeNESW);
             Border handleBL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Bottom, Cursors.SizeNESW);
             Border handleBR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Bottom, Cursors.SizeNWSE);
+            Border handleR = CreateResizeHandle(HorizontalAlignment.Right, VerticalAlignment.Center, Cursors.SizeWE);
+            Border handleL = CreateResizeHandle(HorizontalAlignment.Left, VerticalAlignment.Center, Cursors.SizeWE);
+            Border handleT = CreateResizeHandle(HorizontalAlignment.Center, VerticalAlignment.Top, Cursors.SizeNS);
+            Border handleB = CreateResizeHandle(HorizontalAlignment.Center, VerticalAlignment.Bottom, Cursors.SizeNS);
 
             container.Children.Add(handleTL);
             container.Children.Add(handleTR);
             container.Children.Add(handleBL);
             container.Children.Add(handleBR);
+            container.Children.Add(handleR);
+            container.Children.Add(handleL);
+            container.Children.Add(handleT);
+            container.Children.Add(handleB);
             Panel.SetZIndex(container, 10);
 
             CardItem item = new CardItem
@@ -3154,6 +3170,10 @@ namespace DropBoard.Native
                 HandleTR = handleTR,
                 HandleBL = handleBL,
                 HandleBR = handleBR,
+                HandleR = handleR,
+                HandleL = handleL,
+                HandleT = handleT,
+                HandleB = handleB,
                 IsNote = true,
                 NoteText = text,
                 NoteFontFamily = fontFamily,
@@ -3235,9 +3255,8 @@ namespace DropBoard.Native
                         {
                             e.Handled = true;
                             ApplyNoteBgGif(item, file);
-                            FitNoteToGifAspectRatio(item);
                             ScheduleAutoSave();
-                            ShowToast("🎬 Applied animated GIF background & fitted proportions!", ToastType.Success);
+                            ShowToast("🎬 Applied animated GIF background to note!", ToastType.Success);
                         }
                     }
                 }
@@ -3655,6 +3674,10 @@ namespace DropBoard.Native
             AttachResizeHandleEvents(item, handleTR, ResizeCorner.TopRight);
             AttachResizeHandleEvents(item, handleBL, ResizeCorner.BottomLeft);
             AttachResizeHandleEvents(item, handleBR, ResizeCorner.BottomRight);
+            AttachResizeHandleEvents(item, handleR, ResizeCorner.Right);
+            AttachResizeHandleEvents(item, handleL, ResizeCorner.Left);
+            AttachResizeHandleEvents(item, handleT, ResizeCorner.Top);
+            AttachResizeHandleEvents(item, handleB, ResizeCorner.Bottom);
 
             // Determine World placement
             Point pos;
@@ -5001,21 +5024,26 @@ namespace DropBoard.Native
 
         private Border CreateResizeHandle(HorizontalAlignment hAlign, VerticalAlignment vAlign, Cursor cursor)
         {
+            bool isEdge = (hAlign == HorizontalAlignment.Center || vAlign == VerticalAlignment.Center);
+            double w = (vAlign == VerticalAlignment.Center) ? 8 : (isEdge ? 24 : 18);
+            double h = (hAlign == HorizontalAlignment.Center) ? 8 : (isEdge ? 24 : 18);
+            double radius = isEdge ? 4 : 9;
+
             Border handle = new Border
             {
-                Width = 18,
-                Height = 18,
+                Width = w,
+                Height = h,
                 Background = new SolidColorBrush(Colors.White),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
-                BorderThickness = new Thickness(2.5),
-                CornerRadius = new CornerRadius(9), // Circular dot
+                BorderThickness = new Thickness(2),
+                CornerRadius = new CornerRadius(radius),
                 HorizontalAlignment = hAlign,
                 VerticalAlignment = vAlign,
                 Margin = new Thickness(
-                    hAlign == HorizontalAlignment.Left ? -9 : 0,
-                    vAlign == VerticalAlignment.Top ? -9 : 0,
-                    hAlign == HorizontalAlignment.Right ? -9 : 0,
-                    vAlign == VerticalAlignment.Bottom ? -9 : 0),
+                    hAlign == HorizontalAlignment.Left ? -(w / 2) : 0,
+                    vAlign == VerticalAlignment.Top ? -(h / 2) : 0,
+                    hAlign == HorizontalAlignment.Right ? -(w / 2) : 0,
+                    vAlign == VerticalAlignment.Bottom ? -(h / 2) : 0),
                 Cursor = cursor,
                 Visibility = Visibility.Collapsed
             };
@@ -5069,9 +5097,9 @@ namespace DropBoard.Native
 
             bool isShift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
 
-            if (card.IsPaletteCard || (card.IsNote && isShift))
+            if (card.IsPaletteCard || card.IsNote || isShift)
             {
-                // Free-form 2D resize for palettes and notes (when Shift is held)
+                // Free-form 2D resize for notes, palettes, or when Shift is held (Allows making notes thin/wide freely!)
                 switch (corner)
                 {
                     case ResizeCorner.BottomRight:
@@ -5095,6 +5123,24 @@ namespace DropBoard.Native
                         newW = Math.Max(80, initial.Width - deltaX);
                         newH = Math.Max(50, initial.Height - deltaY);
                         newX = initial.Right - newW;
+                        newY = initial.Bottom - newH;
+                        break;
+
+                    case ResizeCorner.Right:
+                        newW = Math.Max(80, initial.Width + deltaX);
+                        break;
+
+                    case ResizeCorner.Left:
+                        newW = Math.Max(80, initial.Width - deltaX);
+                        newX = initial.Right - newW;
+                        break;
+
+                    case ResizeCorner.Bottom:
+                        newH = Math.Max(50, initial.Height + deltaY);
+                        break;
+
+                    case ResizeCorner.Top:
+                        newH = Math.Max(50, initial.Height - deltaY);
                         newY = initial.Bottom - newH;
                         break;
                 }
@@ -5102,7 +5148,7 @@ namespace DropBoard.Native
             }
             else
             {
-                // Proportional aspect-ratio locked resize for Images, Notes, and Sketch Cards (Prevents Gepeng!)
+                // Proportional aspect-ratio locked resize for Images and Sketch Cards (Prevents Gepeng!)
                 switch (corner)
                 {
                     case ResizeCorner.BottomRight:
@@ -5126,6 +5172,28 @@ namespace DropBoard.Native
                         newW = Math.Max(60, initial.Width - deltaX);
                         newH = newW / card.AspectRatio;
                         newX = initial.Right - newW;
+                        newY = initial.Bottom - newH;
+                        break;
+
+                    case ResizeCorner.Right:
+                        newW = Math.Max(60, initial.Width + deltaX);
+                        newH = newW / card.AspectRatio;
+                        break;
+
+                    case ResizeCorner.Left:
+                        newW = Math.Max(60, initial.Width - deltaX);
+                        newH = newW / card.AspectRatio;
+                        newX = initial.Right - newW;
+                        break;
+
+                    case ResizeCorner.Bottom:
+                        newH = Math.Max(60, initial.Height + deltaY);
+                        newW = newH * card.AspectRatio;
+                        break;
+
+                    case ResizeCorner.Top:
+                        newH = Math.Max(60, initial.Height - deltaY);
+                        newW = newH * card.AspectRatio;
                         newY = initial.Bottom - newH;
                         break;
                 }
@@ -5204,12 +5272,16 @@ namespace DropBoard.Native
                 card.ContentBorder.Effect = _selectedCards.Count <= 5 ? CardActiveShadow : null;
             }
 
-            // Tampilkan 4 corner handles hanya jika seleksi tidak terlalu banyak (<= 15)
+            // Tampilkan corner & edge handles jika seleksi tidak terlalu banyak (<= 15)
             Visibility handleVis = _selectedCards.Count <= 15 ? Visibility.Visible : Visibility.Collapsed;
             card.HandleTL.Visibility = handleVis;
             card.HandleTR.Visibility = handleVis;
             card.HandleBL.Visibility = handleVis;
             card.HandleBR.Visibility = handleVis;
+            if (card.HandleR != null) card.HandleR.Visibility = handleVis;
+            if (card.HandleL != null) card.HandleL.Visibility = handleVis;
+            if (card.HandleT != null) card.HandleT.Visibility = handleVis;
+            if (card.HandleB != null) card.HandleB.Visibility = handleVis;
 
             _highestZ++;
             Panel.SetZIndex(card.Container, _highestZ + 1000);
@@ -5271,6 +5343,10 @@ namespace DropBoard.Native
             card.HandleTR.Visibility = Visibility.Collapsed;
             card.HandleBL.Visibility = Visibility.Collapsed;
             card.HandleBR.Visibility = Visibility.Collapsed;
+            if (card.HandleR != null) card.HandleR.Visibility = Visibility.Collapsed;
+            if (card.HandleL != null) card.HandleL.Visibility = Visibility.Collapsed;
+            if (card.HandleT != null) card.HandleT.Visibility = Visibility.Collapsed;
+            if (card.HandleB != null) card.HandleB.Visibility = Visibility.Collapsed;
 
             if (card.HoverToolbar != null && !card.IsPlayingYouTube && !card.Container.IsMouseOver)
             {
