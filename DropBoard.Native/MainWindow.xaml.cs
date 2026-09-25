@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -93,6 +94,13 @@ namespace DropBoard.Native
         public bool IsSelected { get; set; } = false;
     }
 
+    public class NoteChecklistItem
+    {
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
+        public string Text { get; set; } = "";
+        public bool IsChecked { get; set; } = false;
+    }
+
     public class CardSnapshot
     {
         public string Id { get; set; } = "";
@@ -129,6 +137,14 @@ namespace DropBoard.Native
         public string NoteBgColor { get; set; } = "Transparent";
         public TextAlignment NoteAlignment { get; set; } = TextAlignment.Left;
         public bool NoteHasShadow { get; set; } = false;
+        public bool HasDeadline { get; set; } = false;
+        public string? DeadlineIso { get; set; } = null;
+        public string DeadlineLabel { get; set; } = "Deadline";
+        public bool IsChecklist { get; set; } = false;
+        public string ChecklistJson { get; set; } = "";
+        public string NoteDoodleInkBase64 { get; set; } = "";
+        public string? NoteBgGifPath { get; set; } = null;
+        public string? NoteBgGifBase64 { get; set; } = null;
         public bool IsPaletteCard { get; set; } = false;
         public string PalettePinsData { get; set; } = "";
         public int PaletteColorCount { get; set; } = 5;
@@ -210,6 +226,39 @@ namespace DropBoard.Native
         public bool NoteHasShadow { get; set; } = false;
         public TextBox? NoteEditor { get; set; } = null;
         public Border? BtnNoteShadow { get; set; } = null;
+        public TextBlock? NoteFontNameText { get; set; } = null;
+        public TextBlock? NoteFontSizeText { get; set; } = null;
+
+        // Note Deadline Integration
+        public bool HasDeadline { get; set; } = false;
+        public DateTime? DeadlineDateTime { get; set; } = null;
+        public string DeadlineLabel { get; set; } = "Deadline";
+        public Border? DeadlineBadge { get; set; } = null;
+        public TextBlock? DeadlineText { get; set; } = null;
+        public Border? BtnNoteDeadline { get; set; } = null;
+
+        // Note Checklist Integration
+        public bool IsChecklist { get; set; } = false;
+        public List<NoteChecklistItem>? ChecklistItems { get; set; } = new();
+        public Grid? NoteBodyContainer { get; set; } = null;
+        public ScrollViewer? ChecklistScrollViewer { get; set; } = null;
+        public StackPanel? ChecklistPanel { get; set; } = null;
+        public Border? BtnNoteChecklist { get; set; } = null;
+
+        // Note Freehand Doodle / Coret Layer
+        public bool IsNoteDoodleActive { get; set; } = false;
+        public System.Windows.Controls.InkCanvas? NoteDoodleCanvas { get; set; } = null;
+        public string NoteDoodleInkBase64 { get; set; } = "";
+        public Border? NoteDoodleIndicator { get; set; } = null;
+        public Border? BtnNoteDoodle { get; set; } = null;
+        public Border? BtnNoteCornerPen { get; set; } = null;
+        public System.Windows.Shapes.Path? NoteCornerPenIcon { get; set; } = null;
+
+        // Note Background GIF Integration
+        public string? NoteBgGifPath { get; set; } = null;
+        public string? NoteBgGifBase64 { get; set; } = null;
+        public Image? NoteBgGifImage { get; set; } = null;
+        public Border? NoteBgGifOverlay { get; set; } = null;
 
         // Hand-Drawn Sketch / Draw Card Integration
         public bool IsDrawCard { get; set; } = false;
@@ -440,6 +489,7 @@ namespace DropBoard.Native
         private string _dockPosition = "top";
         private EventHandler? _activeZoomAnimation = null;
         private DispatcherTimer? _dockTrackingTimer = null;
+        private DispatcherTimer? _deadlineRealtimeTimer = null;
         private int _gridArrangeCount = 0;
         private int _pipelineArrangeCount = 0;
         private readonly Dictionary<string, TaskCompletionSource<string>> _pendingCleanFrameRequests = new();
@@ -542,15 +592,47 @@ namespace DropBoard.Native
             }
         }
 
+        private bool IsTextEditorFocused(KeyEventArgs? e = null)
+        {
+            if (e != null)
+            {
+                if (e.OriginalSource is System.Windows.Controls.Primitives.TextBoxBase || e.OriginalSource is PasswordBox) return true;
+                if (e.OriginalSource is DependencyObject depO && (FindVisualParent<System.Windows.Controls.Primitives.TextBoxBase>(depO) != null || FindVisualParent<PasswordBox>(depO) != null)) return true;
+                if (e.Source is System.Windows.Controls.Primitives.TextBoxBase || e.Source is PasswordBox) return true;
+                if (e.Source is DependencyObject depS && (FindVisualParent<System.Windows.Controls.Primitives.TextBoxBase>(depS) != null || FindVisualParent<PasswordBox>(depS) != null)) return true;
+            }
+
+            var focused = Keyboard.FocusedElement as DependencyObject;
+            if (focused != null)
+            {
+                if (focused is System.Windows.Controls.Primitives.TextBoxBase || focused is PasswordBox) return true;
+                if (FindVisualParent<System.Windows.Controls.Primitives.TextBoxBase>(focused) != null || FindVisualParent<PasswordBox>(focused) != null) return true;
+            }
+
+            var winFocused = FocusManager.GetFocusedElement(this) as DependencyObject;
+            if (winFocused != null)
+            {
+                if (winFocused is System.Windows.Controls.Primitives.TextBoxBase || winFocused is PasswordBox) return true;
+                if (FindVisualParent<System.Windows.Controls.Primitives.TextBoxBase>(winFocused) != null || FindVisualParent<PasswordBox>(winFocused) != null) return true;
+            }
+
+            return false;
+        }
+
         private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
         {
+            bool isTyping = IsTextEditorFocused(e);
+
             if (e.Key == Key.Space && !_isPanning)
             {
-                SetWebViewHitTesting(false);
+                if (!isTyping)
+                {
+                    SetWebViewHitTesting(false);
+                }
             }
             else if ((e.Key == Key.B || e.Key == Key.P) && Keyboard.Modifiers == ModifierKeys.None && !_isPanning && !_isDraggingCards && !_isResizingCard)
             {
-                if (!(FocusManager.GetFocusedElement(this) is TextBox))
+                if (!isTyping)
                 {
                     ToggleBrushMode();
                     e.Handled = true;
@@ -558,20 +640,31 @@ namespace DropBoard.Native
             }
             else if ((e.Key == Key.V || e.Key == Key.Escape) && _isBrushMode)
             {
-                ToggleBrushMode(false);
-                e.Handled = true;
+                if (!isTyping)
+                {
+                    ToggleBrushMode(false);
+                    e.Handled = true;
+                }
             }
             else if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.None && !_isPanning && !_isDraggingCards && !_isResizingCard)
             {
-                if (!(FocusManager.GetFocusedElement(this) is TextBox))
+                if (!isTyping)
                 {
                     BtnAddNote_Click(sender, e);
                     e.Handled = true;
                 }
             }
+            else if (e.Key == Key.T && Keyboard.Modifiers == ModifierKeys.None && !_isPanning && !_isDraggingCards && !_isResizingCard)
+            {
+                if (!isTyping)
+                {
+                    BtnAddChecklist_Click(sender, e);
+                    e.Handled = true;
+                }
+            }
             else if ((e.Key == Key.Delete || e.Key == Key.Back) && Keyboard.Modifiers == ModifierKeys.None && !_isPanning && !_isDraggingCards && !_isResizingCard && !_isCropping)
             {
-                if (!(FocusManager.GetFocusedElement(this) is TextBox))
+                if (!isTyping)
                 {
                     if (_selectedCards.Count > 0 || _selectedGroups.Count > 0)
                     {
@@ -726,6 +819,13 @@ namespace DropBoard.Native
             };
             _dockTrackingTimer.Tick += DockTrackingTimer_Tick;
             _dockTrackingTimer.Start();
+
+            _deadlineRealtimeTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromSeconds(5)
+            };
+            _deadlineRealtimeTimer.Tick += (s, e) => UpdateAllDeadlineCards();
+            _deadlineRealtimeTimer.Start();
 
             if (_settings.WindowWidth >= 400 && _settings.WindowHeight >= 300)
             {
@@ -1182,6 +1282,21 @@ namespace DropBoard.Native
             if (stateChanged)
             {
                 ScheduleAutoSave();
+            }
+        }
+
+        private void CanvasContainer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            string mode = string.IsNullOrEmpty(_settings.NavMode) ? "macos" : _settings.NavMode.ToLowerInvariant();
+            bool isCtrlDown = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+
+            // In classic "mouse" mode (PureRef style): wheel ALWAYS zooms canvas
+            // In "macos" mode: Ctrl+Wheel zooms canvas
+            if (mode == "mouse" || isCtrlDown)
+            {
+                Point mousePos = e.GetPosition(CanvasContainer);
+                PerformCanvasZoom(e.Delta, mousePos);
+                e.Handled = true;
             }
         }
 
@@ -2140,10 +2255,187 @@ namespace DropBoard.Native
             }
         }
 
+        private void ApplyNoteTextColor(CardItem card, string hex)
+        {
+            if (string.IsNullOrWhiteSpace(hex)) return;
+            card.NoteTextColor = hex;
+
+            Brush brush;
+            try
+            {
+                brush = (Brush)new BrushConverter().ConvertFromString(hex)!;
+            }
+            catch
+            {
+                brush = Brushes.White;
+            }
+
+            Brush caretBrush = (hex == "#111827" || hex == "#000000" || hex == "#1E293B") ? Brushes.Black : Brushes.White;
+
+            if (card.NoteEditor != null)
+            {
+                card.NoteEditor.Foreground = brush;
+                card.NoteEditor.CaretBrush = caretBrush;
+            }
+
+            if (card.ChecklistPanel != null)
+            {
+                foreach (UIElement child in card.ChecklistPanel.Children)
+                {
+                    if (child is Grid row && row.Children.Count > 1 && row.Children[1] is Grid th)
+                    {
+                        foreach (UIElement gc in th.Children)
+                        {
+                            if (gc is TextBox tb)
+                            {
+                                tb.Foreground = brush;
+                                tb.CaretBrush = caretBrush;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private void ApplyNoteFontFamily(CardItem card, string fontFamily)
+        {
+            if (string.IsNullOrWhiteSpace(fontFamily)) return;
+            card.NoteFontFamily = fontFamily;
+            if (card.NoteFontNameText != null)
+            {
+                card.NoteFontNameText.Text = $"{fontFamily} ▾";
+            }
+
+            FontFamily ff = new FontFamily(fontFamily);
+            if (card.NoteEditor != null)
+            {
+                card.NoteEditor.FontFamily = ff;
+            }
+
+            if (card.ChecklistPanel != null)
+            {
+                foreach (UIElement child in card.ChecklistPanel.Children)
+                {
+                    if (child is Grid row && row.Children.Count > 1 && row.Children[1] is Grid th)
+                    {
+                        TextBox? tb = null;
+                        Border? strikeLine = null;
+                        foreach (UIElement gc in th.Children)
+                        {
+                            if (gc is TextBox t) tb = t;
+                            else if (gc is Border b) strikeLine = b;
+                        }
+
+                        if (tb != null)
+                        {
+                            tb.FontFamily = ff;
+                            if (strikeLine != null && strikeLine.ActualWidth > 0)
+                            {
+                                double tw = MeasureTextWidth(tb);
+                                strikeLine.Width = Math.Max(20, Math.Min(th.ActualWidth > 0 ? th.ActualWidth - 6 : 280, tw + 6));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private void ApplyNoteFontSize(CardItem card, double fontSize)
+        {
+            if (fontSize <= 0) return;
+            card.NoteFontSize = fontSize;
+            if (card.NoteFontSizeText != null)
+            {
+                card.NoteFontSizeText.Text = $"{(int)fontSize} ▾";
+            }
+
+            if (card.NoteEditor != null)
+            {
+                card.NoteEditor.FontSize = fontSize;
+            }
+
+            if (card.ChecklistPanel != null)
+            {
+                foreach (UIElement child in card.ChecklistPanel.Children)
+                {
+                    if (child is Grid row && row.Children.Count > 1 && row.Children[1] is Grid th)
+                    {
+                        TextBox? tb = null;
+                        Border? strikeLine = null;
+                        foreach (UIElement gc in th.Children)
+                        {
+                            if (gc is TextBox t) tb = t;
+                            else if (gc is Border b) strikeLine = b;
+                        }
+
+                        if (tb != null)
+                        {
+                            tb.FontSize = fontSize;
+                            if (strikeLine != null && strikeLine.ActualWidth > 0)
+                            {
+                                double tw = MeasureTextWidth(tb);
+                                strikeLine.Width = Math.Max(20, Math.Min(th.ActualWidth > 0 ? th.ActualWidth - 6 : 280, tw + 6));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private void ApplyNoteAlignment(CardItem card, TextAlignment align)
+        {
+            card.NoteAlignment = align;
+
+            if (card.NoteEditor != null)
+            {
+                card.NoteEditor.TextAlignment = align;
+            }
+
+            if (card.ChecklistPanel != null)
+            {
+                foreach (UIElement child in card.ChecklistPanel.Children)
+                {
+                    if (child is Grid row && row.Children.Count > 1 && row.Children[1] is Grid th)
+                    {
+                        foreach (UIElement gc in th.Children)
+                        {
+                            if (gc is TextBox tb)
+                            {
+                                tb.TextAlignment = align;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         private void ApplyNoteBackground(CardItem card, string bgMode)
         {
             card.NoteBgColor = bgMode;
             card.ContentBorder.CornerRadius = new CornerRadius(6);
+
+            bool isLightBg = bgMode == "Yellow Sticky" || bgMode == "Cyan Sticky";
+            if (isLightBg && (card.NoteTextColor == "#FFFFFF" || card.NoteTextColor.Equals("White", StringComparison.OrdinalIgnoreCase)))
+            {
+                ApplyNoteTextColor(card, "#111827");
+            }
+            else if (!isLightBg && (card.NoteTextColor == "#111827" || card.NoteTextColor == "#000000"))
+            {
+                ApplyNoteTextColor(card, "#FFFFFF");
+            }
+
+            // If a background GIF is active, adapt the readability overlay according to the note background
+            if (card.NoteBgGifOverlay != null)
+            {
+                if (bgMode == "Yellow Sticky" || bgMode == "Cyan Sticky" || bgMode == "Transparent")
+                {
+                    card.NoteBgGifOverlay.Background = Brushes.Transparent;
+                }
+                else
+                {
+                    card.NoteBgGifOverlay.Background = new SolidColorBrush(Color.FromArgb(90, 15, 23, 42));
+                }
+            }
 
             switch (bgMode)
             {
@@ -2206,21 +2498,98 @@ namespace DropBoard.Native
 
         private void ApplyNoteShadow(CardItem card)
         {
-            if (card.NoteEditor == null) return;
-            if (card.NoteHasShadow)
-            {
-                card.NoteEditor.Effect = new DropShadowEffect
+            DropShadowEffect? shadow = card.NoteHasShadow
+                ? new DropShadowEffect
                 {
                     Color = Colors.Black,
                     BlurRadius = 8,
                     ShadowDepth = 2,
                     Direction = 315,
                     Opacity = 0.95
-                };
-            }
-            else
+                }
+                : null;
+
+            if (card.NoteEditor != null)
             {
-                card.NoteEditor.Effect = null;
+                card.NoteEditor.Effect = shadow;
+            }
+
+            if (card.ChecklistPanel != null)
+            {
+                foreach (UIElement child in card.ChecklistPanel.Children)
+                {
+                    if (child is Grid row && row.Children.Count > 1 && row.Children[1] is Grid th)
+                    {
+                        foreach (UIElement gc in th.Children)
+                        {
+                            if (gc is TextBox tb)
+                            {
+                                tb.Effect = shadow;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private void ApplyNoteBgGif(CardItem card, string? gifPath, string? gifBase64 = null)
+        {
+            card.NoteBgGifPath = gifPath;
+            card.NoteBgGifBase64 = gifBase64;
+
+            if (card.NoteBgGifImage == null || card.NoteBgGifOverlay == null) return;
+
+            if (string.IsNullOrEmpty(gifPath) && string.IsNullOrEmpty(gifBase64))
+            {
+                card.NoteBgGifImage.Visibility = Visibility.Collapsed;
+                card.NoteBgGifOverlay.Visibility = Visibility.Collapsed;
+                try
+                {
+                    AnimationBehavior.SetSourceUri(card.NoteBgGifImage, null);
+                }
+                catch { }
+                ApplyNoteBackground(card, card.NoteBgColor);
+                return;
+            }
+
+            try
+            {
+                if (!string.IsNullOrEmpty(gifPath) && File.Exists(gifPath))
+                {
+                    AnimationBehavior.SetSourceUri(card.NoteBgGifImage, new Uri(gifPath, UriKind.Absolute));
+                    card.NoteBgGifImage.Visibility = Visibility.Visible;
+                    card.NoteBgGifOverlay.Visibility = Visibility.Visible;
+                }
+                else if (!string.IsNullOrEmpty(gifBase64))
+                {
+                    string clean = gifBase64.Contains(",") ? gifBase64.Substring(gifBase64.IndexOf(",") + 1) : gifBase64;
+                    byte[] raw = Convert.FromBase64String(clean);
+                    var ms = new MemoryStream(raw);
+                    AnimationBehavior.SetSourceStream(card.NoteBgGifImage, ms);
+                    card.NoteBgGifImage.Visibility = Visibility.Visible;
+                    card.NoteBgGifOverlay.Visibility = Visibility.Visible;
+                }
+                ApplyNoteBackground(card, card.NoteBgColor);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to set note background GIF: {ex.Message}");
+            }
+        }
+
+        private void PromptSetNoteBgGif(CardItem item)
+        {
+            OpenFileDialog dlg = new OpenFileDialog
+            {
+                Filter = "Animated GIF (*.gif)|*.gif|All Image Files (*.gif;*.png;*.jpg;*.jpeg;*.webp)|*.gif;*.png;*.jpg;*.jpeg;*.webp|All Files (*.*)|*.*",
+                Title = "Select Animated GIF Background for Note"
+            };
+
+            if (dlg.ShowDialog() == true)
+            {
+                ApplyNoteBgGif(item, dlg.FileName);
+                ScheduleAutoSave();
+                ShowToast("🎬 Applied animated GIF background to note!", ToastType.Success);
             }
         }
 
@@ -2235,12 +2604,20 @@ namespace DropBoard.Native
             string bgColor = "Transparent",
             TextAlignment alignment = TextAlignment.Left,
             bool hasShadow = false,
-            bool autoSelect = true)
+            bool autoSelect = true,
+            bool isChecklist = false,
+            List<NoteChecklistItem>? checklistItems = null,
+            bool hasDeadline = false,
+            DateTime? deadlineDateTime = null,
+            string deadlineLabel = "Deadline",
+            string noteDoodleInkBase64 = "",
+            string? noteBgGifPath = null,
+            string? noteBgGifBase64 = null)
         {
             EmptyStateOverlay.Visibility = Visibility.Collapsed;
 
-            double w = customWidth ?? 280.0;
-            double h = customHeight ?? 180.0;
+            double w = customWidth ?? (isChecklist ? 320.0 : 280.0);
+            double h = customHeight ?? (isChecklist ? 240.0 : 180.0);
 
             // 1x1 frozen transparent BitmapSource as dummy bitmap for CardItem requirements
             BitmapSource dummyBmp = BitmapSource.Create(1, 1, 96, 96, PixelFormats.Bgra32, null, new byte[4], 4);
@@ -2266,11 +2643,23 @@ namespace DropBoard.Native
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 CaretBrush = Brushes.White,
-                Cursor = Cursors.SizeAll
+                Cursor = Cursors.SizeAll,
+                Visibility = isChecklist ? Visibility.Collapsed : Visibility.Visible
             };
 
             editor.GotKeyboardFocus += (s, e) => { editor.Cursor = Cursors.IBeam; };
             editor.LostKeyboardFocus += (s, e) => { editor.Cursor = Cursors.SizeAll; };
+            editor.PreviewMouseWheel += (s, e) =>
+            {
+                string mode = string.IsNullOrEmpty(_settings.NavMode) ? "macos" : _settings.NavMode.ToLowerInvariant();
+                bool isCtrlDown = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+                if (mode == "mouse" || isCtrlDown)
+                {
+                    Point mousePos = e.GetPosition(CanvasContainer);
+                    PerformCanvasZoom(e.Delta, mousePos);
+                    e.Handled = true;
+                }
+            };
 
             try
             {
@@ -2288,15 +2677,7 @@ namespace DropBoard.Native
                 editor.CaretBrush = Brushes.Black;
             }
 
-            // Note layout with top drag/pan strip above text
-            Grid noteLayout = new Grid
-            {
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                VerticalAlignment = VerticalAlignment.Stretch
-            };
-            noteLayout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(20) });
-            noteLayout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-
+            // Top drag/pan strip above text
             Border dragHeader = new Border
             {
                 Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)), // hit-testable
@@ -2320,10 +2701,299 @@ namespace DropBoard.Native
             dragHeader.MouseEnter += (s, e) => { gripPill.Opacity = 0.85; };
             dragHeader.MouseLeave += (s, e) => { gripPill.Opacity = 0.22; };
 
+            // Realtime Deadline Banner Row
+            Border deadlineBanner = new Border
+            {
+                Margin = new Thickness(10, 0, 10, 5),
+                Padding = new Thickness(8, 4, 8, 4),
+                CornerRadius = new CornerRadius(5),
+                Background = new SolidColorBrush(Color.FromArgb(235, 12, 38, 56)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(2, 132, 199)),
+                BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand,
+                Visibility = hasDeadline ? Visibility.Visible : Visibility.Collapsed,
+                ToolTip = "Realtime Deadline (Synchronized with computer clock - click to edit)"
+            };
+
+            Grid dlGrid = new Grid();
+            dlGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            dlGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            TextBlock txtDeadline = new TextBlock
+            {
+                Text = "⏱️ Deadline",
+                FontSize = 10.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(186, 230, 253)),
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+
+            Border btnClearDl = new Border
+            {
+                Width = 16,
+                Height = 16,
+                CornerRadius = new CornerRadius(3),
+                Background = Brushes.Transparent,
+                Cursor = Cursors.Hand,
+                ToolTip = "Clear Deadline",
+                Margin = new Thickness(4, 0, 0, 0),
+                Child = new TextBlock
+                {
+                    Text = "✕",
+                    FontSize = 9,
+                    Foreground = new SolidColorBrush(Color.FromArgb(160, 255, 255, 255)),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            btnClearDl.MouseEnter += (s, e) => btnClearDl.Background = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255));
+            btnClearDl.MouseLeave += (s, e) => btnClearDl.Background = Brushes.Transparent;
+
+            Grid.SetColumn(txtDeadline, 0);
+            Grid.SetColumn(btnClearDl, 1);
+            dlGrid.Children.Add(txtDeadline);
+            dlGrid.Children.Add(btnClearDl);
+            deadlineBanner.Child = dlGrid;
+
+            // Note Body: Hosts either multiline editor OR checklist
+            Grid noteBodyContainer = new Grid
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch
+            };
+
+            // Checklist ScrollViewer & Panel
+            ScrollViewer checklistScrollViewer = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Padding = new Thickness(10, 2, 10, 8),
+                Visibility = isChecklist ? Visibility.Visible : Visibility.Collapsed,
+                Focusable = false
+            };
+            checklistScrollViewer.PreviewMouseWheel += (s, e) =>
+            {
+                string mode = string.IsNullOrEmpty(_settings.NavMode) ? "macos" : _settings.NavMode.ToLowerInvariant();
+                bool isCtrlDown = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+                if (mode == "mouse" || isCtrlDown)
+                {
+                    Point mousePos = e.GetPosition(CanvasContainer);
+                    PerformCanvasZoom(e.Delta, mousePos);
+                    e.Handled = true;
+                }
+            };
+            StackPanel checklistPanel = new StackPanel
+            {
+                Orientation = Orientation.Vertical,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            checklistScrollViewer.Content = checklistPanel;
+
+            noteBodyContainer.Children.Add(editor);
+            noteBodyContainer.Children.Add(checklistScrollViewer);
+
+            // Note Content Grid
+            Grid noteContentLayer = new Grid
+            {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch
+            };
+            noteContentLayer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(20) });
+            noteContentLayer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            noteContentLayer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
             Grid.SetRow(dragHeader, 0);
-            Grid.SetRow(editor, 1);
-            noteLayout.Children.Add(dragHeader);
-            noteLayout.Children.Add(editor);
+            Grid.SetRow(deadlineBanner, 1);
+            Grid.SetRow(noteBodyContainer, 2);
+            noteContentLayer.Children.Add(dragHeader);
+            noteContentLayer.Children.Add(deadlineBanner);
+            noteContentLayer.Children.Add(noteBodyContainer);
+
+            // Freehand Doodle / Coret InkCanvas Layer directly on top of note
+            InkCanvas doodleCanvas = new InkCanvas
+            {
+                Background = Brushes.Transparent,
+                Cursor = Cursors.Pen,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                IsHitTestVisible = false
+            };
+            doodleCanvas.DefaultDrawingAttributes = new DrawingAttributes
+            {
+                Color = Color.FromRgb(244, 63, 94), // Neon coral / rose stroke
+                Width = 2.5,
+                Height = 2.5,
+                FitToCurve = true,
+                IgnorePressure = false,
+                StylusTip = StylusTip.Ellipse
+            };
+
+            if (!string.IsNullOrEmpty(noteDoodleInkBase64))
+            {
+                try
+                {
+                    byte[] dBytes = Convert.FromBase64String(noteDoodleInkBase64);
+                    using MemoryStream ms = new MemoryStream(dBytes);
+                    doodleCanvas.Strokes = new System.Windows.Ink.StrokeCollection(ms);
+                }
+                catch { }
+            }
+
+            // Doodle Mode Active Floating Pill Bar (Bottom-centered for clear visibility on any note)
+            Border doodleIndicator = new Border
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(0, 0, 0, 8),
+                Background = new SolidColorBrush(Color.FromArgb(245, 15, 23, 42)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(244, 63, 94)),
+                BorderThickness = new Thickness(1.2),
+                CornerRadius = new CornerRadius(5),
+                Padding = new Thickness(7, 3, 7, 3),
+                Visibility = Visibility.Collapsed,
+                Effect = new DropShadowEffect { BlurRadius = 12, ShadowDepth = 3, Opacity = 0.65, Color = Colors.Black }
+            };
+            Panel.SetZIndex(doodleIndicator, 999);
+
+            StackPanel indSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            TextBlock indTxt = new TextBlock
+            {
+                Text = "✏ Doodle Mode",
+                FontSize = 9.5,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(244, 63, 94)),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0)
+            };
+            Border indBtnUndo = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                CornerRadius = new CornerRadius(3),
+                Padding = new Thickness(4, 1, 4, 1),
+                Margin = new Thickness(0, 0, 4, 0),
+                Cursor = Cursors.Hand,
+                ToolTip = "Undo last stroke (Ctrl+Z)",
+                Child = new TextBlock { Text = "↩ Undo", FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(241, 245, 249)) }
+            };
+            TextBlock txtEraser = new TextBlock { Text = "🧹 Eraser", FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(241, 245, 249)) };
+            Border indBtnEraser = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                CornerRadius = new CornerRadius(3),
+                Padding = new Thickness(4, 1, 4, 1),
+                Margin = new Thickness(0, 0, 4, 0),
+                Cursor = Cursors.Hand,
+                ToolTip = "Toggle Eraser Mode to erase strokes",
+                Child = txtEraser
+            };
+            Border indBtnClear = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                CornerRadius = new CornerRadius(3),
+                Padding = new Thickness(4, 1, 4, 1),
+                Margin = new Thickness(0, 0, 4, 0),
+                Cursor = Cursors.Hand,
+                ToolTip = "Clear all doodle strokes on note",
+                Child = new TextBlock { Text = "Clear", FontSize = 9, Foreground = new SolidColorBrush(Color.FromRgb(241, 245, 249)) }
+            };
+            Border indBtnDone = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(60, 244, 63, 94)),
+                CornerRadius = new CornerRadius(3),
+                Padding = new Thickness(5, 1, 5, 1),
+                Cursor = Cursors.Hand,
+                ToolTip = "Finish doodling and return to normal text editing",
+                Child = new TextBlock { Text = "✓ Done", FontSize = 9, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White }
+            };
+
+            indSp.Children.Add(indTxt);
+            indSp.Children.Add(indBtnUndo);
+            indSp.Children.Add(indBtnEraser);
+            indSp.Children.Add(indBtnClear);
+            indSp.Children.Add(indBtnDone);
+            doodleIndicator.Child = indSp;
+
+            double baseW = isChecklist ? 320.0 : 280.0;
+            double baseH = isChecklist ? 240.0 : 180.0;
+
+            // Note Background Animated GIF Layer (fits exact card size)
+            Image bgGifImage = new Image
+            {
+                Stretch = Stretch.UniformToFill,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Visibility = Visibility.Collapsed
+            };
+
+            // High contrast tint overlay to keep text/checklist legible over bright or busy animated GIFs
+            Border bgGifOverlay = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(135, 15, 23, 42)), // 53% slate-900 tint
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Visibility = Visibility.Collapsed
+            };
+
+            // Note Root Grid (design base coordinates with rounded corner clip)
+            Grid noteRootGrid = new Grid
+            {
+                Width = baseW,
+                Height = baseH,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Stretch,
+                Clip = new RectangleGeometry(new Rect(0, 0, baseW, baseH), 6, 6)
+            };
+            noteRootGrid.Children.Add(bgGifImage);
+            noteRootGrid.Children.Add(bgGifOverlay);
+            noteRootGrid.Children.Add(noteContentLayer);
+            noteRootGrid.Children.Add(doodleCanvas);
+            noteRootGrid.Children.Add(doodleIndicator);
+
+            // Bottom-left quick pen button for fast doodle / strike access right on note
+            Border btnCornerPen = new Border
+            {
+                Width = 24,
+                Height = 24,
+                CornerRadius = new CornerRadius(12),
+                Background = new SolidColorBrush(Color.FromArgb(200, 15, 23, 42)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(160, 244, 63, 94)),
+                BorderThickness = new Thickness(1.2),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(8, 0, 0, 8),
+                Cursor = Cursors.Hand,
+                ToolTip = "Toggle Doodle / Strike Mode",
+                Effect = new DropShadowEffect { BlurRadius = 6, ShadowDepth = 1, Opacity = 0.55, Color = Colors.Black }
+            };
+            Panel.SetZIndex(btnCornerPen, 995);
+
+            System.Windows.Shapes.Path cornerPenPath = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse("M 18,2 L 22,6 L 7,21 L 2,22 L 3,17 Z M 15,5 L 19,9"),
+                Stroke = new SolidColorBrush(Color.FromRgb(244, 63, 94)),
+                StrokeThickness = 1.6,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                SnapsToDevicePixels = true
+            };
+            btnCornerPen.Child = new Viewbox
+            {
+                Width = 12,
+                Height = 12,
+                Child = cornerPenPath
+            };
+            noteRootGrid.Children.Add(btnCornerPen);
+
+            // Dynamic Content Scaling: Wrap noteRootGrid inside Viewbox with Stretch.Uniform so all text, checklist items,
+            // checkboxes, strike-through lines, countdown banner, and doodles scale cleanly WITHOUT becoming gepeng!
+            Viewbox noteViewbox = new Viewbox
+            {
+                Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = noteRootGrid
+            };
 
             Border contentBorder = new Border
             {
@@ -2333,14 +3003,16 @@ namespace DropBoard.Native
                 Padding = new Thickness(0),
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 VerticalAlignment = VerticalAlignment.Stretch,
-                Child = noteLayout
+                Child = noteViewbox,
+                ClipToBounds = true
             };
 
             Grid container = new Grid
             {
                 Width = w,
                 Height = h,
-                Cursor = Cursors.SizeAll
+                Cursor = Cursors.SizeAll,
+                AllowDrop = true
             };
             container.Children.Add(dummyImg);
             container.Children.Add(contentBorder);
@@ -2379,17 +3051,280 @@ namespace DropBoard.Native
                 NoteBgColor = bgColor,
                 NoteAlignment = alignment,
                 NoteHasShadow = hasShadow,
-                NoteEditor = editor
+                NoteEditor = editor,
+                HasDeadline = hasDeadline,
+                DeadlineDateTime = deadlineDateTime,
+                DeadlineLabel = deadlineLabel,
+                DeadlineBadge = deadlineBanner,
+                DeadlineText = txtDeadline,
+                IsChecklist = isChecklist,
+                ChecklistItems = checklistItems ?? new(),
+                NoteBodyContainer = noteBodyContainer,
+                ChecklistScrollViewer = checklistScrollViewer,
+                ChecklistPanel = checklistPanel,
+                NoteDoodleCanvas = doodleCanvas,
+                NoteDoodleInkBase64 = noteDoodleInkBase64,
+                NoteDoodleIndicator = doodleIndicator,
+                BtnNoteCornerPen = btnCornerPen,
+                NoteCornerPenIcon = cornerPenPath,
+                NoteBgGifPath = noteBgGifPath,
+                NoteBgGifBase64 = noteBgGifBase64,
+                NoteBgGifImage = bgGifImage,
+                NoteBgGifOverlay = bgGifOverlay
+            };
+
+            btnCornerPen.MouseEnter += (s, e) =>
+            {
+                if (!item.IsNoteDoodleActive)
+                {
+                    btnCornerPen.Background = new SolidColorBrush(Color.FromArgb(240, 30, 41, 59));
+                    btnCornerPen.BorderBrush = new SolidColorBrush(Color.FromRgb(244, 63, 94));
+                }
+            };
+            btnCornerPen.MouseLeave += (s, e) =>
+            {
+                if (!item.IsNoteDoodleActive)
+                {
+                    btnCornerPen.Background = new SolidColorBrush(Color.FromArgb(200, 15, 23, 42));
+                    btnCornerPen.BorderBrush = new SolidColorBrush(Color.FromArgb(160, 244, 63, 94));
+                }
+            };
+            btnCornerPen.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+            btnCornerPen.PreviewMouseLeftButtonUp += (s, e) =>
+            {
+                e.Handled = true;
+                if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                ToggleNoteDoodleMode(item);
+            };
+
+            // Drag & drop .gif file directly onto note container to set background GIF
+            container.DragOver += (s, e) =>
+            {
+                if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                {
+                    string[]? files = e.Data.GetData(DataFormats.FileDrop) as string[];
+                    if (files != null && files.Length > 0 && files[0].EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
+                    {
+                        e.Effects = DragDropEffects.Copy;
+                        e.Handled = true;
+                        return;
+                    }
+                }
+            };
+            container.Drop += (s, e) =>
+            {
+                if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                {
+                    string[]? files = e.Data.GetData(DataFormats.FileDrop) as string[];
+                    if (files != null && files.Length > 0)
+                    {
+                        string file = files[0];
+                        string ext = System.IO.Path.GetExtension(file).ToLowerInvariant();
+                        if (ext == ".gif" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp")
+                        {
+                            e.Handled = true;
+                            ApplyNoteBgGif(item, file);
+                            ScheduleAutoSave();
+                            ShowToast("🎬 Applied animated GIF background to note!", ToastType.Success);
+                        }
+                    }
+                }
             };
 
             ApplyNoteBackground(item, bgColor);
             ApplyNoteShadow(item);
+            if (!string.IsNullOrEmpty(noteBgGifPath) || !string.IsNullOrEmpty(noteBgGifBase64))
+            {
+                ApplyNoteBgGif(item, noteBgGifPath, noteBgGifBase64);
+            }
 
             editor.TextChanged += (s, e) =>
             {
                 item.NoteText = editor.Text;
                 ScheduleAutoSave();
             };
+
+            // Doodle Canvas stroke event
+            void UpdateNoteDoodleData()
+            {
+                try
+                {
+                    using MemoryStream ms = new MemoryStream();
+                    doodleCanvas.Strokes.Save(ms);
+                    item.NoteDoodleInkBase64 = Convert.ToBase64String(ms.ToArray());
+                    ScheduleAutoSave();
+                }
+                catch { }
+            }
+            doodleCanvas.StrokeCollected += (s, e) =>
+            {
+                UpdateNoteDoodleData();
+
+                // Gesture detection: If the user draws a horizontal strike stroke across a checklist item,
+                // automatically detect it and mark that checklist item as completed / done!
+                if (item.IsChecklist && item.ChecklistPanel != null && item.ChecklistItems != null)
+                {
+                    Rect sBounds = e.Stroke.GetBounds();
+                    if (sBounds.Width >= 25)
+                    {
+                        for (int i = 0; i < item.ChecklistPanel.Children.Count - 1 && i < item.ChecklistItems.Count; i++)
+                        {
+                            if (item.ChecklistPanel.Children[i] is Grid row)
+                            {
+                                try
+                                {
+                                    GeneralTransform gt = row.TransformToVisual(doodleCanvas);
+                                    Rect rowBounds = gt.TransformBounds(new Rect(0, 0, row.ActualWidth, row.ActualHeight));
+                                    double strokeCenterY = sBounds.Top + sBounds.Height / 2.0;
+                                    if (strokeCenterY >= rowBounds.Top && strokeCenterY <= rowBounds.Bottom)
+                                    {
+                                        var cItem = item.ChecklistItems[i];
+                                        if (!cItem.IsChecked)
+                                        {
+                                            cItem.IsChecked = true;
+                                            if (row.Children.Count > 0 && row.Children[0] is Border chk)
+                                            {
+                                                chk.Background = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                                                chk.BorderBrush = new SolidColorBrush(Color.FromRgb(2, 132, 199));
+                                                if (chk.Child is System.Windows.Shapes.Path chkMark)
+                                                {
+                                                    chkMark.Opacity = 1.0;
+                                                }
+                                            }
+
+                                            if (row.Children.Count > 1 && row.Children[1] is Grid th)
+                                            {
+                                                TextBox? tb = null;
+                                                Border? strike = null;
+                                                foreach (UIElement gc in th.Children)
+                                                {
+                                                    if (gc is TextBox t) tb = t;
+                                                    else if (gc is Border b) strike = b;
+                                                }
+
+                                                if (tb != null) tb.Opacity = 0.45;
+                                                if (strike != null)
+                                                {
+                                                    double tw = tb != null ? MeasureTextWidth(tb) : 100;
+                                                    double targetW = Math.Max(20, Math.Min(th.ActualWidth > 0 ? th.ActualWidth - 6 : 280, tw + 6));
+                                                    DoubleAnimation animW = new DoubleAnimation
+                                                    {
+                                                        From = strike.ActualWidth,
+                                                        To = targetW,
+                                                        Duration = TimeSpan.FromMilliseconds(260),
+                                                        EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                                                    };
+                                                    strike.BeginAnimation(FrameworkElement.WidthProperty, animW);
+                                                }
+                                            }
+
+                                            ScheduleAutoSave();
+                                            ShowToast($"✓ Strike detected: '{cItem.Text}' marked as Done!", ToastType.Success);
+                                            break;
+                                        }
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                }
+            };
+            doodleCanvas.StrokeErased += (s, e) => UpdateNoteDoodleData();
+
+            indBtnUndo.MouseEnter += (s, e) => indBtnUndo.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+            indBtnUndo.MouseLeave += (s, e) => indBtnUndo.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+            indBtnUndo.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                if (doodleCanvas.Strokes.Count > 0)
+                {
+                    doodleCanvas.Strokes.RemoveAt(doodleCanvas.Strokes.Count - 1);
+                    UpdateNoteDoodleData();
+                    ShowToast("Undid last doodle stroke", ToastType.Info, 800);
+                }
+            };
+
+            bool isEraserMode = false;
+            indBtnEraser.MouseEnter += (s, e) =>
+            {
+                if (!isEraserMode) indBtnEraser.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+            };
+            indBtnEraser.MouseLeave += (s, e) =>
+            {
+                if (!isEraserMode) indBtnEraser.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+            };
+            indBtnEraser.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                isEraserMode = !isEraserMode;
+                if (isEraserMode)
+                {
+                    doodleCanvas.EditingMode = InkCanvasEditingMode.EraseByStroke;
+                    doodleCanvas.Cursor = Cursors.Cross;
+                    txtEraser.Text = "✏ Pen";
+                    indBtnEraser.Background = new SolidColorBrush(Color.FromArgb(140, 244, 63, 94));
+                    ShowToast("Eraser tool: Click/touch any stroke to erase", ToastType.Info, 900);
+                }
+                else
+                {
+                    doodleCanvas.EditingMode = InkCanvasEditingMode.Ink;
+                    doodleCanvas.Cursor = Cursors.Pen;
+                    txtEraser.Text = "🧹 Eraser";
+                    indBtnEraser.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                }
+            };
+
+            indBtnClear.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                doodleCanvas.Strokes.Clear();
+                item.NoteDoodleInkBase64 = "";
+                ScheduleAutoSave();
+                ShowToast("Cleared drawing strokes on note", ToastType.Info);
+            };
+            indBtnDone.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                if (isEraserMode)
+                {
+                    isEraserMode = false;
+                    doodleCanvas.EditingMode = InkCanvasEditingMode.Ink;
+                    doodleCanvas.Cursor = Cursors.Pen;
+                    txtEraser.Text = "🧹 Eraser";
+                    indBtnEraser.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                }
+                ToggleNoteDoodleMode(item);
+            };
+
+            btnClearDl.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                item.HasDeadline = false;
+                item.DeadlineDateTime = null;
+                deadlineBanner.Visibility = Visibility.Collapsed;
+                ScheduleAutoSave();
+                ShowToast("Deadline removed", ToastType.Info);
+            };
+            deadlineBanner.MouseLeftButtonDown += (s, e) =>
+            {
+                if (e.OriginalSource is DependencyObject d && FindVisualParent<Border>(d) == btnClearDl)
+                {
+                    return;
+                }
+                e.Handled = true;
+                ShowDeadlinePickerPopup(deadlineBanner, item);
+            };
+
+            if (hasDeadline && deadlineDateTime.HasValue)
+            {
+                UpdateNoteDeadlineBadgeUI(item);
+            }
+
+            if (isChecklist)
+            {
+                RenderChecklistItems(item);
+            }
 
             // Attach Hover Quick-Action Toolbar
             Border hoverToolbar = CreateCardHoverToolbar(item);
@@ -2520,10 +3455,21 @@ namespace DropBoard.Native
 
             container.MouseLeftButtonDown += (s, e) =>
             {
-                // If user clicked inside editor, let them edit directly
-                if (e.OriginalSource is DependencyObject dep && FindVisualParent<TextBox>(dep) != null)
+                // If user clicked inside editor or checklist or deadline, let them interact directly
+                if (e.OriginalSource is DependencyObject dep)
                 {
-                    return;
+                    if (FindVisualParent<TextBox>(dep) != null || FindVisualParent<Button>(dep) != null)
+                    {
+                        return;
+                    }
+                    if (item.IsChecklist && FindVisualParent<ScrollViewer>(dep) != null)
+                    {
+                        return;
+                    }
+                    if (item.DeadlineBadge != null && FindVisualParent<Border>(dep) == item.DeadlineBadge)
+                    {
+                        return;
+                    }
                 }
 
                 TriggerNoteDrag(e);
@@ -2640,6 +3586,1010 @@ namespace DropBoard.Native
 
             return item;
         }
+
+        #region Note Deadline, Checklist & Doodle Engine
+
+        private void UpdateAllDeadlineCards()
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.InvokeAsync(UpdateAllDeadlineCards);
+                return;
+            }
+
+            var deadlineCards = _cards.Where(c => c.IsNote && c.HasDeadline && c.DeadlineDateTime.HasValue).ToList();
+            foreach (var card in deadlineCards)
+            {
+                UpdateNoteDeadlineBadgeUI(card);
+            }
+        }
+
+        private void UpdateNoteDeadlineBadgeUI(CardItem card)
+        {
+            if (card.DeadlineBadge == null || card.DeadlineText == null || !card.DeadlineDateTime.HasValue) return;
+
+            card.DeadlineBadge.Visibility = card.HasDeadline ? Visibility.Visible : Visibility.Collapsed;
+            if (!card.HasDeadline) return;
+
+            DateTime now = DateTime.Now;
+            DateTime dl = card.DeadlineDateTime.Value;
+            TimeSpan diff = dl - now;
+            bool isOverdue = diff <= TimeSpan.Zero;
+            string labelPrefix = string.IsNullOrWhiteSpace(card.DeadlineLabel) || card.DeadlineLabel == "Deadline"
+                ? "" : $"{card.DeadlineLabel}: ";
+
+            if (isOverdue)
+            {
+                TimeSpan past = now - dl;
+                card.DeadlineText.Text = $"🚨 OVERDUE: {labelPrefix}{dl:HH:mm} ({FormatDiffShort(past)} ago)";
+                card.DeadlineBadge.Background = new SolidColorBrush(Color.FromArgb(235, 69, 10, 10)); // Dark red
+                card.DeadlineBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(239, 68, 68)); // Bright red
+                card.DeadlineText.Foreground = new SolidColorBrush(Color.FromRgb(254, 202, 202));
+            }
+            else if (diff.TotalMinutes < 60)
+            {
+                card.DeadlineText.Text = $"🔥 DUE SOON: {labelPrefix}{dl:HH:mm} ({(int)Math.Max(1, diff.TotalMinutes)}m left)";
+                card.DeadlineBadge.Background = new SolidColorBrush(Color.FromArgb(235, 67, 20, 7)); // Dark orange
+                card.DeadlineBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(249, 115, 22)); // Bright orange
+                card.DeadlineText.Foreground = new SolidColorBrush(Color.FromRgb(254, 215, 170));
+            }
+            else if (diff.TotalHours < 24)
+            {
+                card.DeadlineText.Text = $"⚠️ Due Today: {labelPrefix}{dl:HH:mm} ({(int)diff.TotalHours}h {diff.Minutes}m left)";
+                card.DeadlineBadge.Background = new SolidColorBrush(Color.FromArgb(235, 60, 36, 5)); // Dark amber
+                card.DeadlineBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(234, 179, 8)); // Bright amber
+                card.DeadlineText.Foreground = new SolidColorBrush(Color.FromRgb(254, 240, 138));
+            }
+            else
+            {
+                int days = (int)diff.TotalDays;
+                card.DeadlineText.Text = $"⏱️ {labelPrefix}{dl:ddd, d MMM HH:mm} • {days}d {diff.Hours}h left";
+                card.DeadlineBadge.Background = new SolidColorBrush(Color.FromArgb(235, 12, 38, 56)); // Dark cyan
+                card.DeadlineBadge.BorderBrush = new SolidColorBrush(Color.FromRgb(2, 132, 199)); // Bright sky blue
+                card.DeadlineText.Foreground = new SolidColorBrush(Color.FromRgb(186, 230, 253));
+            }
+
+            card.DeadlineBadge.ToolTip = $"Target: {dl:dddd, dd MMMM yyyy HH:mm}\nSystem Time: {now:HH:mm}\nClick to edit or adjust realtime deadline";
+        }
+
+        private static string FormatDiffShort(TimeSpan ts)
+        {
+            if (ts.TotalMinutes < 60) return $"{(int)Math.Max(1, ts.TotalMinutes)}m";
+            if (ts.TotalHours < 24) return $"{(int)ts.TotalHours}h {ts.Minutes}m";
+            return $"{(int)ts.TotalDays}d {ts.Hours}h";
+        }
+
+        private static double MeasureTextWidth(TextBox tb)
+        {
+            try
+            {
+                string txt = string.IsNullOrEmpty(tb.Text) ? " " : tb.Text;
+                FormattedText ft = new FormattedText(
+                    txt,
+                    System.Globalization.CultureInfo.CurrentCulture,
+                    FlowDirection.LeftToRight,
+                    new Typeface(tb.FontFamily, tb.FontStyle, tb.FontWeight, tb.FontStretch),
+                    tb.FontSize > 0 ? tb.FontSize : 15.0,
+                    Brushes.Black,
+                    VisualTreeHelper.GetDpi(tb).PixelsPerDip);
+                return ft.WidthIncludingTrailingWhitespace;
+            }
+            catch
+            {
+                return Math.Max(30, tb.ActualWidth > 0 ? tb.ActualWidth * 0.8 : 80);
+            }
+        }
+
+        private void RenderChecklistItems(CardItem item)
+        {
+            if (item.ChecklistPanel == null) return;
+            item.ChecklistPanel.Children.Clear();
+
+            if (item.ChecklistItems == null || item.ChecklistItems.Count == 0)
+            {
+                item.ChecklistItems = new List<NoteChecklistItem>
+                {
+                    new NoteChecklistItem { Text = "Storyboard Rough Sketches", IsChecked = false },
+                    new NoteChecklistItem { Text = "Keyframe Animation & Timing", IsChecked = false },
+                    new NoteChecklistItem { Text = "Color Grading & VFX Delivery", IsChecked = false }
+                };
+            }
+
+            Brush noteFg = Brushes.White;
+            try { noteFg = (Brush)new BrushConverter().ConvertFromString(item.NoteTextColor)!; } catch { }
+
+            for (int i = 0; i < item.ChecklistItems.Count; i++)
+            {
+                var cItem = item.ChecklistItems[i];
+
+                Grid row = new Grid
+                {
+                    Margin = new Thickness(0, 3, 0, 3),
+                    HorizontalAlignment = HorizontalAlignment.Stretch
+                };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(20) });
+
+                // 1. Custom Checkbox button
+                Border chk = new Border
+                {
+                    Width = 17,
+                    Height = 17,
+                    CornerRadius = new CornerRadius(4),
+                    BorderThickness = new Thickness(1.5),
+                    Cursor = Cursors.Hand,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(2, 0, 0, 0),
+                    ToolTip = "Click to complete task with animated strike-through"
+                };
+
+                System.Windows.Shapes.Path chkMark = new System.Windows.Shapes.Path
+                {
+                    Data = Geometry.Parse("M 3.5,8.5 L 6.8,11.8 L 13.5,4.5"),
+                    Stroke = Brushes.White,
+                    StrokeThickness = 2.0,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    SnapsToDevicePixels = true,
+                    Opacity = cItem.IsChecked ? 1.0 : 0.0
+                };
+                chk.Child = chkMark;
+
+                void UpdateChkVisual(bool isChecked)
+                {
+                    if (isChecked)
+                    {
+                        chk.Background = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                        chk.BorderBrush = new SolidColorBrush(Color.FromRgb(2, 132, 199));
+                        chkMark.Opacity = 1.0;
+                    }
+                    else
+                    {
+                        chk.Background = new SolidColorBrush(Color.FromArgb(160, 24, 30, 42));
+                        chk.BorderBrush = new SolidColorBrush(Color.FromArgb(120, 148, 163, 184));
+                        chkMark.Opacity = 0.0;
+                    }
+                }
+                UpdateChkVisual(cItem.IsChecked);
+
+                // 2. Text Host Grid
+                Grid textHost = new Grid
+                {
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+
+                TextBox tbTask = new TextBox
+                {
+                    Text = cItem.Text,
+                    Background = Brushes.Transparent,
+                    BorderThickness = new Thickness(0),
+                    Padding = new Thickness(4, 2, 4, 2),
+                    TextWrapping = TextWrapping.Wrap,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    FontFamily = new FontFamily(string.IsNullOrWhiteSpace(item.NoteFontFamily) ? "Segoe UI" : item.NoteFontFamily),
+                    FontSize = item.NoteFontSize > 0 ? item.NoteFontSize : 15.0,
+                    TextAlignment = item.NoteAlignment,
+                    Foreground = noteFg,
+                    Opacity = cItem.IsChecked ? 0.45 : 1.0,
+                    CaretBrush = Brushes.White,
+                    Cursor = Cursors.IBeam
+                };
+
+                if (item.NoteHasShadow)
+                {
+                    tbTask.Effect = new DropShadowEffect
+                    {
+                        Color = Colors.Black,
+                        BlurRadius = 8,
+                        ShadowDepth = 2,
+                        Direction = 315,
+                        Opacity = 0.95
+                    };
+                }
+
+                Border strikeLine = new Border
+                {
+                    Height = 2.2,
+                    CornerRadius = new CornerRadius(1.1),
+                    Background = new SolidColorBrush(Color.FromRgb(244, 63, 94)), // Vibrant Rose strike line
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(4, 0, 0, 0),
+                    Width = 0,
+                    IsHitTestVisible = false,
+                    Effect = new DropShadowEffect
+                    {
+                        BlurRadius = 3,
+                        ShadowDepth = 1,
+                        Color = Colors.Black,
+                        Opacity = 0.5
+                    }
+                };
+
+                textHost.Children.Add(tbTask);
+                textHost.Children.Add(strikeLine);
+
+                // Initial width calculation when loading checked items
+                tbTask.Loaded += (s, e) =>
+                {
+                    if (cItem.IsChecked)
+                    {
+                        double tw = MeasureTextWidth(tbTask);
+                        strikeLine.Width = Math.Max(20, Math.Min(textHost.ActualWidth > 0 ? textHost.ActualWidth - 6 : 280, tw + 6));
+                    }
+                };
+
+                // Checkbox Click: Smooth Strike-Through Animation!
+                chk.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    cItem.IsChecked = !cItem.IsChecked;
+                    UpdateChkVisual(cItem.IsChecked);
+
+                    if (cItem.IsChecked)
+                    {
+                        double tw = MeasureTextWidth(tbTask);
+                        double targetW = Math.Max(20, Math.Min(textHost.ActualWidth > 0 ? textHost.ActualWidth - 6 : 280, tw + 6));
+
+                        DoubleAnimation animW = new DoubleAnimation
+                        {
+                            From = strikeLine.ActualWidth,
+                            To = targetW,
+                            Duration = TimeSpan.FromMilliseconds(260),
+                            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                        };
+                        strikeLine.BeginAnimation(FrameworkElement.WidthProperty, animW);
+
+                        DoubleAnimation animOp = new DoubleAnimation
+                        {
+                            From = tbTask.Opacity,
+                            To = 0.45,
+                            Duration = TimeSpan.FromMilliseconds(200)
+                        };
+                        tbTask.BeginAnimation(UIElement.OpacityProperty, animOp);
+                    }
+                    else
+                    {
+                        DoubleAnimation animW = new DoubleAnimation
+                        {
+                            From = strikeLine.ActualWidth,
+                            To = 0,
+                            Duration = TimeSpan.FromMilliseconds(180),
+                            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn }
+                        };
+                        strikeLine.BeginAnimation(FrameworkElement.WidthProperty, animW);
+
+                        DoubleAnimation animOp = new DoubleAnimation
+                        {
+                            From = tbTask.Opacity,
+                            To = 1.0,
+                            Duration = TimeSpan.FromMilliseconds(200)
+                        };
+                        tbTask.BeginAnimation(UIElement.OpacityProperty, animOp);
+                    }
+
+                    RecordUndo("Toggle Checklist Item");
+                    ScheduleAutoSave();
+                };
+
+                // In-place text edit
+                tbTask.TextChanged += (s, e) =>
+                {
+                    cItem.Text = tbTask.Text;
+                    if (cItem.IsChecked)
+                    {
+                        double tw = MeasureTextWidth(tbTask);
+                        strikeLine.Width = Math.Max(20, Math.Min(textHost.ActualWidth > 0 ? textHost.ActualWidth - 6 : 280, tw + 6));
+                    }
+                    ScheduleAutoSave();
+                };
+
+                // Enter key adds new item, Backspace on empty deletes item
+                tbTask.PreviewKeyDown += (s, e) =>
+                {
+                    if (e.Key == Key.Enter)
+                    {
+                        e.Handled = true;
+                        int nextIdx = item.ChecklistItems.IndexOf(cItem) + 1;
+                        var newItem = new NoteChecklistItem { Text = "", IsChecked = false };
+                        item.ChecklistItems.Insert(nextIdx, newItem);
+                        RenderChecklistItems(item);
+                        ScheduleAutoSave();
+
+                        // Focus new item
+                        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+                        {
+                            if (item.ChecklistPanel != null && nextIdx < item.ChecklistPanel.Children.Count - 1)
+                            {
+                                if (item.ChecklistPanel.Children[nextIdx] is Grid nextRow &&
+                                    nextRow.Children.Count > 1 &&
+                                    nextRow.Children[1] is Grid th &&
+                                    th.Children.Count > 0 &&
+                                    th.Children[0] is TextBox tbNext)
+                                {
+                                    tbNext.Focus();
+                                }
+                            }
+                        }));
+                    }
+                    else if (e.Key == Key.Back && string.IsNullOrEmpty(tbTask.Text) && item.ChecklistItems.Count > 1)
+                    {
+                        e.Handled = true;
+                        int curIdx = item.ChecklistItems.IndexOf(cItem);
+                        item.ChecklistItems.Remove(cItem);
+                        RenderChecklistItems(item);
+                        ScheduleAutoSave();
+
+                        // Focus previous item
+                        int prevIdx = Math.Max(0, curIdx - 1);
+                        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+                        {
+                            if (item.ChecklistPanel != null && prevIdx < item.ChecklistPanel.Children.Count - 1)
+                            {
+                                if (item.ChecklistPanel.Children[prevIdx] is Grid prevRow &&
+                                    prevRow.Children.Count > 1 &&
+                                    prevRow.Children[1] is Grid th &&
+                                    th.Children.Count > 0 &&
+                                    th.Children[0] is TextBox tbPrev)
+                                {
+                                    tbPrev.Focus();
+                                    tbPrev.CaretIndex = tbPrev.Text.Length;
+                                }
+                            }
+                        }));
+                    }
+                };
+
+                // 3. Delete Item Button
+                Border btnDel = new Border
+                {
+                    Width = 16,
+                    Height = 16,
+                    CornerRadius = new CornerRadius(3),
+                    Background = Brushes.Transparent,
+                    Cursor = Cursors.Hand,
+                    Opacity = 0.2,
+                    ToolTip = "Delete Item",
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Child = new TextBlock
+                    {
+                        Text = "✕",
+                        FontSize = 9,
+                        Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center
+                    }
+                };
+                row.MouseEnter += (s, e) => btnDel.Opacity = 0.85;
+                row.MouseLeave += (s, e) => btnDel.Opacity = 0.2;
+                btnDel.MouseEnter += (s, e) =>
+                {
+                    btnDel.Background = new SolidColorBrush(Color.FromArgb(60, 239, 68, 68));
+                    if (btnDel.Child is TextBlock t) t.Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+                };
+                btnDel.MouseLeave += (s, e) =>
+                {
+                    btnDel.Background = Brushes.Transparent;
+                    if (btnDel.Child is TextBlock t) t.Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+                };
+                btnDel.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    item.ChecklistItems.Remove(cItem);
+                    RenderChecklistItems(item);
+                    ScheduleAutoSave();
+                };
+
+                Grid.SetColumn(chk, 0);
+                Grid.SetColumn(textHost, 1);
+                Grid.SetColumn(btnDel, 2);
+                row.Children.Add(chk);
+                row.Children.Add(textHost);
+                row.Children.Add(btnDel);
+
+                item.ChecklistPanel.Children.Add(row);
+            }
+
+            // Bottom "+ Add item" button
+            Border btnAddItem = new Border
+            {
+                Margin = new Thickness(2, 6, 2, 4),
+                Padding = new Thickness(8, 4, 8, 4),
+                CornerRadius = new CornerRadius(4),
+                BorderThickness = new Thickness(1),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                Background = new SolidColorBrush(Color.FromArgb(15, 255, 255, 255)),
+                Cursor = Cursors.Hand,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            btnAddItem.Child = new TextBlock
+            {
+                Text = "+ Add task item...",
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184))
+            };
+            btnAddItem.MouseEnter += (s, e) =>
+            {
+                btnAddItem.Background = new SolidColorBrush(Color.FromArgb(35, 56, 189, 248));
+                btnAddItem.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                if (btnAddItem.Child is TextBlock t) t.Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+            };
+            btnAddItem.MouseLeave += (s, e) =>
+            {
+                btnAddItem.Background = new SolidColorBrush(Color.FromArgb(15, 255, 255, 255));
+                btnAddItem.BorderBrush = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                if (btnAddItem.Child is TextBlock t) t.Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184));
+            };
+            btnAddItem.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                var newItem = new NoteChecklistItem { Text = "", IsChecked = false };
+                item.ChecklistItems.Add(newItem);
+                RenderChecklistItems(item);
+                ScheduleAutoSave();
+
+                // Focus newly added item
+                Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+                {
+                    int lastIdx = item.ChecklistItems.Count - 1;
+                    if (item.ChecklistPanel != null && lastIdx < item.ChecklistPanel.Children.Count - 1)
+                    {
+                        if (item.ChecklistPanel.Children[lastIdx] is Grid lastRow &&
+                            lastRow.Children.Count > 1 &&
+                            lastRow.Children[1] is Grid th &&
+                            th.Children.Count > 0 &&
+                            th.Children[0] is TextBox tb)
+                        {
+                            tb.Focus();
+                        }
+                    }
+                }));
+            };
+
+            item.ChecklistPanel.Children.Add(btnAddItem);
+        }
+
+        private void ToggleNoteChecklistMode(CardItem item)
+        {
+            item.IsChecklist = !item.IsChecklist;
+
+            if (item.IsChecklist)
+            {
+                // Convert plain text lines into checklist items
+                if (!string.IsNullOrWhiteSpace(item.NoteText))
+                {
+                    var lines = item.NoteText.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+                    item.ChecklistItems = lines.Select(line =>
+                    {
+                        string t = line.Trim();
+                        bool isDone = false;
+                        if (t.StartsWith("[x] ", StringComparison.OrdinalIgnoreCase) || t.StartsWith("[✓] ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            isDone = true;
+                            t = t.Substring(4).Trim();
+                        }
+                        else if (t.StartsWith("[ ] "))
+                        {
+                            t = t.Substring(4).Trim();
+                        }
+                        else if (t.StartsWith("- ") || t.StartsWith("• ") || t.StartsWith("* "))
+                        {
+                            t = t.Substring(2).Trim();
+                        }
+                        return new NoteChecklistItem { Text = t, IsChecked = isDone };
+                    }).ToList();
+                }
+                else
+                {
+                    item.ChecklistItems = new List<NoteChecklistItem>
+                    {
+                        new NoteChecklistItem { Text = "Storyboard Rough Sketches", IsChecked = false },
+                        new NoteChecklistItem { Text = "Keyframe Animation & Timing", IsChecked = false },
+                        new NoteChecklistItem { Text = "Color Grading & Final Review", IsChecked = false }
+                    };
+                }
+
+                if (item.NoteEditor != null) item.NoteEditor.Visibility = Visibility.Collapsed;
+                if (item.ChecklistScrollViewer != null) item.ChecklistScrollViewer.Visibility = Visibility.Visible;
+                RenderChecklistItems(item);
+                ShowToast("Switched to Checklist Mode", ToastType.Info);
+            }
+            else
+            {
+                // Convert checklist items back to multiline text
+                if (item.ChecklistItems != null && item.ChecklistItems.Count > 0)
+                {
+                    item.NoteText = string.Join("\n", item.ChecklistItems.Select(ci => (ci.IsChecked ? "[x] " : "[ ] ") + ci.Text));
+                }
+                if (item.NoteEditor != null)
+                {
+                    item.NoteEditor.Text = item.NoteText;
+                    item.NoteEditor.Visibility = Visibility.Visible;
+                }
+                if (item.ChecklistScrollViewer != null) item.ChecklistScrollViewer.Visibility = Visibility.Collapsed;
+                ShowToast("Switched to Text Mode", ToastType.Info);
+            }
+
+            if (item.BtnNoteChecklist != null)
+            {
+                item.BtnNoteChecklist.Background = item.IsChecklist
+                    ? new SolidColorBrush(Color.FromArgb(55, 16, 185, 129))
+                    : new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                item.BtnNoteChecklist.BorderBrush = item.IsChecklist
+                    ? new SolidColorBrush(Color.FromRgb(16, 185, 129))
+                    : new SolidColorBrush(Color.FromArgb(60, 255, 255, 255));
+            }
+
+            RecordUndo("Toggle Checklist Mode");
+            ScheduleAutoSave();
+        }
+
+        private void ToggleNoteDoodleMode(CardItem item)
+        {
+            item.IsNoteDoodleActive = !item.IsNoteDoodleActive;
+
+            if (item.NoteDoodleCanvas != null)
+            {
+                item.NoteDoodleCanvas.IsHitTestVisible = item.IsNoteDoodleActive;
+                if (!item.IsNoteDoodleActive)
+                {
+                    item.NoteDoodleCanvas.EditingMode = InkCanvasEditingMode.Ink;
+                    item.NoteDoodleCanvas.Cursor = Cursors.Pen;
+                }
+            }
+            if (item.NoteDoodleIndicator != null)
+            {
+                item.NoteDoodleIndicator.Visibility = item.IsNoteDoodleActive ? Visibility.Visible : Visibility.Collapsed;
+            }
+            if (item.BtnNoteDoodle != null)
+            {
+                item.BtnNoteDoodle.Background = item.IsNoteDoodleActive
+                    ? new SolidColorBrush(Color.FromArgb(55, 244, 63, 94))
+                    : new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                item.BtnNoteDoodle.BorderBrush = item.IsNoteDoodleActive
+                    ? new SolidColorBrush(Color.FromRgb(244, 63, 94))
+                    : new SolidColorBrush(Color.FromArgb(60, 255, 255, 255));
+
+                if (item.BtnNoteDoodle.Child is StackPanel dSp)
+                {
+                    if (dSp.Children.Count > 0 && dSp.Children[0] is TextBlock tIcon)
+                        tIcon.Foreground = item.IsNoteDoodleActive ? new SolidColorBrush(Color.FromRgb(244, 63, 94)) : new SolidColorBrush(Color.FromRgb(156, 163, 175));
+                    if (dSp.Children.Count > 1 && dSp.Children[1] is TextBlock tTxt)
+                    {
+                        tTxt.Foreground = item.IsNoteDoodleActive ? new SolidColorBrush(Color.FromRgb(244, 63, 94)) : new SolidColorBrush(Color.FromRgb(226, 232, 240));
+                        tTxt.FontWeight = item.IsNoteDoodleActive ? FontWeights.SemiBold : FontWeights.Normal;
+                    }
+                }
+            }
+            if (item.BtnNoteCornerPen != null)
+            {
+                if (item.IsNoteDoodleActive)
+                {
+                    item.BtnNoteCornerPen.Background = new SolidColorBrush(Color.FromRgb(244, 63, 94));
+                    item.BtnNoteCornerPen.BorderBrush = Brushes.White;
+                    if (item.NoteCornerPenIcon != null)
+                        item.NoteCornerPenIcon.Stroke = Brushes.White;
+                    item.BtnNoteCornerPen.Effect = new DropShadowEffect { BlurRadius = 10, ShadowDepth = 0, Color = Color.FromRgb(244, 63, 94), Opacity = 0.85 };
+                }
+                else
+                {
+                    item.BtnNoteCornerPen.Background = new SolidColorBrush(Color.FromArgb(200, 15, 23, 42));
+                    item.BtnNoteCornerPen.BorderBrush = new SolidColorBrush(Color.FromArgb(160, 244, 63, 94));
+                    if (item.NoteCornerPenIcon != null)
+                        item.NoteCornerPenIcon.Stroke = new SolidColorBrush(Color.FromRgb(244, 63, 94));
+                    item.BtnNoteCornerPen.Effect = new DropShadowEffect { BlurRadius = 6, ShadowDepth = 1, Opacity = 0.55, Color = Colors.Black };
+                }
+            }
+
+            ShowToast(item.IsNoteDoodleActive
+                ? "Doodle mode ON: Draw & strike freely on this note!"
+                : "Doodle mode OFF: Normal editing resumed.", ToastType.Info);
+        }
+
+        private void ShowDeadlinePickerPopup(FrameworkElement anchor, CardItem item)
+        {
+            _isCardSubMenuOpen = true;
+
+            Popup popup = new Popup
+            {
+                PlacementTarget = anchor,
+                Placement = PlacementMode.Bottom,
+                StaysOpen = true,
+                AllowsTransparency = true,
+                PopupAnimation = PopupAnimation.Fade,
+                VerticalOffset = 6
+            };
+
+            popup.Closed += (s, e) =>
+            {
+                _isCardSubMenuOpen = false;
+            };
+
+            Border container = new Border
+            {
+                Width = 280,
+                Background = new SolidColorBrush(Color.FromRgb(22, 25, 34)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 56, 189, 248)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(12),
+                SnapsToDevicePixels = true,
+                Effect = new DropShadowEffect
+                {
+                    Color = Colors.Black,
+                    BlurRadius = 24,
+                    ShadowDepth = 6,
+                    Opacity = 0.75
+                }
+            };
+
+            StackPanel sp = new StackPanel();
+
+            // Header with Close Button
+            Grid hdrGrid = new Grid { Margin = new Thickness(0, 0, 0, 10) };
+            hdrGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            hdrGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            StackPanel hdrSp = new StackPanel();
+            hdrSp.Children.Add(new TextBlock
+            {
+                Text = "⏱ Realtime Note Deadline",
+                FontSize = 13,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(241, 245, 249))
+            });
+            hdrSp.Children.Add(new TextBlock
+            {
+                Text = "Synchronized live with computer clock",
+                FontSize = 10,
+                Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                Margin = new Thickness(0, 1, 0, 0)
+            });
+            Grid.SetColumn(hdrSp, 0);
+            hdrGrid.Children.Add(hdrSp);
+
+            Border btnClosePopup = new Border
+            {
+                Width = 20,
+                Height = 20,
+                CornerRadius = new CornerRadius(4),
+                Background = Brushes.Transparent,
+                Cursor = Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Top,
+                ToolTip = "Close (Esc)",
+                Child = new TextBlock
+                {
+                    Text = "✕",
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            btnClosePopup.MouseEnter += (s, e) => btnClosePopup.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+            btnClosePopup.MouseLeave += (s, e) => btnClosePopup.Background = Brushes.Transparent;
+            btnClosePopup.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                popup.IsOpen = false;
+            };
+            Grid.SetColumn(btnClosePopup, 1);
+            hdrGrid.Children.Add(btnClosePopup);
+
+            sp.Children.Add(hdrGrid);
+
+            // Presets Header
+            sp.Children.Add(new TextBlock
+            {
+                Text = "QUICK PRESETS (BY SYSTEM TIME)",
+                FontSize = 9,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+
+            // Presets Grid (4 rows x 2 cols)
+            Grid pGrid = new Grid { Margin = new Thickness(0, 0, 0, 12) };
+            pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
+            pGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            for (int r = 0; r < 4; r++)
+                pGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            (string title, Func<DateTime> calc, int row, int col)[] presets = new[]
+            {
+                ("+1 Hour", (Func<DateTime>)(() => DateTime.Now.AddHours(1)), 0, 0),
+                ("+3 Hours", (Func<DateTime>)(() => DateTime.Now.AddHours(3)), 0, 2),
+                ("Today 18:00", (Func<DateTime>)(() => DateTime.Today.AddHours(18)), 1, 0),
+                ("Tonight 23:59", (Func<DateTime>)(() => DateTime.Today.AddHours(23).AddMinutes(59)), 1, 2),
+                ("Tomorrow 09:00", (Func<DateTime>)(() => DateTime.Today.AddDays(1).AddHours(9)), 2, 0),
+                ("Tomorrow 18:00", (Func<DateTime>)(() => DateTime.Today.AddDays(1).AddHours(18)), 2, 2),
+                ("In 3 Days", (Func<DateTime>)(() => DateTime.Today.AddDays(3).AddHours(18)), 3, 0),
+                ("1 Week", (Func<DateTime>)(() => DateTime.Today.AddDays(7).AddHours(18)), 3, 2)
+            };
+
+            foreach (var p in presets)
+            {
+                Border btnP = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(6, 4, 6, 4),
+                    Margin = new Thickness(0, 2, 0, 2),
+                    Cursor = Cursors.Hand
+                };
+                TextBlock tbP = new TextBlock
+                {
+                    Text = p.title,
+                    FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                    HorizontalAlignment = HorizontalAlignment.Center
+                };
+                btnP.Child = tbP;
+
+                btnP.MouseEnter += (s, e) =>
+                {
+                    btnP.Background = new SolidColorBrush(Color.FromArgb(50, 56, 189, 248));
+                    btnP.BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                    tbP.Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248));
+                };
+                btnP.MouseLeave += (s, e) =>
+                {
+                    btnP.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                    btnP.BorderBrush = new SolidColorBrush(Color.FromArgb(50, 255, 255, 255));
+                    tbP.Foreground = new SolidColorBrush(Color.FromRgb(226, 232, 240));
+                };
+
+                btnP.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    DateTime target = p.calc();
+                    item.HasDeadline = true;
+                    item.DeadlineDateTime = target;
+                    UpdateNoteDeadlineBadgeUI(item);
+                    RecordUndo("Set Deadline Preset");
+                    ScheduleAutoSave();
+                    popup.IsOpen = false;
+                    ShowToast($"Deadline set: {target:ddd, d MMM HH:mm}", ToastType.Success);
+                };
+
+                Grid.SetRow(btnP, p.row);
+                Grid.SetColumn(btnP, p.col);
+                pGrid.Children.Add(btnP);
+            }
+            sp.Children.Add(pGrid);
+
+            // Custom Date & Time Header
+            sp.Children.Add(new TextBlock
+            {
+                Text = "CUSTOM DEADLINE",
+                FontSize = 9,
+                FontWeight = FontWeights.Bold,
+                Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+
+            // Date Picker Row
+            DateTime initialDate = item.DeadlineDateTime?.Date ?? DateTime.Today.AddDays(1);
+            DatePicker dp = new DatePicker
+            {
+                SelectedDate = initialDate,
+                SelectedDateFormat = DatePickerFormat.Short,
+                Margin = new Thickness(0, 0, 0, 8),
+                Height = 26
+            };
+            sp.Children.Add(dp);
+
+            // Time Row (Hours & Minutes with direct typing support)
+            Grid timeGrid = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            timeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            timeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+            timeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            ComboBox cbHour = new ComboBox { Height = 26, IsEditable = true };
+            for (int h = 0; h < 24; h++) cbHour.Items.Add($"{h:D2}");
+            cbHour.SelectedItem = $"{(item.DeadlineDateTime?.Hour ?? 18):D2}";
+
+            ComboBox cbMin = new ComboBox { Height = 26, IsEditable = true };
+            for (int m = 0; m < 60; m += 5) cbMin.Items.Add($"{m:D2}");
+            cbMin.SelectedItem = $"{((item.DeadlineDateTime?.Minute ?? 0) / 5 * 5):D2}";
+
+            Grid.SetColumn(cbHour, 0);
+            Grid.SetColumn(cbMin, 2);
+            timeGrid.Children.Add(cbHour);
+            timeGrid.Children.Add(cbMin);
+            sp.Children.Add(timeGrid);
+
+            // Optional Label Row
+            TextBox tbLabel = new TextBox
+            {
+                Text = string.IsNullOrEmpty(item.DeadlineLabel) ? "Deadline" : item.DeadlineLabel,
+                Height = 24,
+                FontSize = 11,
+                Background = new SolidColorBrush(Color.FromRgb(15, 23, 42)),
+                Foreground = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                Padding = new Thickness(5, 2, 5, 2),
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            sp.Children.Add(tbLabel);
+
+            void ApplyCustomDeadline()
+            {
+                DateTime d;
+                if (!string.IsNullOrWhiteSpace(dp.Text) && DateTime.TryParse(dp.Text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var p1))
+                    d = p1;
+                else if (!string.IsNullOrWhiteSpace(dp.Text) && DateTime.TryParse(dp.Text, out var p2))
+                    d = p2;
+                else
+                    d = dp.SelectedDate ?? DateTime.Today.AddDays(1);
+
+                int hr = 18;
+                if (int.TryParse(cbHour.Text, out int hVal) || int.TryParse(cbHour.SelectedItem as string, out hVal))
+                    hr = Math.Clamp(hVal, 0, 23);
+
+                int mn = 0;
+                if (int.TryParse(cbMin.Text, out int mVal) || int.TryParse(cbMin.SelectedItem as string, out mVal))
+                    mn = Math.Clamp(mVal, 0, 59);
+
+                DateTime customTarget = new DateTime(d.Year, d.Month, d.Day, hr, mn, 0);
+
+                item.HasDeadline = true;
+                item.DeadlineDateTime = customTarget;
+                item.DeadlineLabel = string.IsNullOrWhiteSpace(tbLabel.Text) ? "Deadline" : tbLabel.Text.Trim();
+                UpdateNoteDeadlineBadgeUI(item);
+                RecordUndo("Set Custom Deadline");
+                ScheduleAutoSave();
+                popup.IsOpen = false;
+                ShowToast($"Deadline set: {customTarget.ToString("ddd, d MMM HH:mm", CultureInfo.InvariantCulture)}", ToastType.Success);
+            }
+
+            KeyEventHandler onEnterApply = (s, e) =>
+            {
+                if (e.Key == Key.Enter)
+                {
+                    e.Handled = true;
+                    ApplyCustomDeadline();
+                }
+            };
+            dp.KeyDown += onEnterApply;
+            cbHour.KeyDown += onEnterApply;
+            cbMin.KeyDown += onEnterApply;
+            tbLabel.KeyDown += onEnterApply;
+
+            // Action Buttons
+            Grid actGrid = new Grid();
+            actGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            if (item.HasDeadline)
+            {
+                actGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(6) });
+                actGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            }
+
+            Border btnApply = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(2, 132, 199)),
+                CornerRadius = new CornerRadius(5),
+                Padding = new Thickness(10, 6, 10, 6),
+                Cursor = Cursors.Hand
+            };
+            btnApply.Child = new TextBlock
+            {
+                Text = "Apply Deadline",
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Brushes.White,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            btnApply.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                ApplyCustomDeadline();
+            };
+            Grid.SetColumn(btnApply, 0);
+            actGrid.Children.Add(btnApply);
+
+            if (item.HasDeadline)
+            {
+                Border btnRemove = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(40, 239, 68, 68)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(239, 68, 68)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(5),
+                    Padding = new Thickness(8, 6, 8, 6),
+                    Cursor = Cursors.Hand
+                };
+                btnRemove.Child = new TextBlock
+                {
+                    Text = "✕ Clear",
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)),
+                    HorizontalAlignment = HorizontalAlignment.Center
+                };
+                btnRemove.MouseLeftButtonDown += (s, e) =>
+                {
+                    e.Handled = true;
+                    item.HasDeadline = false;
+                    item.DeadlineDateTime = null;
+                    if (item.DeadlineBadge != null) item.DeadlineBadge.Visibility = Visibility.Collapsed;
+                    RecordUndo("Clear Deadline");
+                    ScheduleAutoSave();
+                    popup.IsOpen = false;
+                    ShowToast("Deadline removed", ToastType.Info);
+                };
+                Grid.SetColumn(btnRemove, 2);
+                actGrid.Children.Add(btnRemove);
+            }
+
+            sp.Children.Add(actGrid);
+            container.Child = sp;
+            popup.Child = container;
+
+            void ActivatePopupHwnd()
+            {
+                if (PresentationSource.FromVisual(container) is HwndSource source && source.Handle != IntPtr.Zero)
+                {
+                    SetActiveWindow(source.Handle);
+                    SetFocus(source.Handle);
+                }
+            }
+
+            popup.Opened += (s, e) =>
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+                {
+                    ActivatePopupHwnd();
+                    dp.Focus();
+                }));
+            };
+
+            container.PreviewMouseDown += (s, e) =>
+            {
+                ActivatePopupHwnd();
+            };
+
+            MouseButtonEventHandler? outsideClickHandler = null;
+            outsideClickHandler = (s, e) =>
+            {
+                if (!popup.IsOpen) return;
+                // If DatePicker's calendar dropdown is currently open, don't close popup
+                if (dp.IsDropDownOpen) return;
+
+                popup.IsOpen = false;
+            };
+            this.PreviewMouseDown += outsideClickHandler;
+
+            KeyEventHandler? escKeyHandler = null;
+            escKeyHandler = (s, e) =>
+            {
+                if (e.Key == Key.Escape && popup.IsOpen)
+                {
+                    e.Handled = true;
+                    popup.IsOpen = false;
+                }
+            };
+            this.PreviewKeyDown += escKeyHandler;
+
+            popup.Closed += (s, e) =>
+            {
+                this.PreviewMouseDown -= outsideClickHandler;
+                this.PreviewKeyDown -= escKeyHandler;
+                _isCardSubMenuOpen = false;
+            };
+
+            popup.IsOpen = true;
+        }
+
+        #endregion
 
         private CardItem AddDrawCard(
             Point? worldPosition = null,
@@ -2940,19 +4890,19 @@ namespace DropBoard.Native
         {
             Border handle = new Border
             {
-                Width = 14,
-                Height = 14,
+                Width = 18,
+                Height = 18,
                 Background = new SolidColorBrush(Colors.White),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
-                BorderThickness = new Thickness(2.0),
-                CornerRadius = new CornerRadius(7), // Circular dot
+                BorderThickness = new Thickness(2.5),
+                CornerRadius = new CornerRadius(9), // Circular dot
                 HorizontalAlignment = hAlign,
                 VerticalAlignment = vAlign,
                 Margin = new Thickness(
-                    hAlign == HorizontalAlignment.Left ? -7 : 0,
-                    vAlign == VerticalAlignment.Top ? -7 : 0,
-                    hAlign == HorizontalAlignment.Right ? -7 : 0,
-                    vAlign == VerticalAlignment.Bottom ? -7 : 0),
+                    hAlign == HorizontalAlignment.Left ? -9 : 0,
+                    vAlign == VerticalAlignment.Top ? -9 : 0,
+                    hAlign == HorizontalAlignment.Right ? -9 : 0,
+                    vAlign == VerticalAlignment.Bottom ? -9 : 0),
                 Cursor = cursor,
                 Visibility = Visibility.Collapsed
             };
@@ -2962,8 +4912,19 @@ namespace DropBoard.Native
 
         private void AttachResizeHandleEvents(CardItem card, Border handle, ResizeCorner corner)
         {
-            handle.MouseLeftButtonDown += (s, e) =>
+            void StartResize(MouseButtonEventArgs e)
             {
+                if (e.ClickCount == 2 && card.IsNote)
+                {
+                    double targetRatio = card.IsChecklist ? (320.0 / 240.0) : (280.0 / 180.0);
+                    card.Height = Math.Round(card.Width / targetRatio);
+                    card.AspectRatio = targetRatio;
+                    ScheduleAutoSave();
+                    ShowToast("✨ Reset note aspect ratio (Fixed gepeng)", ToastType.Success);
+                    e.Handled = true;
+                    return;
+                }
+
                 RecordUndo("Resize Card");
 
                 _isResizingCard = true;
@@ -2975,7 +4936,10 @@ namespace DropBoard.Native
 
                 CanvasContainer.CaptureMouse();
                 e.Handled = true;
-            };
+            }
+
+            handle.PreviewMouseLeftButtonDown += (s, e) => StartResize(e);
+            handle.MouseLeftButtonDown += (s, e) => StartResize(e);
         }
 
         private void ApplyCardResize(CardItem card, ResizeCorner corner, Rect initial, double deltaX, double deltaY)
@@ -2990,9 +4954,11 @@ namespace DropBoard.Native
             double newX = initial.X;
             double newY = initial.Y;
 
-            if (card.IsPaletteCard || card.IsNote)
+            bool isShift = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+
+            if (card.IsPaletteCard || (card.IsNote && isShift))
             {
-                // Unconstrained free-form 2D resize for palettes and notes (can be stretched wide, gepeng, tall, etc.)
+                // Free-form 2D resize for palettes and notes (when Shift is held)
                 switch (corner)
                 {
                     case ResizeCorner.BottomRight:
@@ -3023,6 +4989,7 @@ namespace DropBoard.Native
             }
             else
             {
+                // Proportional aspect-ratio locked resize for Images, Notes, and Sketch Cards (Prevents Gepeng!)
                 switch (corner)
                 {
                     case ResizeCorner.BottomRight:
@@ -3702,9 +5669,29 @@ namespace DropBoard.Native
 
         private void Window_KeyDown(object sender, KeyEventArgs e)
         {
+            bool isTyping = IsTextEditorFocused(e);
+
             // Undo (Ctrl+Z)
             if (e.Key == Key.Z && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
             {
+                if (isTyping) return; // Allow native textbox undo
+                var activeDoodleCard = _cards.FirstOrDefault(c => c.IsNote && c.IsNoteDoodleActive && c.NoteDoodleCanvas != null && c.NoteDoodleCanvas.Strokes.Count > 0);
+                if (activeDoodleCard != null && activeDoodleCard.NoteDoodleCanvas != null && activeDoodleCard.NoteDoodleCanvas.Strokes.Count > 0)
+                {
+                    activeDoodleCard.NoteDoodleCanvas.Strokes.RemoveAt(activeDoodleCard.NoteDoodleCanvas.Strokes.Count - 1);
+                    try
+                    {
+                        using MemoryStream ms = new MemoryStream();
+                        activeDoodleCard.NoteDoodleCanvas.Strokes.Save(ms);
+                        activeDoodleCard.NoteDoodleInkBase64 = Convert.ToBase64String(ms.ToArray());
+                        ScheduleAutoSave();
+                    }
+                    catch { }
+                    ShowToast("Undid last doodle stroke (Ctrl+Z)", ToastType.Info, 800);
+                    e.Handled = true;
+                    return;
+                }
+
                 Undo();
                 e.Handled = true;
             }
@@ -3712,6 +5699,7 @@ namespace DropBoard.Native
             else if ((e.Key == Key.Y && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control) ||
                      (e.Key == Key.Z && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == (ModifierKeys.Control | ModifierKeys.Shift)))
             {
+                if (isTyping) return; // Allow native textbox redo
                 Redo();
                 e.Handled = true;
             }
@@ -3730,18 +5718,21 @@ namespace DropBoard.Native
             // Group Selected (Ctrl + G)
             else if (e.Key == Key.G && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
             {
+                if (isTyping) return;
                 BtnAddGroup_Click(this, new RoutedEventArgs());
                 e.Handled = true;
             }
             // Copy (Ctrl+C)
             else if (e.Key == Key.C && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
             {
+                if (isTyping) return; // Allow native textbox text copying
                 BtnCopy_Click(this, new RoutedEventArgs());
                 e.Handled = true;
             }
             // Select All (Ctrl+A)
             else if (e.Key == Key.A && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
             {
+                if (isTyping) return; // Allow native textbox select-all text
                 foreach (CardItem card in _cards)
                 {
                     SelectCard(card, addToSelection: true);
@@ -3751,12 +5742,14 @@ namespace DropBoard.Native
             // Duplicate (Ctrl+D)
             else if (e.Key == Key.D && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
             {
+                if (isTyping) return;
                 DuplicateSelectedCards();
                 e.Handled = true;
             }
             // Paste (Ctrl+V)
             else if (e.Key == Key.V && (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control)
             {
+                if (isTyping) return; // Allow native textbox text pasting
                 PasteFromClipboard();
                 e.Handled = true;
             }
@@ -3784,7 +5777,7 @@ namespace DropBoard.Native
             // Delete / Backspace
             else if (e.Key == Key.Delete || e.Key == Key.Back)
             {
-                if (!(FocusManager.GetFocusedElement(this) is TextBox))
+                if (!isTyping)
                 {
                     DeleteSelectedCards();
                     e.Handled = true;
@@ -3793,14 +5786,20 @@ namespace DropBoard.Native
             // Fit All in View (Home / F key)
             else if (e.Key == Key.Home || (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.None))
             {
-                ZoomToFitAllCards(animated: true);
-                e.Handled = true;
+                if (!isTyping)
+                {
+                    ZoomToFitAllCards(animated: true);
+                    e.Handled = true;
+                }
             }
             // Escape to Deselect All
             else if (e.Key == Key.Escape)
             {
-                DeselectAllCards();
-                e.Handled = true;
+                if (!isTyping)
+                {
+                    DeselectAllCards();
+                    e.Handled = true;
+                }
             }
         }
 
@@ -4109,6 +6108,18 @@ namespace DropBoard.Native
                 note.NoteEditor?.Focus();
                 note.NoteEditor?.SelectAll();
             }), System.Windows.Threading.DispatcherPriority.Input);
+        }
+
+        private void BtnAddChecklist_Click(object sender, RoutedEventArgs e)
+        {
+            var note = AddNoteCard(
+                text: "",
+                isChecklist: true,
+                hasDeadline: true,
+                deadlineDateTime: DateTime.Today.AddDays(1).AddHours(18),
+                deadlineLabel: "Deadline"
+            );
+            ShowToast("Added Checklist & Deadline task note (Press T)", ToastType.Success);
         }
 
         #region Freehand Canvas Brush Tool Engine
@@ -6686,6 +8697,14 @@ namespace DropBoard.Native
                     NoteBgColor = c.NoteBgColor,
                     NoteAlignment = c.NoteAlignment,
                     NoteHasShadow = c.NoteHasShadow,
+                    HasDeadline = c.HasDeadline,
+                    DeadlineIso = c.DeadlineDateTime?.ToString("o"),
+                    DeadlineLabel = c.DeadlineLabel,
+                    IsChecklist = c.IsChecklist,
+                    ChecklistJson = c.IsChecklist && c.ChecklistItems != null ? JsonSerializer.Serialize(c.ChecklistItems) : "",
+                    NoteDoodleInkBase64 = c.NoteDoodleInkBase64,
+                    NoteBgGifPath = c.NoteBgGifPath,
+                    NoteBgGifBase64 = c.NoteBgGifBase64,
                     IsPaletteCard = c.IsPaletteCard,
                     PaletteColorCount = c.PaletteColorCount,
                     PaletteMood = c.PaletteMood,
@@ -6807,22 +8826,83 @@ namespace DropBoard.Native
                         else if (existingCard.IsNote)
                         {
                             existingCard.NoteText = cs.NoteText;
-                            existingCard.NoteFontFamily = cs.NoteFontFamily;
-                            existingCard.NoteFontSize = cs.NoteFontSize;
-                            existingCard.NoteTextColor = cs.NoteTextColor;
-                            existingCard.NoteBgColor = cs.NoteBgColor;
-                            existingCard.NoteAlignment = cs.NoteAlignment;
-                            existingCard.NoteHasShadow = cs.NoteHasShadow;
                             if (existingCard.NoteEditor != null)
                             {
                                 existingCard.NoteEditor.Text = cs.NoteText;
-                                existingCard.NoteEditor.FontFamily = new FontFamily(cs.NoteFontFamily);
-                                existingCard.NoteEditor.FontSize = cs.NoteFontSize;
-                                existingCard.NoteEditor.TextAlignment = cs.NoteAlignment;
-                                try { existingCard.NoteEditor.Foreground = (Brush)new BrushConverter().ConvertFromString(cs.NoteTextColor)!; } catch { }
                             }
+                            existingCard.NoteHasShadow = cs.NoteHasShadow;
+                            ApplyNoteFontFamily(existingCard, cs.NoteFontFamily);
+                            ApplyNoteFontSize(existingCard, cs.NoteFontSize);
+                            ApplyNoteAlignment(existingCard, cs.NoteAlignment);
+                            ApplyNoteTextColor(existingCard, cs.NoteTextColor);
                             ApplyNoteBackground(existingCard, cs.NoteBgColor);
                             ApplyNoteShadow(existingCard);
+
+                            // Restore Deadline
+                            existingCard.HasDeadline = cs.HasDeadline;
+                            existingCard.DeadlineLabel = cs.DeadlineLabel;
+                            if (cs.HasDeadline && !string.IsNullOrEmpty(cs.DeadlineIso) && DateTime.TryParse(cs.DeadlineIso, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedDl))
+                            {
+                                existingCard.DeadlineDateTime = parsedDl;
+                            }
+                            else
+                            {
+                                existingCard.DeadlineDateTime = null;
+                            }
+                            UpdateNoteDeadlineBadgeUI(existingCard);
+
+                            // Restore Checklist
+                            existingCard.IsChecklist = cs.IsChecklist;
+                            if (cs.IsChecklist && !string.IsNullOrEmpty(cs.ChecklistJson))
+                            {
+                                try
+                                {
+                                    existingCard.ChecklistItems = JsonSerializer.Deserialize<List<NoteChecklistItem>>(cs.ChecklistJson) ?? new List<NoteChecklistItem>();
+                                }
+                                catch
+                                {
+                                    existingCard.ChecklistItems = new List<NoteChecklistItem>();
+                                }
+                            }
+                            else if (!cs.IsChecklist)
+                            {
+                                existingCard.ChecklistItems = null;
+                            }
+                            if (existingCard.ChecklistScrollViewer != null && existingCard.NoteEditor != null)
+                            {
+                                existingCard.ChecklistScrollViewer.Visibility = existingCard.IsChecklist ? Visibility.Visible : Visibility.Collapsed;
+                                existingCard.NoteEditor.Visibility = existingCard.IsChecklist ? Visibility.Collapsed : Visibility.Visible;
+                            }
+                            if (existingCard.IsChecklist)
+                            {
+                                RenderChecklistItems(existingCard);
+                            }
+
+                            // Restore Doodle
+                            existingCard.NoteDoodleInkBase64 = cs.NoteDoodleInkBase64;
+                            if (existingCard.NoteDoodleCanvas != null)
+                            {
+                                try
+                                {
+                                    if (string.IsNullOrEmpty(cs.NoteDoodleInkBase64))
+                                    {
+                                        existingCard.NoteDoodleCanvas.Strokes.Clear();
+                                    }
+                                    else
+                                    {
+                                        byte[] raw = Convert.FromBase64String(cs.NoteDoodleInkBase64);
+                                        using var ms = new System.IO.MemoryStream(raw);
+                                        existingCard.NoteDoodleCanvas.Strokes = new System.Windows.Ink.StrokeCollection(ms);
+                                    }
+                                }
+                                catch { }
+                            }
+
+                            // Restore Background GIF
+                            if (existingCard.NoteBgGifPath != cs.NoteBgGifPath || existingCard.NoteBgGifBase64 != cs.NoteBgGifBase64)
+                            {
+                                ApplyNoteBgGif(existingCard, cs.NoteBgGifPath, cs.NoteBgGifBase64);
+                            }
                         }
                         else if (existingCard.IsDrawCard)
                         {
@@ -6879,6 +8959,17 @@ namespace DropBoard.Native
                         }
                         else if (cs.IsNote)
                         {
+                            DateTime? noteDl = null;
+                            if (cs.HasDeadline && !string.IsNullOrEmpty(cs.DeadlineIso) && DateTime.TryParse(cs.DeadlineIso, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedDl))
+                            {
+                                noteDl = parsedDl;
+                            }
+                            List<NoteChecklistItem>? parsedChecklist = null;
+                            if (cs.IsChecklist && !string.IsNullOrEmpty(cs.ChecklistJson))
+                            {
+                                try { parsedChecklist = JsonSerializer.Deserialize<List<NoteChecklistItem>>(cs.ChecklistJson); } catch { }
+                            }
+
                             var newNote = AddNoteCard(
                                 text: cs.NoteText,
                                 worldPosition: new Point(cs.X, cs.Y),
@@ -6890,6 +8981,14 @@ namespace DropBoard.Native
                                 bgColor: cs.NoteBgColor,
                                 alignment: cs.NoteAlignment,
                                 hasShadow: cs.NoteHasShadow,
+                                isChecklist: cs.IsChecklist,
+                                checklistItems: parsedChecklist,
+                                hasDeadline: cs.HasDeadline,
+                                deadlineDateTime: noteDl,
+                                deadlineLabel: cs.DeadlineLabel,
+                                noteDoodleInkBase64: cs.NoteDoodleInkBase64,
+                                noteBgGifPath: cs.NoteBgGifPath,
+                                noteBgGifBase64: cs.NoteBgGifBase64,
                                 autoSelect: false);
                             newNote.Id = cs.Id;
                             newNote.GroupId = cs.GroupId;
@@ -7291,6 +9390,64 @@ namespace DropBoard.Native
                     miBg.Items.Add(sub);
                 }
                 cm.Items.Add(miBg);
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 4,4 L 20,4 L 20,20 L 4,20 Z M 8,12 L 12,16 L 16,12", "#F472B6"),
+                    "Set Animated GIF Background...",
+                    "Pick a looping GIF background that fits this note",
+                    (s, e) => PromptSetNoteBgGif(item)
+                ));
+
+                if (!string.IsNullOrEmpty(item.NoteBgGifPath) || !string.IsNullOrEmpty(item.NoteBgGifBase64))
+                {
+                    cm.Items.Add(CreateRichMenuItem(
+                        CreateMenuIcon("M 3,6 h 18 M 19,6 v 14 a 2,2 0 0 1 -2,2 H 7 a 2,2 0 0 1 -2,-2 V 6", "#EF4444"),
+                        "Remove GIF Background",
+                        "Clear animated GIF background from this note",
+                        (s, e) =>
+                        {
+                            ApplyNoteBgGif(item, null, null);
+                            ScheduleAutoSave();
+                            ShowToast("Removed note background GIF", ToastType.Info);
+                        },
+                        titleColor: "#EF4444"
+                    ));
+                }
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 4,8 L 4,4 L 8,4 M 20,8 L 20,4 L 16,4 M 4,16 L 4,20 L 8,20 M 20,16 L 20,20 L 16,20", "#38BDF8"),
+                    "Reset Aspect Ratio",
+                    "Restore note to natural proportions (removes distortion)",
+                    (s, e) =>
+                    {
+                        double targetRatio = item.IsChecklist ? (320.0 / 240.0) : (280.0 / 180.0);
+                        item.Height = Math.Round(item.Width / targetRatio);
+                        item.AspectRatio = targetRatio;
+                        ScheduleAutoSave();
+                        ShowToast("✨ Reset note aspect ratio to default", ToastType.Success);
+                    }
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 12,2 A 10,10 0 1 0 22,12 A 10,10 0 0 0 12,2 Z M 12,6 L 12,12 L 16,14"),
+                    "Set / Edit Deadline",
+                    item.HasDeadline && item.DeadlineDateTime.HasValue ? $"Current: {item.DeadlineDateTime.Value.ToString("ddd, d MMM HH:mm", CultureInfo.InvariantCulture)}" : "Set realtime countdown deadline",
+                    (s, e) => ShowDeadlinePickerPopup(item.Container, item)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 4,4 L 10,4 L 10,10 L 4,10 Z M 14,7 L 20,7 M 4,14 L 10,14 L 10,20 L 4,20 Z M 14,17 L 20,17"),
+                    item.IsChecklist ? "Switch to Plain Text" : "Switch to Checklist Mode",
+                    "Interactive tasks with strike-through animations",
+                    (s, e) => ToggleNoteChecklistMode(item)
+                ));
+
+                cm.Items.Add(CreateRichMenuItem(
+                    CreateMenuIcon("M 18,2 L 22,6 L 7,21 L 2,22 L 3,17 Z"),
+                    item.IsNoteDoodleActive ? "Turn Off Doodle Mode" : "Turn On Doodle Layer",
+                    "Draw and strike through tasks directly over note",
+                    (s, e) => ToggleNoteDoodleMode(item)
+                ));
 
                 cm.Items.Add(new Separator());
 
@@ -7806,11 +9963,23 @@ namespace DropBoard.Native
             cm.Items.Add(CreateRichMenuItem(
                 CreateMenuIcon("M 4,4 L 16,4 L 20,8 L 20,20 L 4,20 Z M 16,4 L 16,8 L 20,8 M 8,10 h 5 M 8,14 h 8", "#38BDF8"),
                 "Add Text / Sticky Note",
-                "Lyrics, checklist, direction, or notes (N)",
+                "Lyrics, direction, or notes (N)",
                 (s, e) =>
                 {
                     AddNoteCard(worldPosition: worldPoint);
                     ShowToast("Added Note Card", ToastType.Success);
+                }
+            ));
+
+            // 2.5 Add Interactive Checklist Note
+            cm.Items.Add(CreateRichMenuItem(
+                CreateMenuIcon("M 9,11 L 12,14 L 22,4 M 21,12 v 7 a 2,2 0 0 1 -2,2 H 5 a 2,2 0 0 1 -2,-2 V 5 a 2,2 0 0 1 2,-2 h 11", "#10B981"),
+                "Add Checklist Note",
+                "Interactive task checklist with checkboxes & strike-through",
+                (s, e) =>
+                {
+                    AddNoteCard(worldPosition: worldPoint, isChecklist: true);
+                    ShowToast("Added Checklist Note", ToastType.Success);
                 }
             ));
 
@@ -8188,6 +10357,7 @@ namespace DropBoard.Native
                     MaxWidth = 72,
                     TextTrimming = TextTrimming.CharacterEllipsis
                 };
+                item.NoteFontNameText = txtFontName;
 
                 Border btnFontPicker = new Border
                 {
@@ -8215,12 +10385,7 @@ namespace DropBoard.Native
                     {
                         ShowFontPickerPopup(btnFontPicker, item, chosenFont =>
                         {
-                            item.NoteFontFamily = chosenFont;
-                            txtFontName.Text = $"{chosenFont} ▾";
-                            if (item.NoteEditor != null)
-                            {
-                                item.NoteEditor.FontFamily = new FontFamily(chosenFont);
-                            }
+                            ApplyNoteFontFamily(item, chosenFont);
                             ScheduleAutoSave();
                         });
                     }));
@@ -8234,13 +10399,12 @@ namespace DropBoard.Native
                     Foreground = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
                     VerticalAlignment = VerticalAlignment.Center
                 };
+                item.NoteFontSizeText = txtSize;
 
                 void StepFontSize(double delta)
                 {
                     double newSize = Math.Clamp(item.NoteFontSize + delta, 8, 96);
-                    item.NoteFontSize = newSize;
-                    if (item.NoteEditor != null) item.NoteEditor.FontSize = newSize;
-                    txtSize.Text = $"{(int)newSize} ▾";
+                    ApplyNoteFontSize(item, newSize);
                     ScheduleAutoSave();
                 }
 
@@ -8270,9 +10434,7 @@ namespace DropBoard.Native
                     if (!item.IsSelected) SelectCard(item, addToSelection: false);
                     ShowFontSizeMenu(btnFontSize, item, newSize =>
                     {
-                        item.NoteFontSize = newSize;
-                        if (item.NoteEditor != null) item.NoteEditor.FontSize = newSize;
-                        txtSize.Text = $"{(int)newSize} ▾";
+                        ApplyNoteFontSize(item, newSize);
                         ScheduleAutoSave();
                     });
                 };
@@ -8366,8 +10528,7 @@ namespace DropBoard.Native
                     {
                         e.Handled = true;
                         if (!item.IsSelected) SelectCard(item, addToSelection: false);
-                        item.NoteAlignment = align;
-                        if (item.NoteEditor != null) item.NoteEditor.TextAlignment = align;
+                        ApplyNoteAlignment(item, align);
                         RefreshAlignState();
                         ScheduleAutoSave();
                     };
@@ -8423,6 +10584,26 @@ namespace DropBoard.Native
                 bgSp.Children.Add(bgMiniDot);
                 bgSp.Children.Add(txtBgChevron);
 
+                // 5. Custom Color Picker Button
+                Border colorDot = new Border
+                {
+                    Width = 10,
+                    Height = 10,
+                    CornerRadius = new CornerRadius(5),
+                    BorderThickness = new Thickness(1),
+                    BorderBrush = new SolidColorBrush(Color.FromArgb(140, 255, 255, 255)),
+                    Margin = new Thickness(0, 0, 3, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                try
+                {
+                    colorDot.Background = (Brush)new BrushConverter().ConvertFromString(item.NoteTextColor)!;
+                }
+                catch
+                {
+                    colorDot.Background = Brushes.White;
+                }
+
                 Border btnBgPicker = new Border
                 {
                     Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
@@ -8446,29 +10627,14 @@ namespace DropBoard.Native
                     {
                         ApplyNoteBackground(item, chosenBg);
                         UpdateBgDot();
+                        try
+                        {
+                            colorDot.Background = (Brush)new BrushConverter().ConvertFromString(item.NoteTextColor)!;
+                        }
+                        catch { }
                         ScheduleAutoSave();
                     });
                 };
-
-                // 5. Custom Color Picker Button
-                Border colorDot = new Border
-                {
-                    Width = 10,
-                    Height = 10,
-                    CornerRadius = new CornerRadius(5),
-                    BorderThickness = new Thickness(1),
-                    BorderBrush = new SolidColorBrush(Color.FromArgb(140, 255, 255, 255)),
-                    Margin = new Thickness(0, 0, 3, 0),
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                try
-                {
-                    colorDot.Background = (Brush)new BrushConverter().ConvertFromString(item.NoteTextColor)!;
-                }
-                catch
-                {
-                    colorDot.Background = Brushes.White;
-                }
 
                 TextBlock txtColorChevron = new TextBlock
                 {
@@ -8502,18 +10668,12 @@ namespace DropBoard.Native
                     if (!item.IsSelected) SelectCard(item, addToSelection: false);
                     ShowColorPickerPopup(btnColor, item, chosenHex =>
                     {
-                        item.NoteTextColor = chosenHex;
-                        if (item.NoteEditor != null)
+                        ApplyNoteTextColor(item, chosenHex);
+                        try
                         {
-                            try
-                            {
-                                var brush = (Brush)new BrushConverter().ConvertFromString(chosenHex)!;
-                                item.NoteEditor.Foreground = brush;
-                                item.NoteEditor.CaretBrush = chosenHex == "#111827" || chosenHex == "#000000" ? Brushes.Black : Brushes.White;
-                                colorDot.Background = brush;
-                            }
-                            catch { }
+                            colorDot.Background = (Brush)new BrushConverter().ConvertFromString(chosenHex)!;
                         }
+                        catch { }
                         ScheduleAutoSave();
                     });
                 };
@@ -8609,6 +10769,156 @@ namespace DropBoard.Native
                     ShowNoteMoreMenu(btnMore, item);
                 };
 
+                // 5.6 Realtime Deadline Button
+                Border btnDeadline = new Border
+                {
+                    Background = item.HasDeadline
+                        ? new SolidColorBrush(Color.FromArgb(55, 56, 189, 248))
+                        : new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderBrush = item.HasDeadline
+                        ? new SolidColorBrush(Color.FromRgb(56, 189, 248))
+                        : new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 2, 5, 2),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Set / Edit Realtime Deadline (Synchronized with System Clock)"
+                };
+                StackPanel dlSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                dlSp.Children.Add(new TextBlock
+                {
+                    Text = "⏱",
+                    FontSize = 10.5,
+                    Foreground = item.HasDeadline ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                    Margin = new Thickness(0, 0, 2, 0)
+                });
+                dlSp.Children.Add(new TextBlock
+                {
+                    Text = "Deadline",
+                    FontSize = 10,
+                    Foreground = item.HasDeadline ? new SolidColorBrush(Color.FromRgb(56, 189, 248)) : new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                    FontWeight = item.HasDeadline ? FontWeights.SemiBold : FontWeights.Normal
+                });
+                btnDeadline.Child = dlSp;
+                item.BtnNoteDeadline = btnDeadline;
+
+                btnDeadline.MouseEnter += (s, e) =>
+                {
+                    if (!item.HasDeadline) btnDeadline.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+                };
+                btnDeadline.MouseLeave += (s, e) =>
+                {
+                    if (!item.HasDeadline) btnDeadline.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                };
+                btnDeadline.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnDeadline.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    ShowDeadlinePickerPopup(btnDeadline, item);
+                };
+
+                // 5.7 Checklist Toggle Button
+                Border btnChecklist = new Border
+                {
+                    Background = item.IsChecklist
+                        ? new SolidColorBrush(Color.FromArgb(55, 16, 185, 129))
+                        : new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderBrush = item.IsChecklist
+                        ? new SolidColorBrush(Color.FromRgb(16, 185, 129))
+                        : new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 2, 5, 2),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Toggle Checklist Mode (Check/uncheck with smooth strike-through animation)"
+                };
+                StackPanel chkSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                chkSp.Children.Add(new TextBlock
+                {
+                    Text = "☑",
+                    FontSize = 10.5,
+                    Foreground = item.IsChecklist ? new SolidColorBrush(Color.FromRgb(16, 185, 129)) : new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                    Margin = new Thickness(0, 0, 2, 0)
+                });
+                chkSp.Children.Add(new TextBlock
+                {
+                    Text = "Checklist",
+                    FontSize = 10,
+                    Foreground = item.IsChecklist ? new SolidColorBrush(Color.FromRgb(16, 185, 129)) : new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                    FontWeight = item.IsChecklist ? FontWeights.SemiBold : FontWeights.Normal
+                });
+                btnChecklist.Child = chkSp;
+                item.BtnNoteChecklist = btnChecklist;
+
+                btnChecklist.MouseEnter += (s, e) =>
+                {
+                    if (!item.IsChecklist) btnChecklist.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+                };
+                btnChecklist.MouseLeave += (s, e) =>
+                {
+                    if (!item.IsChecklist) btnChecklist.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                };
+                btnChecklist.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnChecklist.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    ToggleNoteChecklistMode(item);
+                };
+
+                // 5.8 Freehand Doodle / Strike Layer Toggle Button
+                Border btnDoodle = new Border
+                {
+                    Background = item.IsNoteDoodleActive
+                        ? new SolidColorBrush(Color.FromArgb(55, 244, 63, 94))
+                        : new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
+                    BorderBrush = item.IsNoteDoodleActive
+                        ? new SolidColorBrush(Color.FromRgb(244, 63, 94))
+                        : new SolidColorBrush(Color.FromArgb(60, 255, 255, 255)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(5, 2, 5, 2),
+                    Margin = new Thickness(1, 0, 1, 0),
+                    Cursor = Cursors.Hand,
+                    ToolTip = "Toggle Doodle Layer (Draw, strike through, and annotate directly on note)"
+                };
+                StackPanel doodleSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                doodleSp.Children.Add(new TextBlock
+                {
+                    Text = "✏",
+                    FontSize = 10.5,
+                    Foreground = item.IsNoteDoodleActive ? new SolidColorBrush(Color.FromRgb(244, 63, 94)) : new SolidColorBrush(Color.FromRgb(156, 163, 175)),
+                    Margin = new Thickness(0, 0, 2, 0)
+                });
+                doodleSp.Children.Add(new TextBlock
+                {
+                    Text = "Doodle",
+                    FontSize = 10,
+                    Foreground = item.IsNoteDoodleActive ? new SolidColorBrush(Color.FromRgb(244, 63, 94)) : new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                    FontWeight = item.IsNoteDoodleActive ? FontWeights.SemiBold : FontWeights.Normal
+                });
+                btnDoodle.Child = doodleSp;
+                item.BtnNoteDoodle = btnDoodle;
+
+                btnDoodle.MouseEnter += (s, e) =>
+                {
+                    if (!item.IsNoteDoodleActive) btnDoodle.Background = new SolidColorBrush(Color.FromArgb(70, 255, 255, 255));
+                };
+                btnDoodle.MouseLeave += (s, e) =>
+                {
+                    if (!item.IsNoteDoodleActive) btnDoodle.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+                };
+                btnDoodle.PreviewMouseLeftButtonDown += (s, e) => e.Handled = true;
+                btnDoodle.PreviewMouseLeftButtonUp += (s, e) =>
+                {
+                    e.Handled = true;
+                    if (!item.IsSelected) SelectCard(item, addToSelection: false);
+                    ToggleNoteDoodleMode(item);
+                };
+
                 sp.Children.Add(CreateDivider());
                 sp.Children.Add(btnFontPicker);
                 sp.Children.Add(btnFontSize);
@@ -8618,6 +10928,10 @@ namespace DropBoard.Native
                 sp.Children.Add(btnBgPicker);
                 sp.Children.Add(btnColor);
                 sp.Children.Add(btnShadow);
+                sp.Children.Add(CreateDivider());
+                sp.Children.Add(btnDoodle);
+                sp.Children.Add(btnDeadline);
+                sp.Children.Add(btnChecklist);
                 sp.Children.Add(CreateDivider());
                 sp.Children.Add(btnMore);
             }
@@ -9436,6 +11750,32 @@ namespace DropBoard.Native
                 string chosenMode = mode;
                 mi.Click += (s, e) => onChosen(chosenMode);
                 cm.Items.Add(mi);
+            }
+
+            cm.Items.Add(new Separator());
+
+            MenuItem miGif = new MenuItem
+            {
+                Header = "🎬 Set Animated GIF Background...",
+                FontWeight = FontWeights.Normal
+            };
+            miGif.Click += (s, e) => PromptSetNoteBgGif(item);
+            cm.Items.Add(miGif);
+
+            if (!string.IsNullOrEmpty(item.NoteBgGifPath) || !string.IsNullOrEmpty(item.NoteBgGifBase64))
+            {
+                MenuItem miRemGif = new MenuItem
+                {
+                    Header = "🚫 Remove GIF Background",
+                    Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68))
+                };
+                miRemGif.Click += (s, e) =>
+                {
+                    ApplyNoteBgGif(item, null, null);
+                    ScheduleAutoSave();
+                    ShowToast("Removed note background GIF", ToastType.Info);
+                };
+                cm.Items.Add(miRemGif);
             }
 
             cm.IsOpen = true;
@@ -10268,8 +12608,15 @@ namespace DropBoard.Native
                 iconColor: Color.FromRgb(239, 68, 68));
             miDel.FontWeight = FontWeights.SemiBold;
 
+            MenuItem miGif = CreateIconMenuItem(
+                "Set GIF Background...",
+                "M4 4h16v16H4z M8 12l4 4 4-4",
+                () => PromptSetNoteBgGif(item),
+                iconColor: Color.FromRgb(244, 114, 182));
+
             cm.Items.Add(miCopy);
             cm.Items.Add(miDup);
+            cm.Items.Add(miGif);
             cm.Items.Add(miZoom);
             cm.Items.Add(new Separator());
             cm.Items.Add(miDel);
@@ -11565,6 +13912,13 @@ namespace DropBoard.Native
         {
             RecordUndo("Duplicate Note");
             Point newPos = new Point(item.X + 24, item.Y + 24);
+
+            List<NoteChecklistItem>? dupChecklist = null;
+            if (item.IsChecklist && item.ChecklistItems != null)
+            {
+                dupChecklist = item.ChecklistItems.Select(ci => new NoteChecklistItem { Id = Guid.NewGuid().ToString("N"), Text = ci.Text, IsChecked = ci.IsChecked }).ToList();
+            }
+
             AddNoteCard(
                 text: item.NoteText,
                 worldPosition: newPos,
@@ -11576,6 +13930,14 @@ namespace DropBoard.Native
                 bgColor: item.NoteBgColor,
                 alignment: item.NoteAlignment,
                 hasShadow: item.NoteHasShadow,
+                isChecklist: item.IsChecklist,
+                checklistItems: dupChecklist,
+                hasDeadline: item.HasDeadline,
+                deadlineDateTime: item.DeadlineDateTime,
+                deadlineLabel: item.DeadlineLabel,
+                noteDoodleInkBase64: item.NoteDoodleInkBase64,
+                noteBgGifPath: item.NoteBgGifPath,
+                noteBgGifBase64: item.NoteBgGifBase64,
                 autoSelect: true);
             ScheduleAutoSave();
             ShowToast("Duplicated note", ToastType.Success);
@@ -14302,6 +16664,14 @@ namespace DropBoard.Native
                     noteBgColor = c.NoteBgColor,
                     noteAlignment = c.NoteAlignment.ToString(),
                     noteHasShadow = c.NoteHasShadow,
+                    hasDeadline = c.HasDeadline,
+                    deadlineIso = c.DeadlineDateTime?.ToString("o"),
+                    deadlineLabel = c.DeadlineLabel,
+                    isChecklist = c.IsChecklist,
+                    checklistJson = c.IsChecklist && c.ChecklistItems != null ? JsonSerializer.Serialize(c.ChecklistItems) : "",
+                    noteDoodleInk = c.NoteDoodleInkBase64,
+                    noteBgGifPath = c.NoteBgGifPath,
+                    noteBgGifBase64 = c.NoteBgGifBase64,
                     isPaletteCard = c.IsPaletteCard,
                     paletteMood = c.PaletteMood.ToString(),
                     paletteColorCount = c.PaletteColorCount,
@@ -14540,6 +16910,26 @@ namespace DropBoard.Native
                                 Enum.TryParse(naEl.GetString(), out noteAlign);
                             }
 
+                            bool hasDl = card.TryGetProperty("hasDeadline", out JsonElement hdlEl) && hdlEl.GetBoolean();
+                            string dlLabel = card.TryGetProperty("deadlineLabel", out JsonElement dllEl) ? (dllEl.GetString() ?? "") : "";
+                            DateTime? dlDate = null;
+                            if (hasDl && card.TryGetProperty("deadlineIso", out JsonElement dliEl) && !string.IsNullOrEmpty(dliEl.GetString()))
+                            {
+                                if (DateTime.TryParse(dliEl.GetString(), null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsedDl))
+                                    dlDate = parsedDl;
+                            }
+
+                            bool isChecklist = card.TryGetProperty("isChecklist", out JsonElement iclEl) && iclEl.GetBoolean();
+                            List<NoteChecklistItem>? checklistItems = null;
+                            if (isChecklist && card.TryGetProperty("checklistJson", out JsonElement cljEl) && !string.IsNullOrEmpty(cljEl.GetString()))
+                            {
+                                try { checklistItems = JsonSerializer.Deserialize<List<NoteChecklistItem>>(cljEl.GetString()!); } catch { }
+                            }
+
+                            string noteDoodleInk = card.TryGetProperty("noteDoodleInk", out JsonElement ndiEl) ? (ndiEl.GetString() ?? "") : "";
+                            string? noteBgGifPath = card.TryGetProperty("noteBgGifPath", out JsonElement nbgpEl) ? nbgpEl.GetString() : null;
+                            string? noteBgGifBase64 = card.TryGetProperty("noteBgGifBase64", out JsonElement nbgdEl) ? nbgdEl.GetString() : null;
+
                             double x = card.TryGetProperty("x", out JsonElement xEl) ? xEl.GetDouble() : 0;
                             double y = card.TryGetProperty("y", out JsonElement yEl) ? yEl.GetDouble() : 0;
                             double? w = card.TryGetProperty("width", out JsonElement wEl) ? wEl.GetDouble() : null;
@@ -14556,6 +16946,14 @@ namespace DropBoard.Native
                                 bgColor: noteBgColor,
                                 alignment: noteAlign,
                                 hasShadow: noteHasShadow,
+                                isChecklist: isChecklist,
+                                checklistItems: checklistItems,
+                                hasDeadline: hasDl,
+                                deadlineDateTime: dlDate,
+                                deadlineLabel: dlLabel,
+                                noteDoodleInkBase64: noteDoodleInk,
+                                noteBgGifPath: noteBgGifPath,
+                                noteBgGifBase64: noteBgGifBase64,
                                 autoSelect: false);
                             if (card.TryGetProperty("id", out JsonElement noteIdEl) && !string.IsNullOrEmpty(noteIdEl.GetString()))
                                 addedNote.Id = noteIdEl.GetString()!;
@@ -15049,6 +17447,12 @@ namespace DropBoard.Native
             HwndSource source = HwndSource.FromHwnd(hwnd);
             source?.AddHook(WndProc);
         }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetActiveWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetFocus(IntPtr hWnd);
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]

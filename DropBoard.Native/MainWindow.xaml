@@ -272,6 +272,7 @@
               MouseDown="CanvasContainer_MouseDown"
               MouseMove="CanvasContainer_MouseMove"
               MouseUp="CanvasContainer_MouseUp"
+              PreviewMouseWheel="CanvasContainer_PreviewMouseWheel"
               MouseWheel="CanvasContainer_MouseWheel">
             
             <!-- Transformable Canvas World -->
@@ -588,6 +589,22 @@
                             </Canvas>
                         </Viewbox>
                         <TextBlock Text="Note" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+
+                <!-- Checklist -->
+                <Button Style="{StaticResource DockBtn}" Click="BtnAddChecklist_Click" ToolTip="Add Checklist &amp; Deadline Task Card (Press T)">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Viewbox Width="13" Height="13" Margin="0,0,5,0">
+                            <Canvas Width="24" Height="24">
+                                <Rectangle Canvas.Left="3" Canvas.Top="4" Width="5" Height="5" RadiusX="1" RadiusY="1" Stroke="#38BDF8" StrokeThickness="1.8" Fill="Transparent"/>
+                                <Line X1="11" Y1="6.5" X2="21" Y2="6.5" Stroke="#9CA3AF" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <Rectangle Canvas.Left="3" Canvas.Top="12" Width="5" Height="5" RadiusX="1" RadiusY="1" Stroke="#10B981" StrokeThickness="1.8" Fill="#10B981"/>
+                                <Path Data="M 4.5,14.5 L 5.8,15.8 L 7.5,13.2" Stroke="#0F172A" StrokeThickness="1.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                                <Line X1="11" Y1="14.5" X2="21" Y2="14.5" Stroke="#9CA3AF" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                            </Canvas>
+                        </Viewbox>
+                        <TextBlock Text="Checklist" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
 
